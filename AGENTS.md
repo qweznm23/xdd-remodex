@@ -6,7 +6,7 @@ AGENTS.md 与 CLAUDE.md 保持一致。本仓库独立维护 Android 客户端�
 
 - `android/` 是客户端；`phodex-bridge/` 是 Codex 桥接；`relay/` 是中继；`tools/` 是更新下载服务。
 - 常用操作使用根目录 Makefile、`scripts/`，环境配置示例位于 `ops/`。以 README 为操作入口。
-- 沿用原 Git 历史，维护分支为 `main`。原来源保留为 `upstream`；新的 `origin` 待用户指定。未经用户授权不推送，不向原上游推送。
+- 沿用原 Git 历史，维护分支为 `main`。原来源保留为 `upstream`；`origin` 指向用户的公开 Fork `qweznm23/xdd-remodex`。未经用户授权不推送，不向原上游推送。
 - 修改前检查 Git 状态，保留其他工作，只提交当前任务和用户授权整理的内容；不得破坏性回退。
 - `.local/` 是私有运行数据、密钥、缓存、安装包和历史归档，不得加入 Git。不要通过强制添加绕过忽略规则。
 - `.local/archive/` 不是现行源码。原 Git 备份、旧平台代码和 fixXX 排障脚本仅供查阅，不继续在那里开发。

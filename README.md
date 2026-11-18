@@ -2,6 +2,7 @@
 
 Android 客户端、Codex 桥接服务、中继及更新服务统一在这个 Git 仓库维护。
 这是沿用原 Remodex Git 历史的维护仓库，保留 Apache-2.0 许可证及来源说明。当前功能以本仓库代码为准。
+GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公开 Fork。
 来源与基线说明见 [Legal/UPSTREAM.md](Legal/UPSTREAM.md)。
 
 ## 目录
@@ -66,5 +67,6 @@ Codex 当前授权及编号库仍由 Codex home 管理，不搬入源码或 Git�
 Node 依赖可用 `npm --prefix phodex-bridge ci --ignore-scripts` 和 `npm --prefix relay ci --ignore-scripts` 安装；Codex 运行时另行管理。
 
 原 Git 的本机提交、分支和历史已沿用到当前仓库，原元数据备份、iOS/桌面代码及旧说明保存在 `.local/archive/upstream-source/`。
-归档不参与提交；当前维护分支为 `main`，原工作分支也保留。原仓库是浅克隆，本机历史并非上游完整历史。
-原上游地址保留为 `upstream`；新的维护地址待指定后配置为 `origin`。推送前核对目标，不向原上游推送。
+归档不参与提交；当前维护分支为 `main`，原工作分支也保留。原仓库的浅克隆已补全，可追溯原提交历史。
+原上游地址保留为 `upstream`；`origin` 指向 `qweznm23/xdd-remodex`。推送前核对目标，不向原上游推送。
+本机使用仅授权此仓库的部署密钥，保存在 `.local/secrets/`；SSH 配置仅写入本仓库 Git 配置，不修改全局配置。
