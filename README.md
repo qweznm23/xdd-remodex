@@ -13,6 +13,30 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
 在 Android 8.0 或更高版本的手机上打开下载的 APK。如果系统询问，允许当前浏览器或文件管理器安装此应用。服务端启动后，打开 Remodex 扫描电脑上的配对二维码。
 
+### 在 Mac 上运行服务端
+
+Mac 可以复用[同版服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/xdd-remodex-server-0.1.7-ws-fix73-linux.tar.gz)。虽然文件名含 `linux`，下面用到的中继和桥接都是 JavaScript，包内已附带所需的 Node 模块。先安装适合本机芯片的 Node.js 24，确认终端里的 `node -v` 和已登录的 `codex` 可用。
+
+将 Mac 和手机连到同一局域网，在 macOS「系统设置 → 网络」中查看正在使用的网卡的 IPv4 地址。解压后，打开两个终端，分别进入含 `relay/` 和 `phodex-bridge/` 的解压目录。两条命令中的 `192.168.1.20` 都换成 Mac 的地址。
+
+第一个终端运行中继：
+
+```bash
+RELAY_BIND_HOST=192.168.1.20 PORT=10004 node relay/server.js
+```
+
+第二个终端运行桥接并显示配对二维码：
+
+```bash
+REMODEX_AUTH_SCHEDULE_ENABLED=0 REMODEX_RELAY=ws://192.168.1.20:10004/relay node phodex-bridge/bin/remodex.js run
+```
+
+用 Android 上的 Remodex 扫描第二个终端里的二维码，使用期间保持两个终端打开。若手机连不上，先用手机浏览器访问 `http://192.168.1.20:10004/health`，检查 Mac 防火墙是否允许 Node 接收入站连接。
+
+这套启动方式用于连接和聊天。fix73 的部分账号切换恢复流程依赖 Linux 的 `systemd-run`，示例关闭了自动授权维护。macOS 真机配对尚未验证。
+
+### 从源码在 Linux 上部署
+
 **从源码自建**时，下面以 Linux 电脑和同一局域网内的 Android 手机为例。使用平时运行 Codex 的 Linux 用户，先确认该用户能在终端正常使用已登录的 `codex`。电脑准备 Git、Node.js 24 和 npm。
 
 1. **下载源码并安装服务端依赖。**
