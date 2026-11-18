@@ -32,7 +32,7 @@ const {
 const { printQR } = require("./qr");
 const { rememberActiveThread } = require("./session-state");
 const { handleDesktopRequest } = require("./desktop-handler");
-const { readDaemonConfig, writeDaemonConfig } = require("./daemon-state");
+const { readDaemonConfig, writeDaemonConfig, resolveRemodexStateDir } = require("./daemon-state");
 const { handleGitRequest } = require("./git-handler");
 const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest, workspaceImageResponseFits } = require("./workspace-handler");
@@ -46,7 +46,11 @@ const {
 const { createBridgePackageVersionStatusReader } = require("./package-version-status");
 const { createPushNotificationServiceClient } = require("./push-notification-service-client");
 const { createPushNotificationTracker } = require("./push-notification-tracker");
-const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
+const { resolveCodexGeneratedImagesRoot, resolveCodexHome } = require("./codex-home");
+const { createComposerPredictor } = require("./composer-prediction");
+const { readRuntimeAuthFileInfo } = require("./auth-file-info");
+const { manageAuthProfiles, verifySwitchedRuntime } = require("./auth-profiles");
+const { createAuthMaintenance } = require("./auth-maintenance");
 const {
   loadOrCreateBridgeDeviceState,
   rememberLastSeenClientDeviceKind,
@@ -102,6 +106,11 @@ const execFileAsync = promisify(execFile);
 const RELAY_HISTORY_IMAGE_REFERENCE_URL = "remodex://history-image-elided";
 const MAX_ENDPOINT_REPLY_PLAINTEXT_BYTES = 11 * 1024 * 1024;
 const BRIDGE_MANAGED_REQUEST_ID_PREFIX = "bridge-managed-";
+const phoneProfileMethods = new Set([
+  "account/profiles/list", "account/profiles/status", "account/profiles/check",
+  "account/profiles/import", "account/profiles/export", "account/profiles/query",
+  "account/profiles/refreshToken", "account/profiles/switch",
+]);
 const RELAY_THREAD_PAYLOAD_SOFT_LIMIT_BYTES = 4 * 1024 * 1024;
 const OPEN_CODE_THREAD_LIST_CURSOR_PREFIX = "remodex-opencode-list-v1:";
 const THREAD_LIST_DEFAULT_LIMIT = 100;
@@ -750,6 +759,16 @@ function startBridge({
     console.error(`[remodex] ${(error && error.message) || "Failed to load the saved bridge pairing state."}`);
     process.exit(1);
   }
+  const runtimeKey = createHash("sha256").update(config.codexEndpoint || resolveCodexHome()).digest("hex");
+  const composerPredictions = createComposerPredictor(
+    (method, params, timeoutMs) => sendCodexRequest(method, params, { timeoutMs }),
+    path.join(resolveRemodexStateDir(), "composer-predictions", runtimeKey)
+  );
+  function resolveAuthFile() {
+    return readRuntimeAuthFileInfo({
+      sendRequest: sendCodexRequest, endpoint: config.codexEndpoint, spawnedHome: resolveCodexHome(),
+    });
+  }
   const relaySession = resolveBridgeRelaySession(deviceState);
   deviceState = relaySession.deviceState;
   let lastIOSAppCompatibilityWarning = "";
@@ -988,6 +1007,7 @@ function startBridge({
     sendCodexRequest,
     logPrefix: "[remodex]",
   });
+  const authMaintenance = createAuthMaintenance({ resolveAuthFile, endpoint: config.codexEndpoint });
   const bridgeStatusPublisher = createBridgeStatusPublisher({
     onBridgeStatus,
     getCodexLaunchState: () => codexLaunchState,
@@ -1068,6 +1088,7 @@ function startBridge({
 
   function prepareBridgeShutdown() {
     isShuttingDown = true;
+    authMaintenance.stop();
     bridgeWakeAssertion.stop();
     clearReconnectTimer();
     clearRelayWatchdog();
@@ -1871,6 +1892,8 @@ function startBridge({
 
     const method = typeof parsed?.method === "string" ? parsed.method.trim() : "";
     if (method !== "account/status/read"
+      && method !== "composer/prediction/read"
+      && !phoneProfileMethods.has(method)
       && method !== "getAuthStatus"
       && method !== "account/login/openOnMac"
       && method !== "voice/resolveAuth") {
@@ -1896,7 +1919,15 @@ function startBridge({
 
   // Resolves bridge-owned account helpers like status reads and Mac-side browser opening.
   async function readBridgeManagedAccountResult(method, params) {
+    if (phoneProfileMethods.has(method)) {
+      const authFile = await resolveAuthFile();
+      const action = method.slice("account/profiles/".length);
+      const result = await manageAuthProfiles(action, params, authFile, { endpoint: config.codexEndpoint });
+      return action === "list" ? verifySwitchedRuntime(result, authFile, sendCodexRequest) : result;
+    }
     switch (method) {
+      case "composer/prediction/read":
+        return composerPredictions.read(params);
       case "account/status/read":
       case "getAuthStatus":
         return readSanitizedAuthStatus();
@@ -1912,6 +1943,11 @@ function startBridge({
   // Combines account/read + getAuthStatus into one safe snapshot for the phone UI.
   // The two RPCs are settled independently so one transient failure does not hide the other.
   async function readSanitizedAuthStatus() {
+    const [snapshot, authFile] = await Promise.all([readAccountSnapshot(), resolveAuthFile()]);
+    return { ...snapshot, authFile };
+  }
+
+  async function readAccountSnapshot() {
     const [accountReadResult, authStatusResult, bridgeVersionInfoResult] = await Promise.allSettled([
       sendCodexRequest("account/read", {
         refreshToken: false,
@@ -1984,6 +2020,8 @@ function startBridge({
         message: error?.userMessage || error?.message || "Bridge request failed.",
         data: {
           errorCode: error?.errorCode || defaultErrorCode,
+          ...(error?.predictionStage ? { stage: error.predictionStage, upstreamCode: error.upstreamCode, upstreamData: error.cause?.data } : {}),
+          ...(error?.profileDiagnostic ? { diagnostic: error.profileDiagnostic } : {}),
         },
       },
     });
@@ -2070,6 +2108,15 @@ function startBridge({
     }
     const responseId = parsed?.id;
     if (responseId == null) {
+      if (parsed?.method === "turn/started" || parsed?.method === "turn/completed" || parsed?.method === "turn/failed") {
+        const params = parsed.params;
+        const threadId = threadIdFromRequestParams(params) || params?.turn?.threadId;
+        if (!openCodeRuntime.handlesThreadId(threadId)) {
+          composerPredictions.observe(parsed)?.catch(error => {
+            console.warn("[remodex] operation=composer-prediction-live", error);
+          });
+        }
+      }
       return sanitizeLiveGeneratedImageMessageForRelay(normalizedMessage);
     }
 
