@@ -1,17 +1,18 @@
 // FILE: macos-launch-agent.js
-// Purpose: Owns macOS-only launchd install/start/stop/status helpers for the background Remodex bridge.
+// Purpose: Owns macOS-only launchd install/start/stop/uninstall/status helpers for the background Remodex bridge.
 // Layer: CLI helper
-// Exports: start/stop/status helpers plus the launchd service runner used by `remodex up`.
+// Exports: start/stop/uninstall/status helpers plus the launchd service runner used by `remodex up`.
 // Depends on: child_process, fs, os, path, ./bridge, ./daemon-state, ./codex-desktop-refresher, ./qr, ./secure-device-state
 
 const { execFileSync } = require("child_process");
+const { createHash } = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
 const { printQR } = require("./qr");
-const { resetBridgeTrustState } = require("./secure-device-state");
+const { readBridgeDeviceState, resetBridgeTrustState } = require("./secure-device-state");
 const {
   clearBridgeStatus,
   clearPairingSession,
@@ -31,6 +32,23 @@ const {
 const SERVICE_LABEL = "com.remodex.bridge";
 const DEFAULT_PAIRING_WAIT_TIMEOUT_MS = 10_000;
 const DEFAULT_PAIRING_WAIT_INTERVAL_MS = 200;
+
+// If the saved Node binary or CLI entrypoint disappears (npm uninstall, deleted
+// checkout), exit 0 so launchd's KeepAlive.SuccessfulExit=false stops rescheduling
+// the job; `exec` keeps genuine daemon failures non-zero so they still restart.
+const LAUNCH_AGENT_GUARD_SCRIPT = 'if [ ! -x "$1" ] || [ ! -f "$2" ]; then exit 0; fi; exec "$1" "$2" run-service';
+
+// Keeps the guard script constant: the installed paths are shell positionals, never interpolated source.
+function buildLaunchAgentProgramArguments({ nodePath, cliPath }) {
+  return [
+    "/bin/sh",
+    "-c",
+    LAUNCH_AGENT_GUARD_SCRIPT,
+    SERVICE_LABEL,
+    nodePath,
+    cliPath,
+  ];
+}
 
 // Runs the bridge inside launchd while keeping QR rendering in the foreground CLI command.
 function runMacOSBridgeService({ env = process.env, platform = process.platform } = {}) {
@@ -122,17 +140,19 @@ async function startMacOSBridgeService({
   };
 }
 
-// Restarts the installed LaunchAgent without rewriting relay config, useful during local bridge development.
+// Restarts the installed LaunchAgent without rewriting relay config, regenerating the plist so
+// legacy launch definitions pick up the current Node/CLI paths and launch policy.
 async function restartMacOSBridgeService({
   env = process.env,
   platform = process.platform,
   fsImpl = fs,
   execFileSyncImpl = execFileSync,
   osImpl = os,
+  nodePath = process.execPath,
+  cliPath = path.resolve(__dirname, "..", "bin", "remodex.js"),
   waitForPairing = false,
   pairingTimeoutMs = DEFAULT_PAIRING_WAIT_TIMEOUT_MS,
   pairingPollIntervalMs = DEFAULT_PAIRING_WAIT_INTERVAL_MS,
-  ...startOptions
 } = {}) {
   assertDarwinPlatform(platform);
   const plistPath = resolveLaunchAgentPlistPath({ env, osImpl });
@@ -143,10 +163,11 @@ async function restartMacOSBridgeService({
       fsImpl,
       execFileSyncImpl,
       osImpl,
+      nodePath,
+      cliPath,
       waitForPairing,
       pairingTimeoutMs,
       pairingPollIntervalMs,
-      ...startOptions,
     });
   }
 
@@ -155,7 +176,16 @@ async function restartMacOSBridgeService({
     clearPairingSession({ env, fsImpl });
   }
 
-  kickstartLaunchAgent({
+  ensureRemodexStateDir({ env, fsImpl, osImpl });
+  ensureRemodexLogsDir({ env, fsImpl, osImpl });
+  writeLaunchAgentPlist({
+    env,
+    fsImpl,
+    osImpl,
+    nodePath,
+    cliPath,
+  });
+  restartLaunchAgent({
     env,
     execFileSyncImpl,
     plistPath,
@@ -201,6 +231,31 @@ function stopMacOSBridgeService({
   });
   clearPairingSession({ env, fsImpl });
   clearBridgeStatus({ env, fsImpl });
+}
+
+// Removes launchd ownership of the bridge (unload + plist) while preserving daemon config,
+// logs, device trust, and pairing identity for a future reinstall.
+function uninstallMacOSBridgeService({
+  env = process.env,
+  platform = process.platform,
+  execFileSyncImpl = execFileSync,
+  fsImpl = fs,
+  osImpl = os,
+  processImpl = process,
+} = {}) {
+  assertDarwinPlatform(platform);
+  const plistPath = resolveLaunchAgentPlistPath({ env, osImpl });
+  const removed = fsImpl.existsSync(plistPath);
+  // Stop first: a real bootout failure throws here and leaves the plist on disk.
+  stopMacOSBridgeService({
+    env,
+    platform,
+    execFileSyncImpl,
+    fsImpl,
+    processImpl,
+  });
+  fsImpl.rmSync(plistPath, { force: true });
+  return { plistPath, removed };
 }
 
 // Revokes pairing immediately on macOS by stopping the daemon before rotating identity/trust state.
@@ -276,6 +331,7 @@ function getMacOSBridgeServiceStatus({
     daemonConfig: readDaemonConfig({ env, fsImpl }),
     bridgeStatus: readBridgeStatus({ env, fsImpl }),
     pairingSession: readPairingSession({ env, fsImpl }),
+    trustedDevice: buildTrustedDeviceSummary(readBridgeDeviceState()),
     stdoutLogPath: resolveBridgeStdoutLogPath({ env }),
     stderrLogPath: resolveBridgeStderrLogPath({ env }),
   };
@@ -286,12 +342,18 @@ function printMacOSBridgeServiceStatus(options = {}) {
   const bridgeState = status.bridgeStatus?.state || "unknown";
   const connectionStatus = status.bridgeStatus?.connectionStatus || "unknown";
   const pairingCreatedAt = status.pairingSession?.createdAt || "none";
+  const activeDevice = status.bridgeStatus?.activeDevice || status.bridgeStatus?.activePhone;
+  const trustedPhoneCount = status.trustedDevice?.trustedPhoneCount || 0;
+  const activeDeviceName = formatDeviceKind(activeDevice?.deviceKind) || "device";
+  const trustedDeviceName = formatDeviceKind(status.trustedDevice?.lastSeenDeviceKind) || "device";
   console.log(`[remodex] Service label: ${status.label}`);
   console.log(`[remodex] Installed: ${status.installed ? "yes" : "no"}`);
   console.log(`[remodex] Launchd loaded: ${status.launchdLoaded ? "yes" : "no"}`);
   console.log(`[remodex] PID: ${status.launchdPid || status.bridgeStatus?.pid || "unknown"}`);
   console.log(`[remodex] Bridge state: ${bridgeState}`);
   console.log(`[remodex] Connection: ${connectionStatus}`);
+  console.log(`[remodex] Active ${activeDeviceName}: ${activeDevice?.connected ? activeDevice.phoneFingerprint || "yes" : "no"}`);
+  console.log(`[remodex] Trusted ${trustedDeviceName}: ${trustedPhoneCount > 0 ? "yes" : "no"}`);
   console.log(`[remodex] Pairing payload: ${pairingCreatedAt}`);
   console.log(`[remodex] Stdout log: ${status.stdoutLogPath}`);
   console.log(`[remodex] Stderr log: ${status.stderrLogPath}`);
@@ -351,9 +413,9 @@ function buildLaunchAgentPlist({
   <string>${escapeXml(SERVICE_LABEL)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${escapeXml(nodePath)}</string>
-    <string>${escapeXml(cliPath)}</string>
-    <string>run-service</string>
+${buildLaunchAgentProgramArguments({ nodePath, cliPath })
+    .map((argument) => `    <string>${escapeXml(argument)}</string>`)
+    .join("\n")}
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -430,31 +492,6 @@ function restartLaunchAgent({
     "-k",
     launchAgentLabelDomain(env),
   ], { stdio: ["ignore", "ignore", "pipe"] });
-}
-
-function kickstartLaunchAgent({
-  env = process.env,
-  execFileSyncImpl = execFileSync,
-  plistPath,
-} = {}) {
-  try {
-    execFileSyncImpl("launchctl", [
-      "kickstart",
-      "-k",
-      launchAgentLabelDomain(env),
-    ], { stdio: ["ignore", "ignore", "pipe"] });
-  } catch {
-    execFileSyncImpl("launchctl", [
-      "bootstrap",
-      launchAgentDomain(env),
-      plistPath,
-    ], { stdio: ["ignore", "ignore", "pipe"] });
-    execFileSyncImpl("launchctl", [
-      "kickstart",
-      "-k",
-      launchAgentLabelDomain(env),
-    ], { stdio: ["ignore", "ignore", "pipe"] });
-  }
 }
 
 function bootoutLaunchAgent({
@@ -613,8 +650,46 @@ function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function buildTrustedDeviceSummary(deviceState) {
+  const trustedPhoneEntries = Object.entries(deviceState?.trustedPhones || {})
+    .filter(([phoneDeviceId, publicKey]) => normalizeNonEmptyString(phoneDeviceId) && normalizeNonEmptyString(publicKey));
+  const firstTrustedPhoneId = trustedPhoneEntries[0]?.[0] || "";
+  const lastSeenPhoneAppVersion = normalizeNonEmptyString(deviceState?.lastSeenPhoneAppVersion) || null;
+  return {
+    macDeviceFingerprint: shortFingerprint(deviceState?.macDeviceId),
+    trustedPhoneCount: trustedPhoneEntries.length,
+    trustedPhoneFingerprint: shortFingerprint(firstTrustedPhoneId),
+    lastSeenDeviceKind: normalizeNonEmptyString(deviceState?.lastSeenDeviceKind) || (lastSeenPhoneAppVersion ? "iphone" : null),
+    lastSeenPhoneAppVersion,
+  };
+}
+
+function formatDeviceKind(deviceKind) {
+  const normalized = normalizeNonEmptyString(deviceKind).toLowerCase();
+  if (normalized === "iphone") {
+    return "iPhone";
+  }
+  if (normalized === "android") {
+    return "Android";
+  }
+  if (normalized === "mac") {
+    return "Mac";
+  }
+  return "";
+}
+
+function shortFingerprint(value) {
+  const normalized = normalizeNonEmptyString(value);
+  if (!normalized) {
+    return null;
+  }
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 8);
+}
+
 module.exports = {
+  buildTrustedDeviceSummary,
   buildLaunchAgentPlist,
+  buildLaunchAgentProgramArguments,
   getMacOSBridgeServiceStatus,
   mergeBridgeStatusForDaemon,
   printMacOSBridgePairingQr,
@@ -625,4 +700,5 @@ module.exports = {
   runMacOSBridgeService,
   startMacOSBridgeService,
   stopMacOSBridgeService,
+  uninstallMacOSBridgeService,
 };

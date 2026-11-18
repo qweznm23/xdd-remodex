@@ -10,6 +10,7 @@ const os = require("os");
 const path = require("path");
 const { randomBytes } = require("crypto");
 const { promisify } = require("util");
+const { resolveBundledCodexCommand } = require("./codex-desktop-app");
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
@@ -20,9 +21,11 @@ const GITHUB_CLI_TIMEOUT_MS = 120_000;
 const GIT_DRAFT_PATCH_MAX_BYTES = 80_000;
 const EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const DEFAULT_GIT_WRITER_MODEL = "gpt-5.4-mini";
+const STATUS_UPSTREAM_FETCH_TTL_MS = 15_000;
 
 let runStructuredCodexJsonImpl = runStructuredCodexJson;
 let runGitHubCliImpl = runGitHubCli;
+const statusUpstreamFetchCache = new Map();
 
 function resolveGitWriterModel(rawModel) {
   const trimmed = typeof rawModel === "string" ? rawModel.trim() : "";
@@ -67,9 +70,6 @@ function handleGitRequest(rawMessage, sendResponse, options = {}) {
   handleGitMethod(method, params, methodOptions)
     .then((result) => {
       sendResponse(JSON.stringify({ id, result }));
-      if (method === "thread/name/set") {
-        options.onThreadNameSet?.(result);
-      }
     })
     .catch((err) => {
       const errorCode = err.errorCode || "git_error";
@@ -94,7 +94,7 @@ async function handleGitMethod(method, params, options = {}) {
     return threadGenerateTitle(params, options);
   }
   if (method === "thread/name/set") {
-    return threadNameSet(params);
+    return threadNameSet(params, options);
   }
 
   const cwd = await resolveGitCwd(params);
@@ -129,7 +129,11 @@ async function handleGitMethod(method, params, options = {}) {
     case "git/transferManagedHandoff":
       return gitTransferManagedHandoff(cwd, params);
     case "git/removeWorktree":
-      return gitRemoveWorktree(cwd, params);
+      return gitRemoveWorktree(cwd, params, options, false);
+    case "git/removeWorktreeSafely":
+      return gitRemoveWorktree(cwd, params, options, true);
+    case "git/listManagedWorktrees":
+      return gitListManagedWorktrees(cwd);
     case "git/stash":
       return gitStash(cwd);
     case "git/stashPop":
@@ -151,8 +155,9 @@ async function handleGitMethod(method, params, options = {}) {
   }
 }
 
-// Owns mobile thread renames locally so they do not fall through to unsupported Codex RPC.
-function threadNameSet(params) {
+// Normalize mobile aliases, then persist through the same catalog RPC as Desktop.
+// The app-server emits thread/name/updated to the phone and live IPC owner.
+async function threadNameSet(params, { sendCodexRequest } = {}) {
   const threadId = normalizeNonEmptyLine(params.threadId || params.thread_id || params.conversationId || params.conversation_id);
   const name = normalizeNonEmptyLine(params.name || params.threadName || params.thread_name || params.title);
   if (!threadId) {
@@ -161,6 +166,11 @@ function threadNameSet(params) {
   if (!name) {
     throw gitError("missing_thread_name", "A thread name is required.");
   }
+
+  if (typeof sendCodexRequest !== "function") {
+    throw gitError("thread_rename_unavailable", "The local Codex connection is unavailable.");
+  }
+  await sendCodexRequest("thread/name/set", { threadId, name });
 
   return { threadId, thread_id: threadId, name, title: name };
 }
@@ -172,43 +182,25 @@ async function gitStatus(cwd) {
     return nonRepositoryStatus(cwd);
   }
 
-  const [porcelain, branchInfo, repoRoot] = await Promise.all([
-    git(cwd, "status", "--porcelain=v1", "-b"),
-    revListCounts(cwd).catch(() => ({ ahead: 0, behind: 0 })),
-    resolveRepoRoot(cwd).catch(() => null),
-  ]);
-
-  const lines = porcelain.trim().split("\n").filter(Boolean);
-  const branchLine = lines[0] || "";
-  const fileLines = lines.slice(1);
-
-  const branch = parseBranchFromStatus(branchLine);
-  const tracking = parseTrackingFromStatus(branchLine);
-  const files = fileLines.map((line) => ({
-    path: line.substring(3).trim(),
-    status: line.substring(0, 2).trim(),
-  }));
-
-  const dirty = files.length > 0;
-  const { ahead, behind } = branchInfo;
-  const detached = branchLine.includes("HEAD detached") || branchLine.includes("no branch");
-  const noUpstream = tracking === null && !detached;
+  const snapshot = await readGitStatusSnapshot(cwd);
+  const { ahead, behind } = await freshBranchInfoForStatus(cwd, snapshot);
+  const dirty = snapshot.files.length > 0;
+  const noUpstream = snapshot.tracking === null && !snapshot.detached;
   const hasHeadCommit = await refExists(cwd, "HEAD").catch(() => false);
-  const hasPushRemote = await pushRemoteAvailable(cwd, tracking).catch(() => false);
-  const publishedToRemote = !detached && !!branch && await remoteBranchExists(cwd, branch).catch(() => false);
-  const localOnlyCommitCount = await countLocalOnlyCommits(cwd, { detached }).catch(() => 0);
-  const state = computeState(dirty, ahead, behind, detached, noUpstream);
-  const canPush = hasPushRemote && hasHeadCommit && (ahead > 0 || noUpstream) && !detached;
-  const diff = await repoDiffTotals(cwd, {
-    tracking,
-    fileLines,
+  const hasPushRemote = await pushRemoteAvailable(cwd, snapshot.tracking).catch(() => false);
+  const publishedToRemote = !snapshot.detached && !!snapshot.branch && await remoteBranchExists(cwd, snapshot.branch).catch(() => false);
+  const localOnlyCommitCount = await countLocalOnlyCommits(cwd, { detached: snapshot.detached }).catch(() => 0);
+  const state = computeState(dirty, ahead, behind, snapshot.detached, noUpstream);
+  const canPush = hasPushRemote && hasHeadCommit && (ahead > 0 || noUpstream) && !snapshot.detached;
+  const diff = await repoDiffTotals(snapshot.repoRoot || cwd, {
+    tracking: snapshot.tracking,
   }).catch(() => ({ additions: 0, deletions: 0, binaryFiles: 0 }));
 
   return {
     isRepo: true,
-    repoRoot,
-    branch,
-    tracking,
+    repoRoot: snapshot.repoRoot,
+    branch: snapshot.branch,
+    tracking: snapshot.tracking,
     dirty,
     hasHeadCommit,
     hasPushRemote,
@@ -218,9 +210,42 @@ async function gitStatus(cwd) {
     state,
     canPush,
     publishedToRemote,
-    files,
+    files: snapshot.files,
     diff,
   };
+}
+
+async function readGitStatusSnapshot(cwd) {
+  const [porcelain, repoRoot] = await Promise.all([
+    git(cwd, "status", "--porcelain=v1", "-b"),
+    resolveRepoRoot(cwd).catch(() => null),
+  ]);
+
+  const lines = porcelain.trim().split("\n").filter(Boolean);
+  const branchLine = lines[0] || "";
+  const fileLines = lines.slice(1);
+
+  const branch = parseBranchFromStatus(branchLine);
+  const tracking = parseTrackingFromStatus(branchLine);
+  const detached = branchLine.includes("HEAD detached") || branchLine.includes("no branch");
+  const files = fileLines.map((line) => ({
+    path: line.substring(3).trim(),
+    status: line.substring(0, 2).trim(),
+  }));
+
+  return {
+    repoRoot,
+    branch,
+    tracking,
+    detached,
+    fileLines,
+    files,
+  };
+}
+
+async function freshBranchInfoForStatus(cwd, snapshot) {
+  await refreshStatusUpstreamIfNeeded(cwd, snapshot.tracking, snapshot.repoRoot).catch(() => false);
+  return await revListCounts(cwd).catch(() => ({ ahead: 0, behind: 0 }));
 }
 
 async function gitInit(cwd) {
@@ -249,17 +274,14 @@ async function gitInit(cwd) {
 // ─── Git Diff ─────────────────────────────────────────────────
 
 async function gitDiff(cwd) {
+  cwd = await resolveRepoRoot(cwd);
   const porcelain = await git(cwd, "status", "--porcelain=v1", "-b");
   const lines = porcelain.trim().split("\n").filter(Boolean);
   const branchLine = lines[0] || "";
-  const fileLines = lines.slice(1);
   const tracking = parseTrackingFromStatus(branchLine);
   const baseRef = await resolveRepoDiffBase(cwd, tracking);
   const trackedPatch = await gitDiffAgainstBase(cwd, baseRef);
-  const untrackedPaths = fileLines
-    .filter((line) => line.startsWith("?? "))
-    .map((line) => line.substring(3).trim())
-    .filter(Boolean);
+  const untrackedPaths = await repoUntrackedPaths(cwd);
   const untrackedPatch = await diffPatchForUntrackedFiles(cwd, untrackedPaths);
   const patch = [trackedPatch.trim(), untrackedPatch.trim()].filter(Boolean).join("\n\n").trim();
   return { patch };
@@ -617,13 +639,11 @@ async function gitCreateBranch(cwd, params) {
   return { branch: name, status };
 }
 
-async function gitCreateWorktree(cwd, params) {
-  const branch = normalizeCreatedBranchName(params.name);
-  if (!branch) {
-    throw gitError("missing_branch_name", "Branch name is required.");
-  }
-  await assertValidCreatedBranchName(cwd, branch);
-
+// Resolves the shared creation context for both worktree flavors and enforces
+// the invariants they have in common: a locally available base branch, and
+// dirty changes that may only travel when the base branch is checked out.
+// `destinationLabel` only shapes the dirty-transfer error message.
+async function resolveWorktreeCreationContext(cwd, params, destinationLabel) {
   const branchResult = await gitBranches(cwd);
   const repoRoot = await resolveRepoRoot(cwd);
   const status = await gitStatus(cwd);
@@ -648,9 +668,99 @@ async function gitCreateWorktree(cwd, params) {
     const transferVerb = changeTransfer === "copy" ? "copy" : "move";
     throw gitError(
       "dirty_worktree_base_mismatch",
-      `Uncommitted changes can ${transferVerb} into a new worktree only from ${currentBranchLabel}. Switch the base branch to match or clean up local changes first.`
+      `Uncommitted changes can ${transferVerb} into ${destinationLabel} only from ${currentBranchLabel}. Switch the base branch to match or clean up local changes first.`
     );
   }
+
+  return {
+    branchResult,
+    repoRoot,
+    projectRelativePath,
+    changeScope,
+    baseBranch,
+    changeTransfer,
+    canCarryLocalChanges,
+  };
+}
+
+// Shared creation core: allocates the managed path, carries local changes per
+// the transfer mode, runs `git worktree add`, copies manifest files, and rolls
+// everything back if any step after allocation fails. `branch` switches the
+// checkout mode (`-b branch` vs `--detach`) and scopes cleanup/error mapping.
+async function createWorktreeAtManagedPath(context, { branch = null, failureMessage }) {
+  const { repoRoot, changeScope, baseBranch, changeTransfer, canCarryLocalChanges } = context;
+  const worktreeRootPath = allocateManagedWorktreePath(repoRoot);
+  let handoffStashRef = null;
+  let copiedLocalChangesPatch = "";
+  let didCreateWorktree = false;
+
+  try {
+    if (canCarryLocalChanges) {
+      if (changeTransfer === "copy") {
+        copiedLocalChangesPatch = await captureLocalChangesPatch(repoRoot, changeScope.pathspecArgs);
+      } else if (changeTransfer === "move") {
+        handoffStashRef = await stashChangesForWorktreeHandoff(repoRoot, changeScope.pathspecArgs);
+      }
+    }
+
+    const checkoutArgs = branch ? ["-b", branch] : ["--detach"];
+    await git(repoRoot, "worktree", "add", ...checkoutArgs, worktreeRootPath, baseBranch);
+    didCreateWorktree = true;
+
+    if (handoffStashRef) {
+      await applyWorktreeHandoffStash(worktreeRootPath, handoffStashRef);
+    }
+    if (copiedLocalChangesPatch) {
+      await applyCopiedLocalChangesToWorktree(worktreeRootPath, copiedLocalChangesPatch);
+    }
+    await copyWorktreeIncludeFiles(repoRoot, worktreeRootPath);
+  } catch (err) {
+    if (didCreateWorktree) {
+      await cleanupManagedWorktree(repoRoot, worktreeRootPath, branch);
+    } else {
+      try {
+        fs.rmdirSync(path.dirname(worktreeRootPath));
+      } catch {
+        // A partial checkout may contain files. Keep it for manual recovery.
+      }
+    }
+
+    if (handoffStashRef) {
+      await restoreWorktreeHandoffStash(repoRoot, handoffStashRef);
+    }
+
+    if (err.message?.includes("invalid reference")) {
+      throw gitError("missing_base_branch", `Base branch '${baseBranch}' does not exist.`);
+    }
+    if (branch) {
+      if (err.message?.includes("already exists")) {
+        throw gitError("branch_exists", `Branch '${branch}' already exists.`);
+      }
+      if (err.message?.includes("already used by worktree") || err.message?.includes("already checked out at")) {
+        throw gitError(
+          "branch_in_other_worktree",
+          `Branch '${branch}' is already open in another worktree.`
+        );
+      }
+    }
+    throw gitError("create_worktree_failed", err.message || failureMessage);
+  }
+
+  return {
+    worktreeRootPath,
+    transferredChanges: Boolean(handoffStashRef || copiedLocalChangesPatch),
+  };
+}
+
+async function gitCreateWorktree(cwd, params) {
+  const branch = normalizeCreatedBranchName(params.name);
+  if (!branch) {
+    throw gitError("missing_branch_name", "Branch name is required.");
+  }
+  await assertValidCreatedBranchName(cwd, branch);
+
+  const context = await resolveWorktreeCreationContext(cwd, params, "a new worktree");
+  const { branchResult, repoRoot, projectRelativePath } = context;
 
   const existingWorktreePath = branchResult.worktreePathByBranch[branch];
   if (existingWorktreePath) {
@@ -661,6 +771,13 @@ async function gitCreateWorktree(cwd, params) {
       );
     }
 
+    // Backfill manifest files a worktree created before `.worktreeinclude`
+    // existed never received; the copy skips files the worktree already has.
+    const existingWorktreeRoot = await resolveRepoRoot(existingWorktreePath).catch(() => null);
+    if (existingWorktreeRoot) {
+      await copyWorktreeIncludeFiles(repoRoot, existingWorktreeRoot);
+    }
+
     return {
       branch,
       worktreePath: existingWorktreePath,
@@ -668,147 +785,37 @@ async function gitCreateWorktree(cwd, params) {
     };
   }
 
-  const branchExists = await localBranchExists(cwd, branch);
-  if (branchExists) {
+  if (await localBranchExists(cwd, branch)) {
     throw gitError(
       "branch_exists",
       `Branch '${branch}' already exists locally. Choose another name or open that branch instead.`
     );
   }
 
-  const worktreeRootPath = allocateManagedWorktreePath(repoRoot);
-  let handoffStashRef = null;
-  let copiedLocalChangesPatch = "";
-  let didCreateWorktree = false;
+  const { worktreeRootPath } = await createWorktreeAtManagedPath(context, {
+    branch,
+    failureMessage: "Failed to create worktree.",
+  });
 
-  try {
-    if (canCarryLocalChanges) {
-      if (changeTransfer === "copy") {
-        copiedLocalChangesPatch = await captureLocalChangesPatch(repoRoot, changeScope.pathspecArgs);
-      } else if (changeTransfer === "move") {
-        handoffStashRef = await stashChangesForWorktreeHandoff(repoRoot, changeScope.pathspecArgs);
-      }
-    }
-
-    await git(repoRoot, "worktree", "add", "-b", branch, worktreeRootPath, baseBranch);
-    didCreateWorktree = true;
-
-    if (handoffStashRef) {
-      await applyWorktreeHandoffStash(worktreeRootPath, handoffStashRef);
-    }
-    if (copiedLocalChangesPatch) {
-      await applyCopiedLocalChangesToWorktree(worktreeRootPath, copiedLocalChangesPatch);
-    }
-  } catch (err) {
-    if (didCreateWorktree) {
-      await cleanupManagedWorktree(repoRoot, worktreeRootPath, branch);
-    } else {
-      fs.rmSync(path.dirname(worktreeRootPath), { recursive: true, force: true });
-    }
-
-    if (handoffStashRef) {
-      await restoreWorktreeHandoffStash(repoRoot, handoffStashRef);
-    }
-
-    if (err.message?.includes("invalid reference")) {
-      throw gitError("missing_base_branch", `Base branch '${baseBranch}' does not exist.`);
-    }
-    if (err.message?.includes("already exists")) {
-      throw gitError("branch_exists", `Branch '${branch}' already exists.`);
-    }
-    if (err.message?.includes("already used by worktree") || err.message?.includes("already checked out at")) {
-      throw gitError(
-        "branch_in_other_worktree",
-        `Branch '${branch}' is already open in another worktree.`
-      );
-    }
-    throw gitError("create_worktree_failed", err.message || "Failed to create worktree.");
-  }
-
-  const worktreePath = scopedWorktreePath(worktreeRootPath, projectRelativePath);
   return {
     branch,
-    worktreePath,
+    worktreePath: scopedWorktreePath(worktreeRootPath, projectRelativePath),
     alreadyExisted: false,
   };
 }
 
 async function gitCreateManagedWorktree(cwd, params) {
-  const branchResult = await gitBranches(cwd);
-  const repoRoot = await resolveRepoRoot(cwd);
-  const status = await gitStatus(cwd);
-  const projectRelativePath = resolveProjectRelativePath(cwd, repoRoot);
-  const changeScope = await scopedProjectChanges(repoRoot, projectRelativePath);
-  const baseBranch = resolveBaseBranchName(params.baseBranch, branchResult.defaultBranch);
-  const changeTransfer = resolveWorktreeChangeTransfer(params.changeTransfer);
-  if (!baseBranch) {
-    throw gitError("missing_base_branch", "Base branch is required.");
-  }
-  if (!(await localBranchExists(cwd, baseBranch))) {
-    throw gitError(
-      "missing_base_branch",
-      `Base branch '${baseBranch}' is not available locally. Create or check out that branch first.`
-    );
-  }
+  const context = await resolveWorktreeCreationContext(cwd, params, "a managed worktree");
+  const { worktreeRootPath, transferredChanges } = await createWorktreeAtManagedPath(context, {
+    failureMessage: "Failed to create managed worktree.",
+  });
 
-  const currentBranch = typeof status.branch === "string" ? status.branch.trim() : "";
-  const canCarryLocalChanges = changeScope.dirty && !!currentBranch && currentBranch === baseBranch;
-  if (changeScope.dirty && changeTransfer !== "none" && !canCarryLocalChanges) {
-    const currentBranchLabel = currentBranch || "the current branch";
-    const transferVerb = changeTransfer === "copy" ? "copy" : "move";
-    throw gitError(
-      "dirty_worktree_base_mismatch",
-      `Uncommitted changes can ${transferVerb} into a managed worktree only from ${currentBranchLabel}. Switch the base branch to match or clean up local changes first.`
-    );
-  }
-
-  const worktreeRootPath = allocateManagedWorktreePath(repoRoot);
-  let handoffStashRef = null;
-  let copiedLocalChangesPatch = "";
-  let didCreateWorktree = false;
-
-  try {
-    if (canCarryLocalChanges) {
-      if (changeTransfer === "copy") {
-        copiedLocalChangesPatch = await captureLocalChangesPatch(repoRoot, changeScope.pathspecArgs);
-      } else if (changeTransfer === "move") {
-        handoffStashRef = await stashChangesForWorktreeHandoff(repoRoot, changeScope.pathspecArgs);
-      }
-    }
-
-    await git(repoRoot, "worktree", "add", "--detach", worktreeRootPath, baseBranch);
-    didCreateWorktree = true;
-
-    if (handoffStashRef) {
-      await applyWorktreeHandoffStash(worktreeRootPath, handoffStashRef);
-    }
-    if (copiedLocalChangesPatch) {
-      await applyCopiedLocalChangesToWorktree(worktreeRootPath, copiedLocalChangesPatch);
-    }
-  } catch (err) {
-    if (didCreateWorktree) {
-      await cleanupManagedWorktree(repoRoot, worktreeRootPath);
-    } else {
-      fs.rmSync(path.dirname(worktreeRootPath), { recursive: true, force: true });
-    }
-
-    if (handoffStashRef) {
-      await restoreWorktreeHandoffStash(repoRoot, handoffStashRef);
-    }
-
-    if (err.message?.includes("invalid reference")) {
-      throw gitError("missing_base_branch", `Base branch '${baseBranch}' does not exist.`);
-    }
-    throw gitError("create_worktree_failed", err.message || "Failed to create managed worktree.");
-  }
-
-  const worktreePath = scopedWorktreePath(worktreeRootPath, projectRelativePath);
   return {
-    worktreePath,
+    worktreePath: scopedWorktreePath(worktreeRootPath, context.projectRelativePath),
     alreadyExisted: false,
-    baseBranch,
+    baseBranch: context.baseBranch,
     headMode: "detached",
-    transferredChanges: Boolean(handoffStashRef || copiedLocalChangesPatch),
+    transferredChanges,
   };
 }
 
@@ -903,7 +910,7 @@ async function gitTransferManagedHandoff(cwd, params) {
   };
 }
 
-async function gitRemoveWorktree(cwd, params) {
+async function gitRemoveWorktree(cwd, params, options = {}, verifyChatCatalog = false) {
   const worktreeRootPath = await resolveRepoRoot(cwd).catch(() => null);
   const localCheckoutRoot = await resolveLocalCheckoutRoot(cwd).catch(() => null);
   const branch = typeof params.branch === "string" ? params.branch.trim() : "";
@@ -917,15 +924,56 @@ async function gitRemoveWorktree(cwd, params) {
   if (!isManagedWorktreePath(worktreeRootPath)) {
     throw gitError("unmanaged_worktree", "Only managed worktrees can be removed automatically.");
   }
-
-  await cleanupManagedWorktree(localCheckoutRoot, worktreeRootPath, branch || null);
-  if (branch && await localBranchExists(localCheckoutRoot, branch)) {
-    throw gitError(
-      "worktree_cleanup_failed",
-      `The temporary worktree was removed, but branch '${branch}' could not be deleted automatically.`
-    );
+  if (path.dirname(path.dirname(normalizeExistingPath(worktreeRootPath))) !== managedWorktreesRoot()) {
+    throw gitError("unmanaged_worktree", "The worktree is outside the managed checkout layout.");
   }
-  return { success: true };
+  const registration = (await registeredWorktrees(localCheckoutRoot))
+    .find((entry) => sameFilePath(entry.path, worktreeRootPath));
+  if (!registration) {
+    throw gitError("worktree_not_registered", "This worktree is no longer registered with Git.");
+  }
+  if (branch && registration.branch !== branch) {
+    throw gitError("worktree_branch_mismatch", "The selected branch does not belong to this worktree.");
+  }
+
+  if (verifyChatCatalog) {
+    await assertWorktreeHasNoBoundChats(worktreeRootPath, options);
+  }
+  await removeCleanManagedWorktree(localCheckoutRoot, worktreeRootPath);
+
+  let removedBranch = false;
+  if (branch && await localBranchExists(localCheckoutRoot, branch)) {
+    try {
+      // Never discard commits unique to the worktree branch.
+      await git(localCheckoutRoot, "branch", "-d", branch);
+      removedBranch = true;
+    } catch {
+      // The checkout is gone; leave an unmerged or otherwise protected branch intact.
+    }
+  }
+  return { success: true, removedBranch };
+}
+
+async function gitListManagedWorktrees(cwd) {
+  const localCheckoutRoot = await resolveLocalCheckoutRoot(cwd).catch(() => null);
+  if (!localCheckoutRoot) {
+    throw gitError("missing_working_directory", "Could not resolve the Local checkout for this project.");
+  }
+  const entries = await registeredWorktrees(localCheckoutRoot);
+  const worktrees = [];
+  for (const entry of entries) {
+    const root = normalizeExistingPath(entry.path);
+    if (!root || !isManagedWorktreePath(root)
+      || path.dirname(path.dirname(root)) !== managedWorktreesRoot()) {
+      continue;
+    }
+    worktrees.push({
+      path: root,
+      branch: entry.branch,
+      isClean: await isWorktreeClean(root),
+    });
+  }
+  return { worktrees };
 }
 
 // ─── Git Stash ────────────────────────────────────────────────
@@ -1699,24 +1747,6 @@ function resolveCodexExecCommands(codexAppPath) {
   return commands;
 }
 
-function resolveBundledCodexCommand(codexAppPath) {
-  const trimmedAppPath = typeof codexAppPath === "string" ? codexAppPath.trim() : "";
-  if (!trimmedAppPath) {
-    return "";
-  }
-
-  const candidate = path.join(trimmedAppPath, "Contents", "Resources", "codex");
-  return isLaunchableFile(candidate) ? candidate : "";
-}
-
-function isLaunchableFile(candidatePath) {
-  try {
-    return fs.statSync(candidatePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
 function shouldRetryCodexExecWithNextCommand(error) {
   return error?.code === "ENOENT";
 }
@@ -1987,22 +2017,296 @@ async function rollbackFailedHandoffTransfer(cwd, pathspecArgs = []) {
   }
 }
 
+// Mirrors Codex Desktop's `.worktreeinclude`: files Git leaves behind (like an
+// ignored `.env`) listed in a repository-root manifest are copied into worktrees.
+// Best effort by design — a stale manifest entry must never fail creation.
+const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
+const WORKTREE_INCLUDE_MAX_FILES = 512;
+
+async function copyWorktreeIncludeFiles(repoRoot, worktreeRootPath) {
+  const manifestPath = path.join(repoRoot, WORKTREE_INCLUDE_FILE);
+  if (!fs.existsSync(manifestPath)) {
+    return;
+  }
+
+  const relativePaths = await listWorktreeIncludePaths(repoRoot, manifestPath);
+  if (relativePaths.length === 0) {
+    return;
+  }
+
+  const canonicalWorktreeRoot = await fs.promises.realpath(worktreeRootPath).catch(() => null);
+  if (!canonicalWorktreeRoot) {
+    return;
+  }
+
+  for (const relativePath of relativePaths) {
+    const sourcePath = path.resolve(repoRoot, relativePath);
+    const destinationPath = path.resolve(worktreeRootPath, relativePath);
+    // `ls-files` output is repo-relative, but keep both sides pinned to their
+    // roots so a hostile manifest entry cannot escape either tree.
+    if (!isPathContainedIn(sourcePath, repoRoot) || !isPathContainedIn(destinationPath, worktreeRootPath)) {
+      continue;
+    }
+    await copyWorktreeIncludeEntry(sourcePath, destinationPath, canonicalWorktreeRoot);
+  }
+}
+
+// Resolves the manifest to repo-relative untracked paths. The manifest uses
+// gitignore syntax, so let git itself do the matching: `--others -i
+// --exclude-from` lists every untracked file (ignored or not) that the
+// manifest patterns select, with full gitignore semantics — nested `.env`
+// matches, anchored `/foo` and `!negations` behave as documented, and a
+// malformed line cannot abort the listing the way a bad pathspec would.
+async function listWorktreeIncludePaths(repoRoot, manifestPath) {
+  let listing = "";
+  try {
+    listing = await git(
+      repoRoot,
+      "ls-files",
+      "--others",
+      "-i",
+      "-z",
+      `--exclude-from=${manifestPath}`
+    );
+  } catch (err) {
+    console.error(`[remodex] .worktreeinclude listing failed: ${err.message}`);
+    return [];
+  }
+
+  const relativePaths = listing.split("\0").filter(Boolean);
+  if (relativePaths.length > WORKTREE_INCLUDE_MAX_FILES) {
+    console.error(
+      `[remodex] .worktreeinclude matched ${relativePaths.length} files; copying only the first ${WORKTREE_INCLUDE_MAX_FILES}. Narrow the manifest patterns.`
+    );
+    relativePaths.length = WORKTREE_INCLUDE_MAX_FILES;
+  }
+  return relativePaths;
+}
+
+// Copies one manifest match into the worktree, skipping anything unsafe or
+// already present rather than failing the surrounding creation flow.
+async function copyWorktreeIncludeEntry(sourcePath, destinationPath, canonicalWorktreeRoot) {
+  try {
+    // Regular files only: copying through a symlinked source would smuggle
+    // out-of-repo content (e.g. `.env -> ~/.ssh/key`) into every worktree.
+    const sourceStats = await fs.promises.lstat(sourcePath);
+    if (!sourceStats.isFile()) {
+      return;
+    }
+    const destinationDirectory = path.dirname(destinationPath);
+    await fs.promises.mkdir(destinationDirectory, { recursive: true });
+    // Re-check containment on the real path: a checked-out symlinked parent
+    // directory would otherwise let the copy write outside the worktree.
+    const canonicalDestinationDirectory = await fs.promises.realpath(destinationDirectory);
+    if (!isPathContainedIn(canonicalDestinationDirectory, canonicalWorktreeRoot)) {
+      return;
+    }
+    // COPYFILE_EXCL keeps existing files intact: change transfer may already
+    // have carried a dirty copy, and reused worktrees keep their own state.
+    await fs.promises.copyFile(
+      sourcePath,
+      path.join(canonicalDestinationDirectory, path.basename(destinationPath)),
+      fs.constants.COPYFILE_EXCL
+    );
+  } catch {
+    // Skip unreadable or already-present entries; the worktree stays usable.
+  }
+}
+
+function isPathContainedIn(candidatePath, rootPath) {
+  return candidatePath === rootPath || candidatePath.startsWith(rootPath + path.sep);
+}
+
 async function cleanupManagedWorktree(repoRoot, worktreeRootPath, branchName = null) {
   try {
-    await git(repoRoot, "worktree", "remove", "--force", worktreeRootPath);
+    await removeCleanManagedWorktree(repoRoot, worktreeRootPath);
   } catch {
-    // Fall back to directory cleanup below.
+    // A failed creation can leave copied or generated files behind. Preserve
+    // them and the Git registration for manual recovery instead of forcing a
+    // recursive delete.
+    return;
   }
 
   if (branchName) {
     try {
-      await git(repoRoot, "branch", "-D", branchName);
+      await git(repoRoot, "branch", "-d", branchName);
     } catch {
-      // Best effort: leave the branch around if Git refuses deletion for any reason.
+      // Keep branches with commits not merged into Local.
     }
   }
+}
 
-  fs.rmSync(path.dirname(worktreeRootPath), { recursive: true, force: true });
+function parseRegisteredWorktrees(output) {
+  return String(output || "").split("\0\0").flatMap((record) => {
+    const fields = record.split("\0");
+    const location = fields.find((field) => field.startsWith("worktree "))?.slice(9);
+    if (!location) return [];
+    const branch = fields.find((field) => field.startsWith("branch refs/heads/"))?.slice(18) || null;
+    return [{ path: location, branch }];
+  });
+}
+
+async function registeredWorktrees(localCheckoutRoot) {
+  return parseRegisteredWorktrees(await git(localCheckoutRoot, "worktree", "list", "--porcelain", "-z"));
+}
+
+async function isWorktreeClean(worktreeRootPath) {
+  // `--ignored=matching` includes copied .worktreeinclude files and generated
+  // data that Git's ordinary porcelain status hides.
+  const status = await git(
+    worktreeRootPath,
+    "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"
+  );
+  return status.length === 0;
+}
+
+async function removeCleanManagedWorktree(localCheckoutRoot, worktreeRootPath) {
+  const registered = await registeredWorktrees(localCheckoutRoot);
+  if (!registered.some((entry) => sameFilePath(entry.path, worktreeRootPath))) {
+    throw gitError("worktree_not_registered", "This worktree is no longer registered with Git.");
+  }
+  if (!(await isWorktreeClean(worktreeRootPath))) {
+    throw gitError(
+      "worktree_not_clean",
+      "This worktree still contains changes, untracked files, or ignored files. Move or remove those files manually before cleanup."
+    );
+  }
+  try {
+    await git(localCheckoutRoot, "worktree", "remove", worktreeRootPath);
+  } catch (error) {
+    throw gitError("worktree_cleanup_failed", error.message || "Git could not remove this worktree.");
+  }
+  // Only remove the empty allocation directory; never recursively delete a
+  // directory that acquired files after the Git operation.
+  try {
+    fs.rmdirSync(path.dirname(worktreeRootPath));
+  } catch (error) {
+    if (error.code !== "ENOTEMPTY" && error.code !== "EEXIST" && error.code !== "ENOENT") {
+      throw gitError("worktree_cleanup_failed", "Git removed the worktree but could not remove its empty wrapper directory.");
+    }
+  }
+}
+
+function catalogRows(result) {
+  const rows = result?.data ?? result?.items ?? result?.threads;
+  if (!Array.isArray(rows)) {
+    throw gitError("worktree_usage_unknown", "Could not verify which chats use this worktree.");
+  }
+  return rows;
+}
+
+function catalogCursor(result) {
+  const cursor = result?.nextCursor ?? result?.next_cursor ?? null;
+  if (cursor === null || cursor === "") return null;
+  if (typeof cursor === "string" || (typeof cursor === "object" && !Array.isArray(cursor))) {
+    return cursor;
+  }
+  throw gitError("worktree_usage_unknown", "The chat catalog returned an unreadable continuation cursor.");
+}
+
+async function codexThreadCatalog(sendCodexRequest, archived, useStateDbOnly) {
+  const rows = [];
+  const cursors = new Set();
+  let cursor = null;
+  let pageCount = 0;
+  do {
+    const result = await sendCodexRequest("thread/list", {
+      archived,
+      sourceKinds: ["cli", "vscode", "appServer", "exec", "unknown"],
+      useStateDbOnly,
+      modelProviders: [],
+      sortKey: "updated_at",
+      limit: 1000,
+      cursor,
+    });
+    rows.push(...catalogRows(result));
+    cursor = catalogCursor(result);
+    const cursorKey = cursor === null ? null : JSON.stringify(cursor);
+    if (cursorKey && cursors.has(cursorKey)) {
+      throw gitError("worktree_usage_unknown", "The chat catalog repeated a page while checking worktree use.");
+    }
+    if (cursorKey) cursors.add(cursorKey);
+    pageCount += 1;
+    if (cursor && pageCount >= 1000) {
+      throw gitError("worktree_usage_unknown", "The chat catalog is too large to verify safely.");
+    }
+  } while (cursor);
+  return rows;
+}
+
+function catalogRowDirectory(row) {
+  if (!row || typeof row !== "object") return null;
+  return firstNonEmptyString([
+    row.directory,
+    row.cwd,
+    row.current_working_directory,
+    row.working_directory,
+    row.projectPath,
+    row.project_path,
+    row.metadata?.directory,
+    row.metadata?.cwd,
+    row.metadata?.projectPath,
+    row.metadata?.project_path,
+  ]);
+}
+
+async function assertWorktreeHasNoBoundChats(worktreeRootPath, { sendCodexRequest, listOpenCodeSessions } = {}) {
+  if (typeof sendCodexRequest !== "function" || typeof listOpenCodeSessions !== "function") {
+    throw gitError("worktree_usage_unknown", "Could not verify which chats use this worktree.");
+  }
+  let rows;
+  try {
+    const [activeDb, archivedDb, activeRollouts, archivedRollouts, openCode] = await Promise.all([
+      codexThreadCatalog(sendCodexRequest, false, true),
+      codexThreadCatalog(sendCodexRequest, true, true),
+      codexThreadCatalog(sendCodexRequest, false, false),
+      codexThreadCatalog(sendCodexRequest, true, false),
+      listOpenCodeSessions(),
+    ]);
+    if (!Array.isArray(openCode)) {
+      throw new Error("OpenCode session catalog is incomplete");
+    }
+    rows = { codex: [...activeDb, ...archivedDb, ...activeRollouts, ...archivedRollouts], openCode };
+  } catch (error) {
+    if (error.errorCode === "worktree_usage_unknown") throw error;
+    throw gitError("worktree_usage_unknown", "Could not verify which chats use this worktree. Try again when both runtimes are available.");
+  }
+  for (const row of rows.openCode) {
+    const directory = catalogRowDirectory(row);
+    if (!directory) {
+      throw gitError("worktree_usage_unknown", "A chat has no known folder, so this worktree cannot be removed safely.");
+    }
+    const normalizedDirectory = normalizeExistingPath(directory);
+    if (normalizedDirectory && isPathContainedIn(normalizedDirectory, worktreeRootPath)) {
+      throw gitError("worktree_in_use", "Another chat still uses this worktree. Move or archive its contents before removing the checkout.");
+    }
+  }
+  const verifiedCodexThreads = new Set();
+  for (const row of rows.codex) {
+    let directory = catalogRowDirectory(row);
+    if (!directory) {
+      const threadId = firstNonEmptyString([row?.id, row?.threadId]);
+      if (!threadId) {
+        throw gitError("worktree_usage_unknown", "A chat has no identifiable folder, so this worktree cannot be removed safely.");
+      }
+      if (verifiedCodexThreads.has(threadId)) continue;
+      let detail;
+      try {
+        detail = (await sendCodexRequest("thread/read", { threadId, includeTurns: false }))?.thread;
+      } catch {
+        throw gitError("worktree_usage_unknown", "Could not verify a chat's folder before removing this worktree.");
+      }
+      directory = catalogRowDirectory(detail);
+      if (!directory && !(detail && Object.hasOwn(detail, "cwd") && detail.cwd === null)) {
+        throw gitError("worktree_usage_unknown", "A chat has no known folder, so this worktree cannot be removed safely.");
+      }
+      verifiedCodexThreads.add(threadId);
+    }
+    const normalizedDirectory = directory ? normalizeExistingPath(directory) : null;
+    if (normalizedDirectory && isPathContainedIn(normalizedDirectory, worktreeRootPath)) {
+      throw gitError("worktree_in_use", "Another chat still uses this worktree. Move its chat to Local before removing the checkout.");
+    }
+  }
 }
 
 function parseWorktreePathByBranch(output, options = {}) {
@@ -2250,10 +2554,7 @@ function scopedLocalCheckoutPath(checkoutRootPath, projectRelativePath) {
 async function repoDiffTotals(cwd, context) {
   const baseRef = await resolveRepoDiffBase(cwd, context.tracking);
   const trackedTotals = await diffTotalsAgainstBase(cwd, baseRef);
-  const untrackedPaths = context.fileLines
-    .filter((line) => line.startsWith("?? "))
-    .map((line) => line.substring(3).trim())
-    .filter(Boolean);
+  const untrackedPaths = await repoUntrackedPaths(cwd);
   const untrackedTotals = await diffTotalsForUntrackedFiles(cwd, untrackedPaths);
 
   return {
@@ -2261,6 +2562,13 @@ async function repoDiffTotals(cwd, context) {
     deletions: trackedTotals.deletions + untrackedTotals.deletions,
     binaryFiles: trackedTotals.binaryFiles + untrackedTotals.binaryFiles,
   };
+}
+
+// Porcelain collapses new directories and quotes filenames. Ask Git for the
+// individual paths so the summary and Changes patch include every new file.
+async function repoUntrackedPaths(repoRoot) {
+  const output = await git(repoRoot, "ls-files", "--others", "--exclude-standard", "-z");
+  return output.split("\0").filter(Boolean);
 }
 
 // Uses upstream when available; otherwise falls back to commits not yet present on any remote.
@@ -2506,6 +2814,52 @@ async function revListCounts(cwd) {
   };
 }
 
+// Keeps Update eligibility based on the current upstream ref, not stale local fetch data.
+async function refreshStatusUpstreamIfNeeded(cwd, tracking, repoRoot) {
+  const parsedTracking = parseTrackingRef(tracking);
+  if (!parsedTracking) {
+    return false;
+  }
+
+  const cacheKey = `${repoRoot || cwd}\0${parsedTracking.remote}\0${parsedTracking.branch}`;
+  const now = Date.now();
+  const lastFetchAt = statusUpstreamFetchCache.get(cacheKey) || 0;
+  if (now - lastFetchAt < STATUS_UPSTREAM_FETCH_TTL_MS) {
+    return false;
+  }
+
+  statusUpstreamFetchCache.set(cacheKey, now);
+  if (statusUpstreamFetchCache.size > 200) {
+    statusUpstreamFetchCache.clear();
+    statusUpstreamFetchCache.set(cacheKey, now);
+  }
+
+  await git(
+    cwd,
+    "fetch",
+    "--quiet",
+    parsedTracking.remote,
+    `+refs/heads/${parsedTracking.branch}:refs/remotes/${parsedTracking.remote}/${parsedTracking.branch}`
+  );
+  return true;
+}
+
+function parseTrackingRef(tracking) {
+  if (typeof tracking !== "string") {
+    return null;
+  }
+
+  const separatorIndex = tracking.indexOf("/");
+  if (separatorIndex <= 0 || separatorIndex === tracking.length - 1) {
+    return null;
+  }
+
+  return {
+    remote: tracking.slice(0, separatorIndex),
+    branch: tracking.slice(separatorIndex + 1),
+  };
+}
+
 function parseBranchFromStatus(line) {
   // "## main...origin/main" or "## main" or "## HEAD (no branch)"
   const match = line.match(/^## (.+?)(?:\.{3}|$)/);
@@ -2696,6 +3050,7 @@ module.exports = {
     gitCheckout,
     gitStash,
     gitRemoveWorktree,
+    gitListManagedWorktrees,
     isManagedWorktreePath,
     normalizeBranchListEntry,
     normalizeCreatedBranchName,

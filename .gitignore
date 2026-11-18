@@ -39,3 +39,10 @@ phodex-bridge/src/private-defaults.json
 *.class
 tmp/
 output/
+
+# Apple development outputs and local overrides
+DerivedData/
+*.xcuserdatad/
+**/xcuserdata/
+*.ipa
+CodexMobile/BuildSupport/PrivateOverrides.xcconfig

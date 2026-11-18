@@ -8,6 +8,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const WebSocket = require("ws");
+const { resolveBundledCodexCommand, resolveCodexAppPath } = require("./codex-desktop-app");
 
 function createCodexTransport({
   endpoint = "",
@@ -155,18 +156,21 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
         return;
       }
       stdoutBuffer += chunk.toString("utf8");
-      const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine) {
-          listeners.emitMessage(trimmedLine);
+      let newlineIndex;
+      while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
+        const line = stdoutBuffer.substring(0, newlineIndex).trim();
+        stdoutBuffer = stdoutBuffer.substring(newlineIndex + 1);
+        if (line) {
+          listeners.emitMessage(line);
         }
       }
     });
   }
 }
+
+// Make explicit Desktop handoff responsive after unsubscribe. Codex unloads
+// only unsubscribed, inactive threads, and this override stays in our child.
+const LOCAL_APP_SERVER_ARGS = ["app-server", "-c", "thread_unload_delay_secs=1"];
 
 // Builds a single, platform-aware launch path so the bridge never "guesses"
 // between multiple commands and accidentally starts duplicate runtimes.
@@ -185,7 +189,7 @@ function createCodexLaunchPlans({
   if (platform === "win32") {
     return [{
       command: env.ComSpec || "cmd.exe",
-      args: ["/d", "/c", "codex app-server"],
+      args: ["/d", "/c", `codex ${LOCAL_APP_SERVER_ARGS.join(" ")}`],
       options: {
         ...sharedOptions,
         windowsHide: true,
@@ -196,39 +200,25 @@ function createCodexLaunchPlans({
 
   const launches = [{
     command: "codex",
-    args: ["app-server"],
+    args: LOCAL_APP_SERVER_ARGS,
     options: sharedOptions,
     description: "`codex app-server`",
   }];
 
-  const bundledCommand = buildBundledCodexPath(appPath, { fsImpl, pathImpl });
+  const bundledCommand = resolveBundledCodexCommand(
+    resolveCodexAppPath({ appPath, platform, homeDir: env.HOME, fsImpl }),
+    { fsImpl, pathImpl }
+  );
   if (bundledCommand) {
     launches.push({
       command: bundledCommand,
-      args: ["app-server"],
+      args: LOCAL_APP_SERVER_ARGS,
       options: sharedOptions,
       description: `\`${bundledCommand} app-server\``,
     });
   }
 
   return launches;
-}
-
-function buildBundledCodexPath(appPath, { fsImpl = fs, pathImpl = path } = {}) {
-  if (typeof appPath !== "string" || !appPath.trim()) {
-    return "";
-  }
-
-  const candidate = pathImpl.join(appPath.trim(), "Contents", "Resources", "codex");
-  return isLaunchableFile(candidate, { fsImpl }) ? candidate : "";
-}
-
-function isLaunchableFile(candidatePath, { fsImpl = fs } = {}) {
-  try {
-    return fsImpl.statSync(candidatePath).isFile();
-  } catch {
-    return false;
-  }
 }
 
 // Stops the exact process tree we launched on Windows so the shell wrapper

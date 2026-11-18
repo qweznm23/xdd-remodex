@@ -2,17 +2,107 @@
 // Purpose: Mirrors live Codex Desktop IPC pending actions to the phone and routes replies back to the desktop runtime.
 // Layer: CLI helper
 // Exports: createDesktopIpcActionFollower, projectPendingDesktopActions
-// Depends on: net, os, path
+// Depends on: net, ./desktop-ipc-conversation-projector, ./desktop-ipc-shared
 
+const { createHash } = require("crypto");
+const fs = require("fs");
 const net = require("net");
-const os = require("os");
-const path = require("path");
+const { createThreadMutationQueue, runtimeSettingsPatch, hasOwn, normalizeThreadSettingsUpdate } = require("./codex-runtime-settings");
+const { projectSemanticItem } = require("./thread-activity-projector");
+const { normalizeDesktopInputEntries, normalizeSandboxPolicyCompatibility } = require("./desktop-ipc-conversation-adapter");
+const { isDesktopRolloutOrigin } = require("./rollout-live-mirror");
 
-const FRAME_HEADER_BYTES = 4;
-const MAX_FRAME_BYTES = 256 * 1024 * 1024;
+const {
+  createDesktopConversationProjector,
+  desktopTurnsShareLogicalIdentity,
+  matchDesktopTurnIdentityContinuities,
+  projectDesktopConversationStateToGoal,
+  projectDesktopConversationStateToThread,
+} = require("./desktop-ipc-conversation-projector");
+const {
+  CLIENT_STATUS_CHANGED,
+  DESKTOP_IPC_METHOD_VERSIONS: METHOD_VERSION_BY_NAME,
+  buildIpcRequestEnvelope,
+  cloneJSON,
+  createFrameReader,
+  isThreadTurnStateProbeRequest,
+  normalizeToken,
+  readString,
+  requestIdKey,
+  resolveDefaultIpcSocketPath,
+  resolveIpcSocketPathCandidates,
+  safeParseJSON,
+  toSocketPathCandidatesResolver,
+  visibleUserPromptFromInputEntries,
+  writeFrame,
+} = require("./desktop-ipc-shared");
+
 const REQUEST_TIMEOUT_MS = 10_000;
+const OWNERSHIP_PROBE_TIMEOUT_MS = 1_500;
+const DESKTOP_HISTORY_PROBE_TIMEOUT_MS = 5_000;
+// Fresh Desktop threads are not materialized in the local thread store yet, so
+// baseline reads fail until the rollout flushes; retry with backoff instead of
+// hammering thread/read on every patch broadcast.
+const MAX_BASELINE_RECOVERY_ATTEMPTS = 5;
+const BASELINE_RECOVERY_BASE_DELAY_MS = 1_000;
+const BASELINE_RECOVERY_MAX_DELAY_MS = 15_000;
+const MAX_QUEUED_CHANGES_PER_THREAD = 300;
+// Phone interest survives per-thread release by design, so cap the set to keep a
+// marathon single Desktop connection from accumulating every thread id forever.
+const MAX_ACTIVE_THREAD_IDS = 512;
+const MAX_DESKTOP_ORIGIN_CANDIDATES = 4096;
+const DESKTOP_ORIGIN_METADATA_HEAD_BYTES = 64 * 1024;
 const DESKTOP_IPC_ACTION_SOURCE = "desktop-ipc-action-follower";
-const DESKTOP_RESUME_METHODS = new Set(["thread/read", "thread/resume"]);
+const REMODEX_LIVE_OWNER_SOURCE = "desktop-ipc-live-owner";
+const THREAD_STREAM_FOLLOWING_CHANGED = "thread-stream-following-changed";
+const THREAD_STREAM_FOLLOWING_STATUS_REQUESTED = "thread-stream-following-status-requested";
+const DESKTOP_STATE_READ_METHODS = new Set([
+  "thread/read",
+  "thread/resume",
+  "thread/turns/list",
+  "thread/goal/get",
+]);
+const OWNER_NEGOTIATION_READ_METHODS = new Set([
+  ...DESKTOP_STATE_READ_METHODS,
+  "thread/contextWindow/read",
+  "thread/items/list",
+  "thread/timeline/list",
+  "thread/search",
+  "thread/searchOccurrences",
+]);
+// Sidebar refreshes should also keep the Litter subscription alive. Without
+// this, a phone with no selected chat never connects to the Desktop bus and
+// cannot discover runs that started on the Mac.
+const DESKTOP_BACKGROUND_DISCOVERY_METHODS = new Set(["thread/list"]);
+// A run is announced to the phone exactly once, and the phone ignores buffered
+// replays of that announcement by design. An app session that starts after the
+// run did would otherwise never learn about it and show no sidebar badge until
+// the chat is opened. Sidebar refreshes re-announce still-active turns instead,
+// throttled per thread so steady polling costs one idempotent notification.
+const BACKGROUND_TURN_REANNOUNCE_MIN_INTERVAL_MS = 30_000;
+const DESKTOP_TURNS_CURSOR_PREFIX = "remodex-desktop-turns:";
+// Per-thread activity can be quiet during tools and subagents, so the short
+// freshness window alone does not revoke a healthy Desktop owner.
+const STALE_ACTIVE_READ_MAX_AGE_MS = 20_000;
+// An open Unix socket is not unlimited proof of a functioning publisher. If no
+// frame arrives for this generous lease, yield stale active reads so canonical
+// or rollout recovery can clear a phantom run.
+const CONNECTED_IPC_ACTIVITY_LEASE_MS = 5 * 60_000;
+const MAX_NORMALIZED_REVIEW_FINGERPRINTS_PER_THREAD = 128;
+const DESKTOP_FOLLOWER_REQUEST_METHODS = new Set([
+  "thread/settings/update",
+  "turn/start",
+  "turn/steer",
+  "turn/interrupt",
+  "thread/compact/start",
+]);
+// These mutations have no Codex Desktop follower command. Never leak them to
+// the bridge's separate local app-server owner, which could create a competing
+// owner for the same persisted thread.
+const DESKTOP_OWNER_UNSUPPORTED_MUTATION_ERRORS = new Map([
+  ["review/start", "Start this review in Codex Desktop."],
+  ["thread/approveGuardianDeniedAction", "Approve this retry in Codex Desktop."],
+]);
 const ACTION_METHODS = new Set([
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
@@ -24,27 +114,159 @@ const REPLY_METHOD_BY_ACTION_METHOD = new Map([
   ["item/commandExecution/requestApproval", "thread-follower-command-approval-decision"],
   ["item/fileChange/requestApproval", "thread-follower-file-approval-decision"],
   ["item/fileRead/requestApproval", "thread-follower-file-approval-decision"],
-  ["item/permissions/requestApproval", "thread-follower-file-approval-decision"],
+  ["item/permissions/requestApproval", "thread-follower-permissions-request-approval-response"],
   ["item/tool/requestUserInput", "thread-follower-submit-user-input"],
 ]);
-const METHOD_VERSION_BY_NAME = new Map([
-  ["initialize", 1],
-  ["thread-follower-command-approval-decision", 1],
-  ["thread-follower-file-approval-decision", 1],
-  ["thread-follower-submit-user-input", 1],
-]);
 const APPROVAL_DECISIONS = new Set(["accept", "acceptForSession", "decline", "cancel"]);
+
+// The app-server turns/list contract is newest-first by default. Keep the
+// projected Desktop snapshot in that contract so iOS can reverse each page
+// exactly once when rebuilding chronological history.
+function buildDesktopTurnsListResult(turns, params = {}) {
+  const chronologicalTurns = Array.isArray(turns) ? turns : [];
+  const snapshotRevision = desktopTurnsSnapshotRevision(chronologicalTurns);
+  const direction = normalizeToken(readString(params?.sortDirection) || "desc") === "asc"
+    ? "asc"
+    : "desc";
+  const orderedTurns = direction === "asc"
+    ? chronologicalTurns.slice()
+    : chronologicalTurns.slice().reverse();
+
+  let startIndex = 0;
+  const cursor = readString(params?.cursor);
+  if (cursor) {
+    const parsedCursor = parseDesktopTurnsCursor(
+      cursor,
+      direction,
+      snapshotRevision,
+      orderedTurns
+    );
+    if (parsedCursor == null) {
+      return null;
+    }
+    startIndex = parsedCursor;
+  }
+
+  const requestedLimit = Number(params?.limit);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.floor(requestedLimit)
+    : orderedTurns.length;
+  const page = orderedTurns.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + page.length < orderedTurns.length;
+  const nextCursor = hasMore && page.length > 0
+    ? desktopTurnsCursor(
+      direction,
+      snapshotRevision,
+      page[page.length - 1],
+      startIndex + page.length
+    )
+    : null;
+  const clonedPage = cloneJSON(page);
+  return {
+    data: clonedPage,
+    nextCursor,
+    hasMore,
+  };
+}
+
+function isDesktopTurnsCursor(value) {
+  return readString(value).startsWith(DESKTOP_TURNS_CURSOR_PREFIX);
+}
+
+function desktopTurnsCursor(direction, snapshotRevision, turn, nextIndex) {
+  const turnId = readString(turn?.id)
+    || readString(turn?.turnId)
+    || readString(turn?.turn_id);
+  const anchor = turnId ? `id:${encodeURIComponent(turnId)}` : `index:${nextIndex}`;
+  return `${DESKTOP_TURNS_CURSOR_PREFIX}${direction}:${snapshotRevision}:${anchor}`;
+}
+
+function parseDesktopTurnsCursor(cursor, direction, snapshotRevision, orderedTurns) {
+  const prefix = `${DESKTOP_TURNS_CURSOR_PREFIX}${direction}:${snapshotRevision}:`;
+  if (!cursor.startsWith(prefix)) {
+    return null;
+  }
+  const anchor = cursor.slice(prefix.length);
+  if (anchor.startsWith("id:")) {
+    let turnId = "";
+    try {
+      turnId = decodeURIComponent(anchor.slice(3));
+    } catch {
+      return null;
+    }
+    const anchorIndex = orderedTurns.findIndex((turn) => (
+      readString(turn?.id) === turnId
+      || readString(turn?.turnId) === turnId
+      || readString(turn?.turn_id) === turnId
+    ));
+    return anchorIndex === -1 ? null : anchorIndex + 1;
+  }
+  if (anchor.startsWith("index:")) {
+    const parsedIndex = Number(anchor.slice(6));
+    return Number.isInteger(parsedIndex) && parsedIndex >= 0 && parsedIndex <= orderedTurns.length
+      ? parsedIndex
+      : null;
+  }
+  return null;
+}
+
+function desktopTurnsSnapshotRevision(turns) {
+  const hash = createHash("sha256");
+  const paginationStructure = (Array.isArray(turns) ? turns : []).map((turn) => ({
+    id: readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id),
+    input: turn?.input ?? turn?.prompt ?? null,
+    userItems: (Array.isArray(turn?.items) ? turn.items : []).flatMap((item) => {
+      const role = readString(item?.role).toLowerCase();
+      const type = normalizeToken(readString(item?.type));
+      const isUserItem = role === "user" || type === "usermessage";
+      if (!isUserItem) {
+        return [];
+      }
+      return [{
+        id: readString(item?.id) || readString(item?.itemId) || readString(item?.item_id),
+        role,
+        type,
+        // Prompt text disambiguates index-derived turn ids after insertion or
+        // reorder. Non-user item lifecycles do not change turn pagination.
+        userContent: item?.text ?? item?.content ?? null,
+      }];
+    }),
+  }));
+  hash.update(JSON.stringify(paginationStructure));
+  return hash.digest("hex").slice(0, 24);
+}
 
 // Opens the Desktop IPC bus on demand and exposes Mac-owned pending actions as normal app-server requests.
 function createDesktopIpcActionFollower({
   sendApplicationResponse,
   readConversationState = null,
+  readThreadMetadata = null,
+  resumeThreadLocally = null,
+  forwardToLocalCodex = null,
+  // Synchronous authority check against the bridge's own live owner: threads
+  // streamed by the local app-server must never be held, served, or routed as
+  // Desktop-owned. Broadcast-driven liveOwnerThreadIds lags this check, so it
+  // alone cannot close the race between a local claim and a Desktop echo.
+  isLocallyOwnedThread = () => false,
+  normalizeTurnStartParams = (params) => params,
+  runtimeSettingsStore = null,
   logPrefix = "[remodex]",
-  socketPath = resolveDefaultIpcSocketPath(),
+  // Resolved per connect: Codex Desktop can start, stop, or move its bus while
+  // the bridge stays up.
+  socketPath = resolveIpcSocketPathCandidates,
   netModule = net,
   now = () => Date.now(),
+  snapshotDebounceMs = 0,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+  onNormalizedHistoryIndexRebuilt = () => {},
+  onFollowerStateChanged = null,
+  onActivityObservation = null,
   requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  ownershipProbeTimeoutMs = OWNERSHIP_PROBE_TIMEOUT_MS,
 } = {}) {
+  let desktopSourceGeneration = 0;
+  const enqueueMutation = createThreadMutationQueue();
   const ipc = createDesktopIpcClient({
     socketPath,
     netModule,
@@ -52,17 +274,238 @@ function createDesktopIpcActionFollower({
     requestTimeoutMs,
     logPrefix,
     onEnvelope,
+    onConnected() {
+      desktopSourceGeneration += 1;
+      onActivityObservation?.({
+        type: "connected",
+        sourceGeneration: desktopSourceGeneration,
+      });
+      announceDesktopFollowForActiveThreads();
+      probeHeldFollowerRequests();
+    },
     onDisconnect,
   });
   const rawStatesByThreadId = new Map();
-  const assistantMessageTextsByThreadId = new Map();
+  const rawStateUpdatedAtByThreadId = new Map();
+  const pendingSnapshotsByThreadId = new Map();
+  // History and live updates have different authorities. Once Desktop exposes
+  // normalized history that the legacy turns array does not fully cover, keep
+  // canonical paging on app-server/JSONL for this Desktop source epoch while
+  // still allowing a bounded Desktop tail to own live deltas.
+  const canonicalHistoryThreadIds = new Set();
+  const canonicalHistoryReplacementSentThreadIds = new Set();
+  const projectedLiveActiveTurnIdsByThreadId = new Map();
+  const desktopLiveLifecycleByThreadId = new Map();
+  const normalizedLiveIndexesByThreadId = new Map();
+  const normalizedReviewFingerprintsByThreadId = new Map();
+  const staleYieldedThreadIds = new Set();
+  const conversationProjector = createDesktopConversationProjector({ now });
   const pendingRoutesByRequestId = new Map();
   const activeThreadIds = new Set();
+  const desktopFollowThreadIds = new Set();
+  const backgroundCatalogThreadIds = new Set();
+  let backgroundCatalogPageSize = 0;
+  const followerClientIdsByThreadId = new Map();
+  // Threads discovered from Litter snapshots before the phone reads them.
+  // Their raw state is retained for lifecycle detection, but their transcript
+  // stays off the relay until the user actually opens the chat.
+  const backgroundOnlyThreadIds = new Set();
+  // Lifecycle already announced to the phone must outlive the raw Litter
+  // baseline. Otherwise a disconnect/eviction can erase the only evidence
+  // needed to send the matching completion and leave a phantom running badge.
+  const announcedBackgroundTurnsByThreadId = new Map();
+  const backgroundTurnReannouncedAtByThreadId = new Map();
+  // JS Set preserves insertion order; delete-before-add refreshes recency, and
+  // cap eviction skips threads with pending prompts so approvals are not lost.
+  function rememberActiveThread(threadId) {
+    activeThreadIds.delete(threadId);
+    activeThreadIds.add(threadId);
+    while (activeThreadIds.size > MAX_ACTIVE_THREAD_IDS) {
+      const oldest = oldestEvictableActiveThreadId();
+      if (oldest === undefined) {
+        break;
+      }
+      activeThreadIds.delete(oldest);
+      forgetEvictedThreadState(oldest);
+    }
+  }
+
+  function followDesktopThread(threadId, targetClientIds = undefined) {
+    if (!threadId || isLocallyOwnedThread(threadId) || liveOwnerThreadIds.has(threadId)) {
+      return false;
+    }
+    desktopFollowThreadIds.add(threadId);
+    return ipc.sendBroadcast(THREAD_STREAM_FOLLOWING_CHANGED, {
+      hostId: "local",
+      conversationId: threadId,
+      following: true,
+    }, { targetClientIds });
+  }
+
+  function unfollowDesktopThread(threadId) {
+    backgroundCatalogThreadIds.delete(threadId);
+    if (!desktopFollowThreadIds.delete(threadId)) {
+      return false;
+    }
+    return ipc.sendBroadcast(THREAD_STREAM_FOLLOWING_CHANGED, {
+      hostId: "local",
+      conversationId: threadId,
+      following: false,
+    });
+  }
+
+  function announceDesktopFollowForActiveThreads() {
+    for (const threadId of desktopFollowThreadIds) {
+      followDesktopThread(threadId);
+    }
+  }
+
+  // Current Desktop sends initial snapshots only to explicit followers. Warm a
+  // bounded recent catalog window without opening chats or claiming a writer.
+  // The existing background path forwards lifecycle only, never transcript items.
+  function observeThreadListResponse(result, { limit = null } = {}) {
+    const rows = result?.data || result?.items || result?.threads;
+    if (!Array.isArray(rows)) {
+      return;
+    }
+    for (const thread of rows) {
+      observeThreadMetadata(thread);
+    }
+    const candidates = new Set(rows
+      .map((thread) => readString(thread?.id))
+      .filter((threadId) => threadId && !isLocallyOwnedThread(threadId) && !liveOwnerThreadIds.has(threadId))
+      .slice(0, MAX_ACTIVE_THREAD_IDS));
+    // Foreground health probes request fewer rows than the sidebar. Keep those
+    // additive; only a request covering the established window may prune it.
+    const requestedPageSize = Number.isSafeInteger(limit) && limit > 0
+      ? Math.min(limit, MAX_ACTIVE_THREAD_IDS)
+      : null;
+    // limit: 1 is the phone's health probe, including before its first sidebar
+    // request. It must never establish or replace the catalog window.
+    const isForegroundProbe = requestedPageSize === 1;
+    const replacesCatalog = !isForegroundProbe && (requestedPageSize === null
+      ? !result.nextCursor && !result.hasMore
+      : requestedPageSize >= backgroundCatalogPageSize);
+    if (!isForegroundProbe) {
+      backgroundCatalogPageSize = Math.max(backgroundCatalogPageSize, requestedPageSize || 0);
+    }
+    if (replacesCatalog) {
+      for (const threadId of backgroundCatalogThreadIds) {
+        if (!candidates.has(threadId) && !announcedBackgroundTurnsByThreadId.has(threadId)) {
+          backgroundCatalogThreadIds.delete(threadId);
+          if (backgroundOnlyThreadIds.has(threadId) || !activeThreadIds.has(threadId)) {
+            unfollowDesktopThread(threadId);
+          }
+        }
+      }
+    }
+    for (const threadId of candidates) {
+      if (backgroundCatalogThreadIds.has(threadId) || desktopFollowThreadIds.has(threadId)) {
+        continue;
+      }
+      if (backgroundCatalogThreadIds.size >= MAX_ACTIVE_THREAD_IDS) {
+        break;
+      }
+      backgroundCatalogThreadIds.add(threadId);
+      if (!activeThreadIds.has(threadId)) {
+        backgroundOnlyThreadIds.add(threadId);
+      }
+      followDesktopThread(threadId);
+    }
+  }
+
+  function observeThreadMetadata(thread) {
+    const threadId = readString(thread?.id);
+    if (!threadId || desktopOriginCheckedThreadIds.has(threadId)) {
+      return;
+    }
+    // Record a cheap pointer only. Reading every rollout head during a
+    // sidebar refresh would turn a small catalog request into disk I/O for
+    // hundreds of old tasks; inspect provenance only when a mutation arrives.
+    desktopOriginCandidatesByThreadId.delete(threadId);
+    desktopOriginCandidatesByThreadId.set(threadId, {
+      id: threadId,
+      path: readString(thread?.path) || readString(thread?.rolloutPath),
+      originator: readString(thread?.originator) || readString(thread?.metadata?.originator),
+      source: readString(thread?.source) || readString(thread?.metadata?.source),
+    });
+    while (desktopOriginCandidatesByThreadId.size > MAX_DESKTOP_ORIGIN_CANDIDATES) {
+      desktopOriginCandidatesByThreadId.delete(desktopOriginCandidatesByThreadId.keys().next().value);
+    }
+  }
+
+  function oldestEvictableActiveThreadId() {
+    for (const threadId of activeThreadIds) {
+      if (!hasPendingProjectedActions(threadId)
+        && !announcedBackgroundTurnsByThreadId.has(threadId)) {
+        return threadId;
+      }
+    }
+    return undefined;
+  }
+
+  function hasPendingProjectedActions(threadId) {
+    for (const route of pendingRoutesByRequestId.values()) {
+      if (route.threadId === threadId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Cleanup for cap-evicted threads only: clears follower caches without touching
+  // liveOwnerThreadIds (still-owned local streams must not become hijackable) and
+  // without rejecting held requests (removeDesktopThreadState handles real removal).
+  function forgetEvictedThreadState(threadId) {
+    cancelPendingSnapshot(threadId);
+    unfollowDesktopThread(threadId);
+    settleAnnouncedBackgroundTurn(threadId, "interrupted");
+    backgroundOnlyThreadIds.delete(threadId);
+    rawStatesByThreadId.delete(threadId);
+    rawStateUpdatedAtByThreadId.delete(threadId);
+    canonicalHistoryThreadIds.delete(threadId);
+    canonicalHistoryReplacementSentThreadIds.delete(threadId);
+    projectedLiveActiveTurnIdsByThreadId.delete(threadId);
+    desktopLiveLifecycleByThreadId.delete(threadId);
+    normalizedLiveIndexesByThreadId.delete(threadId);
+    normalizedReviewFingerprintsByThreadId.delete(threadId);
+    conversationProjector.remove(threadId);
+    queuedChangesByThreadId.delete(threadId);
+    baselineRecoveryStateByThreadId.delete(threadId);
+    recoveringThreadIds.delete(threadId);
+    ownershipProbeDeadlinesByThreadId.delete(threadId);
+    pendingOwnershipProbeTokensByThreadId.delete(threadId);
+    desktopOwnedByProbeThreadIds.delete(threadId);
+    confirmedDesktopOwnerClientIdsByThreadId.delete(threadId);
+    // Failure remains fail-closed even if this thread leaves the active LRU.
+    notifyActivityRemoval(threadId, "evicted");
+  }
   const recoveringThreadIds = new Set();
   const queuedChangesByThreadId = new Map();
+  const baselineRecoveryStateByThreadId = new Map();
+  const liveOwnerThreadIds = new Set();
+  const locallyAcquiredThreadIds = new Set();
+  const heldFollowerRequestsByThreadId = new Map();
+  const ownershipProbeDeadlinesByThreadId = new Map();
+  const pendingOwnershipProbeTokensByThreadId = new Map();
+  const desktopOwnedByProbeThreadIds = new Set();
+  // Once a mutation is queued for Desktop, its outcome may be ambiguous after
+  // disconnect or timeout. Keep that routing decision until the local owner
+  // explicitly claims the thread; an expired probe is not a handoff.
+  const desktopMutationRiskThreadIds = new Set();
+  // A rollout's immutable session_meta can identify an old Desktop task before
+  // this bridge process receives its first live IPC snapshot.
+  const desktopOriginThreadIds = new Set();
+  const desktopOriginCheckedThreadIds = new Set();
+  const desktopOriginCandidatesByThreadId = new Map();
+  const pendingResumeOwnershipByThreadId = new Map();
+  const confirmedDesktopOwnerClientIdsByThreadId = new Map();
+  const ownerUnavailableThreadIds = new Set();
+  let nextOwnershipProbeToken = 0;
+  let stopped = false;
 
-  function observeInbound(rawMessage) {
-    const message = safeParseJSON(rawMessage);
+  function observeInbound(rawMessage, parsedMessage = null) {
+    const message = parsedMessage ?? safeParseJSON(rawMessage);
     const responseRoute = desktopRouteForResponse(message);
     if (responseRoute) {
       submitDesktopActionResponse(responseRoute, message);
@@ -70,7 +513,182 @@ function createDesktopIpcActionFollower({
     }
 
     const method = readString(message?.method);
-    if (!DESKTOP_RESUME_METHODS.has(method)) {
+    const requestThreadId = readThreadId(message?.params);
+    if (requestThreadId
+      && ownerUnavailableThreadIds.has(requestThreadId)
+      && method !== "thread/resume"
+      && !OWNER_NEGOTIATION_READ_METHODS.has(method)) {
+      // A failed ownership negotiation must remain fail-closed after its
+      // short probe window. A later or unsupported mutation cannot acquire a
+      // second writer by falling through to the separate local app-server.
+      rejectUnconfirmedOwnerMutation(message);
+      return true;
+    }
+    const pendingResumeOwnership = requestThreadId
+      && pendingResumeOwnershipByThreadId.get(requestThreadId);
+    if (pendingResumeOwnership
+      && method !== "thread/resume"
+      && !OWNER_NEGOTIATION_READ_METHODS.has(method)
+      && !DESKTOP_FOLLOWER_REQUEST_METHODS.has(method)) {
+      pendingResumeOwnership.then(() => {
+        if (stopped) return;
+        if (liveOwnerThreadIds.has(requestThreadId) || isLocallyOwnedThread(requestThreadId)) {
+          forwardToLocalCodex?.(rawMessage);
+        } else {
+          rejectUnconfirmedOwnerMutation(message);
+        }
+      }).catch(() => {
+        if (!stopped) rejectUnconfirmedOwnerMutation(message);
+      });
+      return true;
+    }
+    if (DESKTOP_BACKGROUND_DISCOVERY_METHODS.has(method)) {
+      ipc.ensureConnected();
+      reannounceActiveBackgroundTurns();
+    }
+    if (DESKTOP_STATE_READ_METHODS.has(method)) {
+      const threadId = readThreadId(message?.params);
+      if (threadId && backgroundOnlyThreadIds.delete(threadId)) {
+        const rawState = rawStatesByThreadId.get(threadId);
+        let announcedBackgroundTurn = null;
+        let announcedBackgroundTurnId = "";
+        // Reconcile any lifecycle that may have completed while the raw
+        // baseline was unavailable before handing full ownership to the
+        // projector. From this point normal projected events own completion.
+        if (rawState) {
+          syncBackgroundThreadLifecycle(threadId, null, rawState);
+          announcedBackgroundTurn = announcedBackgroundTurnsByThreadId.get(threadId) || null;
+          announcedBackgroundTurnId = readString(announcedBackgroundTurn?.id);
+        } else {
+          settleAnnouncedBackgroundTurn(threadId, "interrupted");
+        }
+        announcedBackgroundTurnsByThreadId.delete(threadId);
+        backgroundTurnReannouncedAtByThreadId.delete(threadId);
+        if (rawState) {
+          const liveState = boundedDesktopLiveStateForThread(threadId, rawState);
+          const hasCanonicalNormalizedHistory = canonicalHistoryThreadIds.has(threadId)
+            || hasNormalizedHistoryOutsideRawTurns(
+              rawState,
+              normalizedLiveIndexesByThreadId.get(threadId)
+            );
+          if (hasCanonicalNormalizedHistory) {
+            // Normalized history reads stay canonical, but the full active turn
+            // is already in this bounded Desktop state. Publish it once now so
+            // the phone does not begin with only the next streamed delta.
+            canonicalHistoryThreadIds.add(threadId);
+            canonicalHistoryReplacementSentThreadIds.add(threadId);
+            conversationProjector.remove(threadId);
+            sendApplicationResponse(JSON.stringify({
+              method: "thread/replaced",
+              params: {
+                threadId,
+                remodexDesktopMirror: true,
+                remodexDesktopIpcMirror: true,
+                remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+              },
+            }));
+            // Guardian reviews on normalized-only history turns never appear in
+            // canonical thread/read history, so drain their overlays here just
+            // like syncProjectedConversationState does; otherwise a thread that
+            // stays idle after opening never delivers them.
+            emitNormalizedReviewOverlays(
+              threadId,
+              normalizedLiveIndexesByThreadId.get(threadId),
+              liveState
+            );
+            const output = conversationProjector.project(threadId, liveState, {
+              includeAllActiveTurns: true,
+            });
+            for (const notification of output.notifications || []) {
+              const isDuplicateBackgroundStart = notification.method === "turn/started"
+                && readString(notification.params?.turnId) === announcedBackgroundTurnId;
+              if (!isDuplicateBackgroundStart) {
+                const isSamePromotedRun = notification.method === "turn/started"
+                  && announcedBackgroundTurn
+                  && desktopTurnsShareLogicalIdentity(
+                    announcedBackgroundTurn,
+                    notification.params?.turn
+                  );
+                const promotedNotification = isSamePromotedRun
+                  ? notificationWithTurnIdentityContinuity(notification)
+                  : notification;
+                sendApplicationResponse(JSON.stringify(promotedNotification));
+              }
+            }
+          } else {
+            // Legacy reads below carry their full projected baseline. Seed the
+            // projector so the next patch becomes a delta instead of replaying
+            // that baseline a second time.
+            conversationProjector.seed(threadId, liveState);
+          }
+          rememberDesktopLiveProjection(threadId, liveState);
+        }
+      }
+    }
+    if (DESKTOP_FOLLOWER_REQUEST_METHODS.has(method)) {
+      const route = buildDesktopFollowerRoute(message);
+      const pendingResumeOwnership = route && pendingResumeOwnershipByThreadId.get(route.threadId);
+      if (pendingResumeOwnership) {
+        // Do not let a second phone mutation overtake ownership classification
+        // while a no-snapshot resume is reading immutable task provenance.
+        pendingResumeOwnership.then(() => {
+          if (stopped) return;
+          if (isDesktopRoutableThread(route.threadId)) {
+            submitDesktopFollowerRequest(route, message);
+          } else if (liveOwnerThreadIds.has(route.threadId)
+            || isLocallyOwnedThread(route.threadId)) {
+            forwardToLocalCodex?.(rawMessage);
+          } else {
+            // Historical CLI provenance permits the resume attempt, but only
+            // its successful app-server response proves local writer ownership.
+            // A concurrent mutation must wait for that acknowledgement.
+            rejectUnconfirmedOwnerMutation(message);
+          }
+        }).catch(() => {
+          if (!stopped) rejectUnconfirmedOwnerMutation(message);
+        });
+        return true;
+      }
+      if (route && isDesktopRoutableThread(route.threadId)) {
+        submitDesktopFollowerRequest(route, message);
+        return true;
+      }
+      if (route && shouldHoldFollowerRequest(message, route.threadId)) {
+        holdFollowerRequest(route.threadId, rawMessage);
+        probeDesktopOwnership(route);
+        return true;
+      }
+    }
+
+    if (DESKTOP_OWNER_UNSUPPORTED_MUTATION_ERRORS.has(method)) {
+      const threadId = readThreadId(message?.params);
+      const mayBelongToDesktop = threadId
+        && !liveOwnerThreadIds.has(threadId)
+        && !isLocallyOwnedThread(threadId)
+        && (isDesktopRoutableThread(threadId)
+          || activeThreadIds.has(threadId)
+          || ownershipProbeDeadlinesByThreadId.has(threadId)
+          || pendingOwnershipProbeTokensByThreadId.has(threadId));
+      if (mayBelongToDesktop) {
+        sendApplicationResponse(JSON.stringify({
+          id: message?.id,
+          error: {
+            code: -32004,
+            message: DESKTOP_OWNER_UNSUPPORTED_MUTATION_ERRORS.get(method),
+          },
+        }));
+        return true;
+      }
+    }
+
+    if (tryServeDesktopOwnedRead(message)) {
+      return true;
+    }
+    if (tryBootstrapDesktopResume(message, rawMessage)) {
+      return true;
+    }
+
+    if (!DESKTOP_STATE_READ_METHODS.has(method)) {
       return false;
     }
 
@@ -79,30 +697,149 @@ function createDesktopIpcActionFollower({
       return false;
     }
 
-    activeThreadIds.add(threadId);
+    rememberActiveThread(threadId);
+    if (!rawStatesByThreadId.has(threadId)
+      && !liveOwnerThreadIds.has(threadId)
+      && !isLocallyOwnedThread(threadId)) {
+      ownershipProbeDeadlinesByThreadId.set(threadId, now() + ownershipProbeTimeoutMs);
+    }
     ipc.ensureConnected();
+    followDesktopThread(threadId);
     return false;
   }
 
   function stopAll() {
+    stopped = true;
+    for (const threadId of pendingSnapshotsByThreadId.keys()) {
+      cancelPendingSnapshot(threadId);
+    }
     rawStatesByThreadId.clear();
-    assistantMessageTextsByThreadId.clear();
+    rawStateUpdatedAtByThreadId.clear();
+    canonicalHistoryThreadIds.clear();
+    canonicalHistoryReplacementSentThreadIds.clear();
+    projectedLiveActiveTurnIdsByThreadId.clear();
+    desktopLiveLifecycleByThreadId.clear();
+    normalizedLiveIndexesByThreadId.clear();
+    normalizedReviewFingerprintsByThreadId.clear();
+    conversationProjector.reset();
     pendingRoutesByRequestId.clear();
+    for (const threadId of desktopFollowThreadIds) {
+      unfollowDesktopThread(threadId);
+    }
+    desktopFollowThreadIds.clear();
+    backgroundCatalogThreadIds.clear();
+    backgroundCatalogPageSize = 0;
     activeThreadIds.clear();
+    followerClientIdsByThreadId.clear();
+    backgroundOnlyThreadIds.clear();
+    announcedBackgroundTurnsByThreadId.clear();
+    backgroundTurnReannouncedAtByThreadId.clear();
     recoveringThreadIds.clear();
+    baselineRecoveryStateByThreadId.clear();
     queuedChangesByThreadId.clear();
+    liveOwnerThreadIds.clear();
+    locallyAcquiredThreadIds.clear();
+    ownershipProbeDeadlinesByThreadId.clear();
+    pendingOwnershipProbeTokensByThreadId.clear();
+    desktopOwnedByProbeThreadIds.clear();
+    desktopMutationRiskThreadIds.clear();
+    desktopOriginThreadIds.clear();
+    desktopOriginCheckedThreadIds.clear();
+    desktopOriginCandidatesByThreadId.clear();
+    pendingResumeOwnershipByThreadId.clear();
+    confirmedDesktopOwnerClientIdsByThreadId.clear();
+    ownerUnavailableThreadIds.clear();
+    for (const queue of heldFollowerRequestsByThreadId.values()) {
+      for (const entry of queue) {
+        clearTimeout(entry.timer);
+      }
+    }
+    heldFollowerRequestsByThreadId.clear();
     ipc.close();
   }
 
   // Desktop broadcasts carry the live conversation state Litter projects from.
   function onEnvelope(envelope) {
+    if (envelope?.type === "broadcast" && envelope.method === CLIENT_STATUS_CHANGED) {
+      if (normalizeToken(envelope.params?.status) === "disconnected") {
+        const clientId = envelope.params?.clientId || envelope.sourceClientId;
+        removeFollowerClient(clientId);
+        for (const [threadId, ownerClientId] of confirmedDesktopOwnerClientIdsByThreadId) {
+          if (ownerClientId === clientId) confirmedDesktopOwnerClientIdsByThreadId.delete(threadId);
+        }
+      }
+      return;
+    }
+    if (envelope?.type === "broadcast" && envelope.method === THREAD_STREAM_FOLLOWING_CHANGED) {
+      updateFollowerState(envelope);
+      return;
+    }
+    if (envelope?.type === "broadcast"
+      && envelope.method === THREAD_STREAM_FOLLOWING_STATUS_REQUESTED) {
+      const params = envelope.params || {};
+      const threadId = readString(params.conversationId) || readString(params.conversation_id);
+      if (threadId && desktopFollowThreadIds.has(threadId)) {
+        followDesktopThread(threadId, [envelope.sourceClientId].filter(Boolean));
+      }
+      return;
+    }
+    if (envelope?.type === "broadcast"
+      && (envelope.method === "thread-archived" || envelope.method === "thread-unarchived")) {
+      syncThreadArchiveBroadcast(envelope);
+      return;
+    }
     if (envelope?.type !== "broadcast" || envelope.method !== "thread-stream-state-changed") {
       return;
     }
 
     const params = envelope.params || {};
     const threadId = readString(params.conversationId) || readString(params.conversation_id);
-    if (!threadId || !activeThreadIds.has(threadId)) {
+    if (isRemodexLiveOwnerBroadcast(params)) {
+      if (threadId) {
+        if (params.remodexOwnerReleased === true) {
+          removeDesktopThreadState(threadId);
+        } else {
+          releaseDesktopThreadState(threadId);
+        }
+      }
+      return;
+    }
+    if (!threadId) {
+      return;
+    }
+    const peerOwnershipSnapshot = isPeerOwnershipSnapshot(params);
+    if (peerOwnershipSnapshot && !isLocallyOwnedThread(threadId)) {
+      liveOwnerThreadIds.delete(threadId);
+      ownershipProbeDeadlinesByThreadId.delete(threadId);
+      desktopOwnedByProbeThreadIds.delete(threadId);
+      ownerUnavailableThreadIds.delete(threadId);
+      const sourceClientId = readString(envelope.sourceClientId);
+      if (sourceClientId && sourceClientId !== ipc.clientId) {
+        confirmedDesktopOwnerClientIdsByThreadId.set(threadId, sourceClientId);
+      }
+    } else if (liveOwnerThreadIds.has(threadId) || isLocallyOwnedThread(threadId)) {
+      // Desktop echoes of a locally-streamed thread must not become follower
+      // state: they would shadow the app-server as the source for reads and
+      // mirror ghost rows the phone already has.
+      return;
+    }
+    // Litter sends one snapshot for every loaded conversation when this client
+    // connects. Keep those baselines locally so a later idle -> running patch
+    // can update the sidebar even if the phone never opened that chat. The
+    // background-only path below emits lifecycle only, never transcript rows.
+    if (!activeThreadIds.has(threadId) && isSnapshotChange(params.change)) {
+      rememberActiveThread(threadId);
+      backgroundOnlyThreadIds.add(threadId);
+    }
+    if (!activeThreadIds.has(threadId)) {
+      // After a bridge restart Desktop can re-announce that a renderer follows
+      // the thread without replaying its baseline snapshot. A request patch may
+      // then be the first state update we see. Preserve that blocking action
+      // immediately instead of waiting for a phone read that may never arrive
+      // while the already-open screen is parked on the question.
+      if (commitSpeculativeActionPatch(threadId, params.change, { backgroundOnly: true })) {
+        return;
+      }
       return;
     }
 
@@ -111,19 +848,24 @@ function createDesktopIpcActionFollower({
       return;
     }
 
+    const pendingSnapshot = pendingSnapshotsByThreadId.get(threadId);
+    if (pendingSnapshot && isPatchChange(params.change)) {
+      const patchedSnapshot = applyConversationStateChange(pendingSnapshot.state, params.change);
+      if (patchedSnapshot) {
+        pendingSnapshot.state = patchedSnapshot;
+        return;
+      }
+      flushPendingSnapshot(threadId);
+    }
+
     const previousState = rawStatesByThreadId.get(threadId) || null;
     const nextState = applyConversationStateChange(previousState, params.change);
     if (!nextState) {
-      if (isPatchChange(params.change)) {
-        const emptyState = createEmptyConversationState();
-        const speculativeState = applyConversationStateChange(emptyState, params.change);
-        const speculativeActions = projectPendingDesktopActions(threadId, speculativeState);
-        if (speculativeActions.length > 0) {
-          rawStatesByThreadId.set(threadId, speculativeState);
-          syncProjectedActions(threadId, speculativeActions);
-          return;
-        }
+      if (commitSpeculativeActionPatch(threadId, params.change)) {
+        return;
+      }
 
+      if (isPatchChange(params.change)) {
         if (typeof readConversationState !== "function") {
           return;
         }
@@ -134,43 +876,767 @@ function createDesktopIpcActionFollower({
       return;
     }
 
+    if (isSnapshotChange(params.change) && snapshotDebounceMs > 0) {
+      schedulePendingSnapshot(threadId, nextState);
+      return;
+    }
+
+    commitConversationState(threadId, nextState, {
+      isFullSnapshot: isSnapshotChange(params.change),
+      change: params.change,
+    });
+  }
+
+  function commitSpeculativeActionPatch(threadId, change, { backgroundOnly = false } = {}) {
+    if (!isPatchChange(change)) {
+      return false;
+    }
+
+    const speculativeState = applyConversationStateChange(createEmptyConversationState(), change);
+    const speculativeActions = projectPendingDesktopActions(threadId, speculativeState);
+    if (speculativeActions.length === 0) {
+      return false;
+    }
+
+    if (backgroundOnly) {
+      rememberActiveThread(threadId);
+      backgroundOnlyThreadIds.add(threadId);
+    }
+    rawStatesByThreadId.set(threadId, speculativeState);
+    rawStateUpdatedAtByThreadId.set(threadId, now());
+    notifyActivityState(threadId, speculativeState);
+    if (!backgroundOnlyThreadIds.has(threadId)) {
+      conversationProjector.seed(threadId, speculativeState);
+    }
+    syncProjectedActions(threadId, speculativeActions);
+    releaseHeldFollowerRequests(threadId, { toDesktop: true });
+    return true;
+  }
+
+  function schedulePendingSnapshot(threadId, state) {
+    cancelPendingSnapshot(threadId);
+    const timer = setTimeoutFn(() => {
+      const pending = pendingSnapshotsByThreadId.get(threadId);
+      if (!pending || pending.timer !== timer) {
+        return;
+      }
+      pendingSnapshotsByThreadId.delete(threadId);
+      commitConversationState(threadId, pending.state, { isFullSnapshot: true });
+    }, Math.max(0, snapshotDebounceMs));
+    timer?.unref?.();
+    pendingSnapshotsByThreadId.set(threadId, { state, timer });
+  }
+
+  function flushPendingSnapshot(threadId) {
+    const pending = pendingSnapshotsByThreadId.get(threadId);
+    if (!pending) {
+      return false;
+    }
+    clearTimeoutFn(pending.timer);
+    pendingSnapshotsByThreadId.delete(threadId);
+    commitConversationState(threadId, pending.state, { isFullSnapshot: true });
+    return true;
+  }
+
+  function cancelPendingSnapshot(threadId) {
+    const pending = pendingSnapshotsByThreadId.get(threadId);
+    if (!pending) {
+      return false;
+    }
+    clearTimeoutFn(pending.timer);
+    pendingSnapshotsByThreadId.delete(threadId);
+    return true;
+  }
+
+  function commitConversationState(threadId, nextState, {
+    isFullSnapshot = false,
+    change = null,
+  } = {}) {
+    if (liveOwnerThreadIds.has(threadId) || isLocallyOwnedThread(threadId)) {
+      releaseDesktopThreadState(threadId);
+      return false;
+    }
+    runtimeSettingsStore?.observeConversation?.(threadId, nextState);
+    runtimeSettingsStore?.attachToConversation?.(threadId, nextState);
+    if (isFullSnapshot) {
+      rebuildNormalizedLiveIndex(threadId, nextState);
+    } else {
+      updateNormalizedLiveIndex(threadId, nextState, change);
+    }
+    const previousState = rawStatesByThreadId.get(threadId) || null;
     rawStatesByThreadId.set(threadId, nextState);
-    syncProjectedAssistantDeltas(threadId, previousState, nextState);
+    rawStateUpdatedAtByThreadId.set(threadId, now());
+    notifyActivityState(threadId, nextState);
+    // A usable state arrived: recovery bookkeeping and pre-baseline queued
+    // patches are obsolete (snapshots replace state wholesale).
+    baselineRecoveryStateByThreadId.delete(threadId);
+    if (isFullSnapshot) {
+      queuedChangesByThreadId.delete(threadId);
+    }
+    if (backgroundOnlyThreadIds.has(threadId)) {
+      syncBackgroundThreadLifecycle(threadId, previousState, nextState);
+    } else {
+      syncProjectedConversationState(threadId, nextState, {
+        isFullSnapshot,
+      });
+    }
     syncProjectedActions(threadId, projectPendingDesktopActions(threadId, nextState));
+    releaseHeldFollowerRequests(threadId, { toDesktop: true });
+    return true;
+  }
+
+  function rebuildNormalizedLiveIndex(threadId, state) {
+    const index = createNormalizedLiveIndex(state);
+    if (index) {
+      normalizedLiveIndexesByThreadId.set(threadId, index);
+      onNormalizedHistoryIndexRebuilt(threadId);
+    } else {
+      normalizedLiveIndexesByThreadId.delete(threadId);
+      normalizedReviewFingerprintsByThreadId.delete(threadId);
+    }
+  }
+
+  function updateNormalizedLiveIndex(threadId, state, change) {
+    const index = normalizedLiveIndexesByThreadId.get(threadId);
+    if (!index) {
+      if (hasNormalizedTurnStore(state)) {
+        rebuildNormalizedLiveIndex(threadId, state);
+      }
+      return;
+    }
+    if (normalizedLiveIndexNeedsRebuild(change)) {
+      rebuildNormalizedLiveIndex(threadId, state);
+      return;
+    }
+    refreshTouchedNormalizedActiveTurns(index, state, change);
   }
 
   function onDisconnect() {
+    onActivityObservation?.({
+      type: "disconnected",
+      sourceGeneration: Math.max(1, desktopSourceGeneration),
+    });
+    // Patch baselines are connection-scoped (Desktop re-sends a snapshot after
+    // reconnect), but the projector cache is not: keeping it lets the reconnect
+    // snapshot diff against already-mirrored content instead of replaying it.
+    for (const threadId of pendingSnapshotsByThreadId.keys()) {
+      cancelPendingSnapshot(threadId);
+    }
     rawStatesByThreadId.clear();
-    assistantMessageTextsByThreadId.clear();
-    pendingRoutesByRequestId.clear();
+    rawStateUpdatedAtByThreadId.clear();
+    // A reconnect is a new Desktop source epoch. The first normalized snapshot
+    // must repair canonical history instead of silently seeding content that may
+    // have changed while IPC was down.
+    canonicalHistoryReplacementSentThreadIds.clear();
+    projectedLiveActiveTurnIdsByThreadId.clear();
+    desktopLiveLifecycleByThreadId.clear();
+    normalizedLiveIndexesByThreadId.clear();
+    normalizedReviewFingerprintsByThreadId.clear();
     recoveringThreadIds.clear();
+    baselineRecoveryStateByThreadId.clear();
     queuedChangesByThreadId.clear();
+    pendingOwnershipProbeTokensByThreadId.clear();
+    desktopOwnedByProbeThreadIds.clear();
+    confirmedDesktopOwnerClientIdsByThreadId.clear();
+    clearFollowerState();
+    // A lost IPC connection is not evidence that Desktop stopped the turn.
+    // Keep announced lifecycle state until a reconnect snapshot, archive, or
+    // another authoritative state transition supplies a real terminal status.
+    // Keep activeThreadIds: phone interest is phone-scoped, not connection-scoped.
+    // Clearing it here would make reconnect snapshots for a thread the phone is
+    // still viewing fail the activeThreadIds.has() guard until the phone happens
+    // to issue a fresh read. Growth is bounded by the LRU cap instead.
+    // Keep pending approval routes too: a transient disconnect proves nothing
+    // about the prompt's outcome, and falsely resolving it would dismiss a
+    // still-blocking approval on the phone. Reconnect snapshots reconcile them.
+    // Keep held turns queued: a disconnect proves nothing about ownership. Their
+    // hold timers route them through the bus (with a reconnect attempt), and only
+    // a proven delivery failure falls back to the local app-server.
+  }
+
+  // The same route-follow handshake is used whether Remodex's app-server owns
+  // the thread or Codex Desktop owns it. The live-owner component covers the
+  // former; this follower covers Desktop-owned threads so the navigation
+  // controller can stop retrying as soon as the renderer is actually mounted.
+  function updateFollowerState(envelope) {
+    const params = envelope?.params || {};
+    const threadId = readString(params.conversationId) || readString(params.conversation_id);
+    const clientId = readString(envelope?.sourceClientId);
+    if (!threadId
+      || !clientId
+      || clientId === ipc.clientId
+      || isLocallyOwnedThread(threadId)
+      || liveOwnerThreadIds.has(threadId)) {
+      return;
+    }
+
+    const followers = followerClientIdsByThreadId.get(threadId) || new Set();
+    if (params.following === true) {
+      // A Desktop renderer opening a chat is not phone transcript interest.
+      // Only an inbound phone read/resume may promote it out of background.
+      if (!activeThreadIds.has(threadId)) {
+        backgroundOnlyThreadIds.add(threadId);
+      }
+      rememberActiveThread(threadId);
+      if (!desktopFollowThreadIds.has(threadId)) {
+        followDesktopThread(threadId);
+      }
+      const wasUnfollowed = followers.size === 0;
+      followers.add(clientId);
+      followerClientIdsByThreadId.set(threadId, followers);
+      if (wasUnfollowed) {
+        onFollowerStateChanged?.(threadId, true);
+      }
+      return;
+    }
+
+    if (!followers.delete(clientId)) {
+      return;
+    }
+    if (followers.size === 0) {
+      followerClientIdsByThreadId.delete(threadId);
+      onFollowerStateChanged?.(threadId, false);
+    }
+  }
+
+  function removeFollowerClient(clientId) {
+    const normalizedClientId = readString(clientId);
+    if (!normalizedClientId) {
+      return;
+    }
+    for (const [threadId, followers] of followerClientIdsByThreadId) {
+      if (!followers.delete(normalizedClientId)) {
+        continue;
+      }
+      if (followers.size === 0) {
+        followerClientIdsByThreadId.delete(threadId);
+        onFollowerStateChanged?.(threadId, false);
+      }
+    }
+  }
+
+  function clearFollowerState() {
+    for (const threadId of followerClientIdsByThreadId.keys()) {
+      onFollowerStateChanged?.(threadId, false);
+    }
+    followerClientIdsByThreadId.clear();
+  }
+
+  // The bridge's own live owner just claimed this thread's stream, so drop stale
+  // Desktop state instead of hijacking future phone requests into Desktop IPC.
+  function releaseDesktopThreadState(threadId) {
+    cancelPendingSnapshot(threadId);
+    settleAnnouncedBackgroundTurn(threadId, "interrupted");
+    if (backgroundOnlyThreadIds.delete(threadId)) {
+      activeThreadIds.delete(threadId);
+    }
+    liveOwnerThreadIds.add(threadId);
+    unfollowDesktopThread(threadId);
+    ownershipProbeDeadlinesByThreadId.delete(threadId);
+    pendingOwnershipProbeTokensByThreadId.delete(threadId);
+    desktopOwnedByProbeThreadIds.delete(threadId);
+    desktopMutationRiskThreadIds.delete(threadId);
+    confirmedDesktopOwnerClientIdsByThreadId.delete(threadId);
+    ownerUnavailableThreadIds.delete(threadId);
+    syncProjectedActions(threadId, []);
+    rawStatesByThreadId.delete(threadId);
+    rawStateUpdatedAtByThreadId.delete(threadId);
+    canonicalHistoryThreadIds.delete(threadId);
+    canonicalHistoryReplacementSentThreadIds.delete(threadId);
+    projectedLiveActiveTurnIdsByThreadId.delete(threadId);
+    desktopLiveLifecycleByThreadId.delete(threadId);
+    normalizedLiveIndexesByThreadId.delete(threadId);
+    normalizedReviewFingerprintsByThreadId.delete(threadId);
+    conversationProjector.remove(threadId);
+    queuedChangesByThreadId.delete(threadId);
+    baselineRecoveryStateByThreadId.delete(threadId);
+    notifyActivityRemoval(threadId, "ownership-handoff");
+    releaseHeldFollowerRequests(threadId, { toDesktop: false });
+  }
+
+  // The live owner is releasing/removing its stream, not claiming it; cancel any
+  // speculative phone request instead of routing it to either runtime. Phone
+  // interest (activeThreadIds) deliberately survives the release: if Desktop
+  // picks the thread up next, its broadcasts must be processed immediately
+  // instead of being dropped until the phone happens to issue another read.
+  function removeDesktopThreadState(threadId) {
+    cancelPendingSnapshot(threadId);
+    settleAnnouncedBackgroundTurn(threadId, "interrupted");
+    if (backgroundOnlyThreadIds.delete(threadId)) {
+      activeThreadIds.delete(threadId);
+    }
+    liveOwnerThreadIds.delete(threadId);
+    locallyAcquiredThreadIds.delete(threadId);
+    unfollowDesktopThread(threadId);
+    ownershipProbeDeadlinesByThreadId.delete(threadId);
+    pendingOwnershipProbeTokensByThreadId.delete(threadId);
+    desktopOwnedByProbeThreadIds.delete(threadId);
+    confirmedDesktopOwnerClientIdsByThreadId.delete(threadId);
+    ownerUnavailableThreadIds.add(threadId);
+    syncProjectedActions(threadId, []);
+    rawStatesByThreadId.delete(threadId);
+    rawStateUpdatedAtByThreadId.delete(threadId);
+    canonicalHistoryThreadIds.delete(threadId);
+    canonicalHistoryReplacementSentThreadIds.delete(threadId);
+    projectedLiveActiveTurnIdsByThreadId.delete(threadId);
+    desktopLiveLifecycleByThreadId.delete(threadId);
+    normalizedLiveIndexesByThreadId.delete(threadId);
+    normalizedReviewFingerprintsByThreadId.delete(threadId);
+    conversationProjector.remove(threadId);
+    queuedChangesByThreadId.delete(threadId);
+    baselineRecoveryStateByThreadId.delete(threadId);
+    notifyActivityRemoval(threadId, "removed");
+    rejectHeldFollowerRequests(threadId, "This thread is no longer available for Desktop routing.");
+  }
+
+  // A just-resumed Desktop-owned thread has no snapshot yet, so hold phone turn
+  // requests briefly instead of racing them into the local app-server. Holding is
+  // bounded to a short window after resume so purely local threads stay fast.
+  function shouldHoldFollowerRequest(message, threadId) {
+    if (typeof forwardToLocalCodex !== "function" || message?.id == null) {
+      return false;
+    }
+    if (!threadId
+      || !activeThreadIds.has(threadId)
+      || rawStatesByThreadId.has(threadId)
+      || liveOwnerThreadIds.has(threadId)
+      || isLocallyOwnedThread(threadId)) {
+      return false;
+    }
+    const probeDeadline = ownershipProbeDeadlinesByThreadId.get(threadId);
+    if (!probeDeadline || now() > probeDeadline) {
+      ownershipProbeDeadlinesByThreadId.delete(threadId);
+      return false;
+    }
+    return true;
+  }
+
+  // Asks the IPC bus whether any client owns this thread so held requests resolve
+  // as soon as possible instead of waiting out the full post-resume window.
+  function probeDesktopOwnership(route) {
+    const threadId = route.threadId;
+    if (pendingOwnershipProbeTokensByThreadId.has(threadId)) {
+      return;
+    }
+    const probeToken = ++nextOwnershipProbeToken;
+    pendingOwnershipProbeTokensByThreadId.set(threadId, probeToken);
+    ipc.sendDiscoveryRequest({
+      type: "request",
+      method: route.method,
+      // Codex Desktop rejects discovery unless the nested request version matches
+      // the method version, so mirror the normal request envelope here.
+      version: METHOD_VERSION_BY_NAME.get(route.method) || 1,
+      params: route.params,
+    }, ownershipProbeTimeoutMs)
+      .then((canHandle) => {
+        if (pendingOwnershipProbeTokensByThreadId.get(threadId) !== probeToken) {
+          return;
+        }
+        pendingOwnershipProbeTokensByThreadId.delete(threadId);
+        if (liveOwnerThreadIds.has(threadId) || isLocallyOwnedThread(threadId)) {
+          return;
+        }
+        if (canHandle === true) {
+          desktopOwnedByProbeThreadIds.add(threadId);
+          releaseHeldFollowerRequests(threadId, { toDesktop: true });
+          return;
+        }
+        // A negative discovery answer only means no currently connected client
+        // claimed the request. Keep holding so the bounded timer can route the
+        // request through the bus; a response error cannot authorize local replay.
+      });
+  }
+
+  // IPC may finish connecting after the first probe returned no answer; retry
+  // still-held phone turns once the bus can actually discover peer owners.
+  function probeHeldFollowerRequests() {
+    for (const [threadId, queue] of heldFollowerRequestsByThreadId.entries()) {
+      if (!queue || queue.length === 0 || liveOwnerThreadIds.has(threadId)) {
+        continue;
+      }
+      const message = safeParseJSON(queue[0].rawMessage);
+      const route = message ? buildDesktopFollowerRoute(message) : null;
+      if (route && shouldHoldFollowerRequest(message, threadId)) {
+        probeDesktopOwnership(route);
+      }
+    }
+  }
+
+  function isDesktopRoutableThread(threadId) {
+    return !liveOwnerThreadIds.has(threadId)
+      && !isLocallyOwnedThread(threadId)
+      && !ownerUnavailableThreadIds.has(threadId)
+      && (rawStatesByThreadId.has(threadId)
+        || desktopOwnedByProbeThreadIds.has(threadId)
+        || desktopMutationRiskThreadIds.has(threadId)
+        || hasDesktopOriginHint(threadId));
+  }
+
+  function hasDesktopOriginHint(threadId) {
+    if (desktopOriginThreadIds.has(threadId)) {
+      return true;
+    }
+    if (desktopOriginCheckedThreadIds.has(threadId)) {
+      return false;
+    }
+    const candidate = desktopOriginCandidatesByThreadId.get(threadId);
+    if (!candidate) {
+      return false;
+    }
+    const desktopOrigin = desktopOriginFromThreadRow(candidate);
+    if (desktopOrigin === null) {
+      return false;
+    }
+    desktopOriginCheckedThreadIds.add(threadId);
+    desktopOriginCandidatesByThreadId.delete(threadId);
+    if (desktopOrigin) {
+      desktopOriginThreadIds.add(threadId);
+    }
+    return desktopOrigin;
+  }
+
+  function rejectUnconfirmedOwnerMutation(message) {
+    if (message?.id == null) return;
+    sendApplicationResponse(JSON.stringify({
+      id: message.id,
+      error: {
+        code: -32000,
+        message: "Could not confirm this task's owner yet. Reopen the task and retry.",
+      },
+    }));
+  }
+
+  function isActiveWriterError(error) {
+    return Number(error?.code) === -32600
+      && /active writer|already has a writer/i.test(readString(error?.message));
+  }
+
+  // Owner discovery can use Desktop's stale ownership cache. A successful
+  // complete-history request is read-only and passes the same current-role gate
+  // as settings and turn commands. Target its claiming client so an unrelated
+  // unresponsive IPC peer cannot turn a negative result into a 10-second wait.
+  async function verifyDesktopOwner(threadId) {
+    if (stopped) return false;
+    let ownerClientId = confirmedDesktopOwnerClientIdsByThreadId.get(threadId);
+    if (!ownerClientId) {
+      try {
+        const discovery = await ipc.sendRequest("thread-owner-discovery", {
+          hostId: "local",
+          conversationId: threadId,
+        }, {
+          returnEnvelope: true,
+          timeoutMs: Math.min(requestTimeoutMs, ownershipProbeTimeoutMs),
+        });
+        ownerClientId = readString(discovery?.handledByClientId);
+      } catch {
+        return false;
+      }
+    }
+    if (!ownerClientId || ownerClientId === ipc.clientId) return false;
+    try {
+      const result = await ipc.sendRequest("thread-follower-load-complete-history", {
+        conversationId: threadId,
+      }, {
+        targetClientId: ownerClientId,
+        timeoutMs: Math.min(requestTimeoutMs, DESKTOP_HISTORY_PROBE_TIMEOUT_MS),
+      });
+      if (stopped || result?.revision == null) return false;
+      confirmedDesktopOwnerClientIdsByThreadId.set(threadId, ownerClientId);
+      ownerUnavailableThreadIds.delete(threadId);
+      return true;
+    } catch {
+      confirmedDesktopOwnerClientIdsByThreadId.delete(threadId);
+      return false;
+    }
+  }
+
+  function sendDesktopMetadataResume(message, thread) {
+    if (message.params?.excludeTurns !== true) {
+      throw new Error("This Codex Desktop task needs a metadata-only resume.");
+    }
+    sendApplicationResponse(JSON.stringify({
+      id: message.id,
+      result: {
+        thread: { ...thread, turns: [] },
+        remodexDesktopIpcMirror: true,
+      },
+    }));
+  }
+
+  async function negotiateResumeOwnership(message, threadId) {
+    const metadata = await readThreadMetadata(threadId);
+    if (stopped) throw new Error("Bridge stopped before task ownership was confirmed.");
+    const thread = metadata?.thread || metadata;
+    if (readString(thread?.id) !== threadId) {
+      throw new Error("Read-only task metadata did not match the requested task.");
+    }
+    const desktopOrigin = desktopOriginFromThreadRow(thread);
+    const desktopHint = desktopOrigin === true || hasDesktopOriginHint(threadId);
+    const desktopVerified = desktopHint && !rawStatesByThreadId.has(threadId)
+      ? await verifyDesktopOwner(threadId)
+      : false;
+    if (stopped) throw new Error("Bridge stopped before task ownership was confirmed.");
+    if (rawStatesByThreadId.has(threadId) || desktopVerified) {
+      desktopOriginThreadIds.add(threadId);
+      return { owner: "desktop", thread, initiatingRequestId: message.id };
+    }
+
+    try {
+      if (typeof resumeThreadLocally !== "function") {
+        throw new Error("Local task resume is unavailable.");
+      }
+      const result = await resumeThreadLocally(message);
+      if (stopped) throw new Error("Bridge stopped before local task resume completed.");
+      if (readString(result?.thread?.id) !== threadId) {
+        throw new Error("Local task resume did not return the requested task.");
+      }
+      locallyAcquiredThreadIds.add(threadId);
+      releaseDesktopThreadState(threadId);
+      return { owner: "local", result, initiatingRequestId: message.id };
+    } catch (error) {
+      if (!isActiveWriterError(error)) throw error;
+      if (rawStatesByThreadId.has(threadId) || await verifyDesktopOwner(threadId)) {
+        desktopOriginThreadIds.add(threadId);
+        return { owner: "desktop", thread, initiatingRequestId: message.id };
+      }
+      throw new Error("This task has an active writer, but its owner is unavailable. Open it in Codex Desktop and retry.");
+    }
+  }
+
+  // An old task's origin is historical; the current writer may be Desktop or
+  // this bridge's app-server. Hold every mutation until a read-only Desktop
+  // check or a successful local resume has confirmed which runtime owns it.
+  function tryBootstrapDesktopResume(message, rawMessage) {
+    if (stopped || message?.method !== "thread/resume" || message.id == null
+      || typeof readThreadMetadata !== "function") {
+      return false;
+    }
+    const threadId = readThreadId(message.params);
+    if (!threadId || liveOwnerThreadIds.has(threadId) || isLocallyOwnedThread(threadId)) {
+      return false;
+    }
+    rememberActiveThread(threadId);
+    ipc.ensureConnected();
+    followDesktopThread(threadId);
+    ownerUnavailableThreadIds.delete(threadId);
+    let ownershipRequest = pendingResumeOwnershipByThreadId.get(threadId);
+    if (!ownershipRequest) {
+      ownershipRequest = Promise.resolve()
+        .then(() => negotiateResumeOwnership(message, threadId))
+        .catch((error) => {
+          if (!stopped) {
+            ownerUnavailableThreadIds.add(threadId);
+            rejectHeldFollowerRequests(threadId, "Could not confirm this task's owner yet. Reopen the task and retry.");
+          }
+          throw error;
+        });
+      pendingResumeOwnershipByThreadId.set(threadId, ownershipRequest);
+      ownershipRequest.finally(() => {
+        if (pendingResumeOwnershipByThreadId.get(threadId) === ownershipRequest) {
+          pendingResumeOwnershipByThreadId.delete(threadId);
+        }
+      }).catch(() => {});
+    }
+    ownershipRequest.then((outcome) => {
+      if (stopped) return;
+      if (tryServeDesktopOwnedRead(message)) {
+        return;
+      }
+      if (outcome.owner === "desktop") {
+        desktopOriginThreadIds.add(threadId);
+        desktopOriginCheckedThreadIds.add(threadId);
+        desktopOriginCandidatesByThreadId.delete(threadId);
+        try {
+          sendDesktopMetadataResume(message, outcome.thread);
+        } catch (error) {
+          sendApplicationResponse(JSON.stringify({
+            id: message.id,
+            error: { code: -32000, message: error.message },
+          }));
+        }
+        return;
+      }
+      if (requestIdKey(outcome.initiatingRequestId) !== requestIdKey(message.id)) {
+        forwardToLocalCodex(rawMessage);
+        return;
+      }
+      sendApplicationResponse(JSON.stringify({ id: message.id, result: outcome.result }));
+    }).catch((error) => {
+      if (stopped) return;
+      sendApplicationResponse(JSON.stringify({
+        id: message.id,
+        error: { code: -32000, message: error.message },
+      }));
+    });
+    return true;
+  }
+
+  function holdFollowerRequest(threadId, rawMessage) {
+    const probeDeadline = ownershipProbeDeadlinesByThreadId.get(threadId) || 0;
+    const message = safeParseJSON(rawMessage);
+    const method = readString(message?.method);
+    const entry = {
+      rawMessage,
+      timer: setTimeout(() => {
+        const queue = heldFollowerRequestsByThreadId.get(threadId) || [];
+        const index = queue.indexOf(entry);
+        if (index < 0) {
+          return;
+        }
+        queue.splice(index, 1);
+        if (queue.length === 0) {
+          heldFollowerRequestsByThreadId.delete(threadId);
+        }
+        routeExpiredHeldRequestThroughBus(rawMessage);
+      }, Math.max(0, probeDeadline - now())),
+    };
+    entry.timer.unref?.();
+    const queue = heldFollowerRequestsByThreadId.get(threadId) || [];
+    if (method === "turn/start") {
+      rejectQueuedHeldTurnStarts(queue);
+    }
+    queue.push(entry);
+    heldFollowerRequestsByThreadId.set(threadId, queue);
+  }
+
+  function rejectQueuedHeldTurnStarts(queue) {
+    for (let index = queue.length - 1; index >= 0; index -= 1) {
+      const entry = queue[index];
+      const message = safeParseJSON(entry.rawMessage);
+      if (readString(message?.method) !== "turn/start") {
+        continue;
+      }
+      queue.splice(index, 1);
+      clearTimeout(entry.timer);
+      rejectHeldFollowerRequest(message, "Superseded by a newer held turn/start request.");
+    }
+  }
+
+  // Codex Desktop's real IPC router ignores client-origin discovery probes, so an
+  // unanswered probe proves nothing. Route the expired request through the bus as
+  // a normal request: the router discovers a Desktop owner itself. Once sent,
+  // even a no-client-found reply is ambiguous, so it must not be replayed by
+  // the local app-server.
+  function routeExpiredHeldRequestThroughBus(rawMessage) {
+    const message = safeParseJSON(rawMessage);
+    const route = message ? buildDesktopFollowerRoute(message) : null;
+    if (stopped) return;
+    if (route) {
+      // The request is being routed definitively now, so a late discovery answer
+      // must not retroactively mark the thread Desktop-owned.
+      pendingOwnershipProbeTokensByThreadId.delete(route.threadId);
+      if (ownerUnavailableThreadIds.has(route.threadId)) {
+        rejectUnconfirmedOwnerMutation(message);
+        return;
+      }
+      const pendingResumeOwnership = pendingResumeOwnershipByThreadId.get(route.threadId);
+      if (pendingResumeOwnership) {
+        // The probe deadline cannot authorize a mutation while a simultaneous
+        // resume is still negotiating which process owns the writer.
+        pendingResumeOwnership.then(() => {
+          if (stopped) return;
+          if (ownerUnavailableThreadIds.has(route.threadId)) {
+            rejectUnconfirmedOwnerMutation(message);
+          } else if (liveOwnerThreadIds.has(route.threadId) || isLocallyOwnedThread(route.threadId)) {
+            forwardToLocalCodex?.(rawMessage);
+          } else if (isDesktopRoutableThread(route.threadId)) {
+            submitDesktopFollowerRequest(route, message);
+          } else {
+            rejectUnconfirmedOwnerMutation(message);
+          }
+        }).catch(() => {
+          if (!stopped) rejectUnconfirmedOwnerMutation(message);
+        });
+        return;
+      }
+    }
+    if (!route || liveOwnerThreadIds.has(route.threadId) || isLocallyOwnedThread(route.threadId)) {
+      forwardToLocalCodex(rawMessage);
+      return;
+    }
+    submitDesktopFollowerRequest(route, message);
+  }
+
+  function releaseHeldFollowerRequests(threadId, { toDesktop } = {}) {
+    const queue = heldFollowerRequestsByThreadId.get(threadId);
+    if (!queue || queue.length === 0) {
+      heldFollowerRequestsByThreadId.delete(threadId);
+      return;
+    }
+
+    heldFollowerRequestsByThreadId.delete(threadId);
+    let releasedTurnStart = false;
+    for (const entry of queue) {
+      clearTimeout(entry.timer);
+      const originalMessage = safeParseJSON(entry.rawMessage);
+      if (readString(originalMessage?.method) === "turn/start") {
+        if (releasedTurnStart) {
+          rejectHeldFollowerRequest(originalMessage, "Superseded by another held turn/start request.");
+          continue;
+        }
+        releasedTurnStart = true;
+      }
+      const message = toDesktop ? originalMessage : null;
+      const route = message ? buildDesktopFollowerRoute(message) : null;
+      if (route && isDesktopRoutableThread(route.threadId)) {
+        submitDesktopFollowerRequest(route, message);
+      } else {
+        forwardToLocalCodex?.(entry.rawMessage);
+      }
+    }
+  }
+
+  function rejectHeldFollowerRequests(threadId, reason) {
+    const queue = heldFollowerRequestsByThreadId.get(threadId);
+    if (!queue || queue.length === 0) {
+      heldFollowerRequestsByThreadId.delete(threadId);
+      return;
+    }
+    heldFollowerRequestsByThreadId.delete(threadId);
+    for (const entry of queue) {
+      clearTimeout(entry.timer);
+      rejectHeldFollowerRequest(safeParseJSON(entry.rawMessage), reason);
+    }
+  }
+
+  function rejectHeldFollowerRequest(message, reason) {
+    if (message?.id == null) {
+      return;
+    }
+    sendApplicationResponse(JSON.stringify({
+      id: message.id,
+      error: {
+        code: -32000,
+        message: reason,
+      },
+    }));
   }
 
   function syncProjectedActions(threadId, actions) {
-    const nextRequestIds = new Set(actions.map((action) => action.id));
+    const nextRequestIds = new Set(actions.map((action) => requestIdKey(action.id)));
     for (const [requestId, route] of Array.from(pendingRoutesByRequestId.entries())) {
       if (route.threadId !== threadId || nextRequestIds.has(requestId)) {
         continue;
       }
 
       pendingRoutesByRequestId.delete(requestId);
-      sendApplicationResponse(JSON.stringify({
-        method: "serverRequest/resolved",
-        params: {
-          threadId,
-          requestId,
-        },
-      }));
+      sendApplicationResponse(JSON.stringify(
+        projectedResolvedNotification(threadId, route.desktopRequestId)
+      ));
     }
 
     for (const action of actions) {
-      if (pendingRoutesByRequestId.has(action.id)) {
+      const requestId = requestIdKey(action.id);
+      if (!requestId || pendingRoutesByRequestId.has(requestId)) {
         continue;
       }
 
-      pendingRoutesByRequestId.set(action.id, {
-        requestId: action.id,
+      pendingRoutesByRequestId.set(requestId, {
+        requestId,
+        // Preserve the JSON-RPC id's original scalar type. Codex Desktop uses
+        // numeric ids for real requestUserInput calls, and its follower command
+        // must receive that same number rather than the phone-facing map key.
+        desktopRequestId: action.id,
         method: action.method,
         threadId,
       });
@@ -180,6 +1646,673 @@ function createDesktopIpcActionFollower({
         params: action.params,
       }));
     }
+  }
+
+  // Legacy Desktop snapshots can still serve reads, but normalized history is
+  // permanently canonical for this Desktop source epoch. A later snapshot that
+  // happens to refill raw turns must not reclaim paging and flap live sources.
+  function tryServeDesktopOwnedRead(message) {
+    const method = readString(message?.method);
+    if (!DESKTOP_STATE_READ_METHODS.has(method) || message?.id == null) {
+      return false;
+    }
+    const threadId = readThreadId(message.params);
+    const ownsDesktopCursor = method === "thread/turns/list"
+      && isDesktopTurnsCursor(message.params?.cursor);
+    if (!threadId) {
+      return false;
+    }
+    if (liveOwnerThreadIds.has(threadId) || isLocallyOwnedThread(threadId)) {
+      return ownsDesktopCursor ? rejectDesktopTurnsCursor(message) : false;
+    }
+    const rawState = rawStatesByThreadId.get(threadId);
+    if (pendingSnapshotsByThreadId.has(threadId)) {
+      return ownsDesktopCursor ? rejectDesktopTurnsCursor(message) : false;
+    }
+    if (!rawState) {
+      return ownsDesktopCursor ? rejectDesktopTurnsCursor(message) : false;
+    }
+
+    rememberActiveThread(threadId);
+    if (method === "thread/goal/get") {
+      sendApplicationResponse(JSON.stringify({
+        id: message.id,
+        result: { goal: projectDesktopConversationStateToGoal(threadId, rawState) },
+      }));
+      return true;
+    }
+    // Newer Litter snapshots keep materialized history in
+    // turnHistory.history.entitiesByKey while leaving the legacy top-level
+    // turns array empty or limited to only the current turn. The Desktop
+    // projector cannot decode the remaining normalized store, so a partial
+    // legacy projection is not authoritative. Yield before answering with
+    // truncated history and let app-server/JSONL paging reconstruct it.
+    if (hasNormalizedHistoryOutsideRawTurns(
+      rawState,
+      normalizedLiveIndexesByThreadId.get(threadId)
+    )) {
+      canonicalHistoryThreadIds.add(threadId);
+    }
+    // Resume acquires a writer in app-server. A metadata-only resume must stay
+    // with the Desktop owner even when historical turns require canonical paging.
+    // Returning no embedded turns also preserves the phone's pagination support.
+    if (canonicalHistoryThreadIds.has(threadId)
+      && method === "thread/resume"
+      && message.params?.excludeTurns === true) {
+      const thread = projectDesktopConversationStateToThread(
+        threadId, boundedDesktopLiveStateForThread(threadId, rawState), { now }
+      );
+      sendApplicationResponse(JSON.stringify({
+        id: message.id,
+        result: {
+          thread: { ...thread, turns: [] },
+          remodexDesktopIpcMirror: true,
+        },
+      }));
+      return true;
+    }
+    if (canonicalHistoryThreadIds.has(threadId)) {
+      if (isThreadTurnStateProbeRequest(message)) {
+        const liveState = boundedDesktopLiveStateForThread(threadId, rawState);
+        sendApplicationResponse(JSON.stringify({
+          id: message.id,
+          result: buildDesktopLiveTurnStateResult(liveState.turns),
+        }));
+        return true;
+      }
+      // Keep the repair signal armed until canonical history actually arrives;
+      // starting a request alone does not prove that recovery succeeded.
+      return ownsDesktopCursor ? rejectDesktopTurnsCursor(message) : false;
+    }
+    const thread = projectDesktopConversationStateToThread(threadId, rawState, { now });
+    // While IPC remains connected, an explicitly active Desktop snapshot stays
+    // authoritative through quiet tools, reasoning, approvals, and subagents.
+    // Falling through to a second app-server here can replace a genuinely
+    // running turn with stale idle history and make the phone clear Stop.
+    if (hasActiveProjectedTurn(thread)
+      && isRawStateStaleForActiveRead(threadId)
+      && !hasResponsiveDesktopIpc()
+      && !ownsDesktopCursor) {
+      staleYieldedThreadIds.add(threadId);
+      return false;
+    }
+    const result = method === "thread/turns/list"
+      ? buildDesktopTurnsListResult(thread.turns, message.params)
+      : {
+          // The projected thread is the entire payload the phone decodes;
+          // echoing the raw Desktop conversationState alongside it doubled
+          // heavy threads past the relay frame limit for nothing.
+          thread,
+          ...(method === "thread/resume" ? { remodexDesktopIpcMirror: true } : {}),
+        };
+    if (!result) {
+      return ownsDesktopCursor ? rejectDesktopTurnsCursor(message) : false;
+    }
+    sendApplicationResponse(JSON.stringify({
+      id: message.id,
+      result,
+    }));
+    return true;
+  }
+
+  function rejectDesktopTurnsCursor(message) {
+    sendApplicationResponse(JSON.stringify({
+      id: message.id,
+      error: {
+        code: -32602,
+        message: "Desktop history changed while paging. Reload this thread to restart history pagination.",
+      },
+    }));
+    return true;
+  }
+
+  function buildDesktopLiveTurnStateResult(turns) {
+    const data = (Array.isArray(turns) ? turns : [])
+      .slice()
+      .reverse()
+      .map((turn) => {
+        const id = readString(turn?.id)
+          || readString(turn?.turnId)
+          || readString(turn?.turn_id);
+        return {
+          ...(id ? { id } : {}),
+          // Unknown status must never invent an interruptible turn. Live
+          // activity still carries explicit inProgress/running statuses.
+          status: readString(turn?.status) || "completed",
+        };
+      });
+    return {
+      data,
+      nextCursor: null,
+      hasMore: false,
+      remodexDesktopLiveState: true,
+    };
+  }
+
+  function hasActiveProjectedTurn(thread) {
+    return (thread?.turns || []).some((turn) => turn?.status === "inProgress")
+      || readString(thread?.status?.type) === "active";
+  }
+
+  function hasNormalizedHistoryOutsideRawTurns(rawState, normalizedIndex = null) {
+    if (normalizedIndex) {
+      return normalizedIndex.hasHistoryOutsideRawTurns;
+    }
+    const turnHistory = rawState?.turnHistory ?? rawState?.turn_history;
+    const history = turnHistory?.history;
+    const entities = history?.entitiesByKey ?? history?.entities_by_key;
+    if (!entities || typeof entities !== "object" || Array.isArray(entities)) {
+      return false;
+    }
+    const rawTurnIds = new Set((Array.isArray(rawState?.turns) ? rawState.turns : [])
+      .map((turn) => (
+        readString(turn?.id)
+        || readString(turn?.turnId)
+        || readString(turn?.turn_id)
+      ))
+      .filter(Boolean));
+    for (const [key, entity] of Object.entries(entities)) {
+      const normalizedTurnId = key.startsWith("turn:")
+        ? readString(key.slice("turn:".length))
+        : readString(entity?.turnId) || readString(entity?.turn_id);
+      if (normalizedTurnId && !rawTurnIds.has(normalizedTurnId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isRawStateStaleForActiveRead(threadId) {
+    const updatedAt = rawStateUpdatedAtByThreadId.get(threadId) || 0;
+    return now() - updatedAt > STALE_ACTIVE_READ_MAX_AGE_MS;
+  }
+
+  function hasResponsiveDesktopIpc() {
+    return ipc.hasRecentActivity(CONNECTED_IPC_ACTIVITY_LEASE_MS);
+  }
+
+  function boundedDesktopLiveStateForThread(threadId, state) {
+    return boundedDesktopLiveState(
+      state,
+      now(),
+      projectedLiveActiveTurnIdsByThreadId.get(threadId) || new Set(),
+      normalizedLiveIndexesByThreadId.get(threadId) || null
+    );
+  }
+
+  function notifyActivityState(threadId, state) {
+    if (typeof onActivityObservation !== "function") {
+      return;
+    }
+    const index = normalizedLiveIndexesByThreadId.get(threadId);
+    const turns = index
+      ? boundedIndexedDesktopLiveTurns(
+        state, index, now(), projectedLiveActiveTurnIdsByThreadId.get(threadId) || new Set(), true
+      )
+      : (Array.isArray(state?.turns) ? state.turns.slice(-3) : []);
+    onActivityObservation({
+      type: "state",
+      threadId,
+      sourceGeneration: Math.max(1, desktopSourceGeneration),
+      state: boundedDesktopActivityState({ ...state, turns }),
+    });
+  }
+
+  function notifyActivityRemoval(threadId, reason) {
+    onActivityObservation?.({
+      type: "removed",
+      threadId,
+      reason,
+      sourceGeneration: Math.max(1, desktopSourceGeneration),
+    });
+  }
+
+  function rememberDesktopLiveProjection(threadId, liveState) {
+    const activeTurns = activeDesktopTurnDescriptors(liveState);
+    const activeTurnIds = new Set(activeTurns.map((turn) => turn.id));
+    if (activeTurnIds.size > 0) {
+      projectedLiveActiveTurnIdsByThreadId.set(threadId, activeTurnIds);
+    } else {
+      projectedLiveActiveTurnIdsByThreadId.delete(threadId);
+    }
+    desktopLiveLifecycleByThreadId.set(
+      threadId,
+      new Map(activeTurns.map((turn) => [turn.id, turn]))
+    );
+  }
+
+  function emitDesktopSnapshotLifecycleTransition(threadId, liveState) {
+    const previousById = desktopLiveLifecycleByThreadId.get(threadId) || new Map();
+    const nextTurns = activeDesktopTurnDescriptors(liveState);
+    const nextById = new Map(nextTurns.map((turn) => [turn.id, turn]));
+    const completedTurnIds = new Set();
+    const startedTurnIds = new Set();
+    const {
+      previousTurnIds: continuityPreviousTurnIds,
+      nextTurnIds: continuityNextTurnIds,
+    } = matchDesktopTurnIdentityContinuities(
+      [...previousById.values()],
+      nextTurns
+    );
+    for (const previous of previousById.values()) {
+      if (nextById.has(previous.id)) {
+        continue;
+      }
+      if (continuityPreviousTurnIds.has(previous.id)) {
+        // Canonical ID repair is one uninterrupted run. Emitting a terminal
+        // event for the synthetic alias would make iOS release its recovered
+        // viewport before the continuity-tagged canonical start arrives.
+        continue;
+      }
+      const terminalTurn = (liveState.turns || []).find((turn) => turnIdOf(turn) === previous.id);
+      const terminalStatus = readString(terminalTurn?.status) || "completed";
+      sendApplicationResponse(JSON.stringify(desktopLiveTurnLifecycleNotification(
+        "turn/completed",
+        threadId,
+        { id: previous.id, status: terminalStatus }
+      )));
+      completedTurnIds.add(previous.id);
+    }
+    for (const next of nextTurns) {
+      if (previousById.has(next.id)) {
+        continue;
+      }
+      const startedNotification = desktopLiveTurnLifecycleNotification(
+        "turn/started",
+        threadId,
+        next
+      );
+      sendApplicationResponse(JSON.stringify(
+        continuityNextTurnIds.has(next.id)
+          ? notificationWithTurnIdentityContinuity(startedNotification)
+          : startedNotification
+      ));
+      startedTurnIds.add(next.id);
+    }
+    reannounceRemainingParallelTurn(
+      threadId,
+      previousById,
+      nextTurns,
+      completedTurnIds,
+      startedTurnIds
+    );
+    return { completedTurnIds, startedTurnIds };
+  }
+
+  // iOS tracks one phone-visible active turn per thread. If parallel turn B was
+  // the most recently announced turn and finishes while older A is still live,
+  // B's completion clears that slot. Re-announce A as continuity so Stop and
+  // running state stay attached to the existing run without advancing its
+  // generation. A newly started replacement already performs this handoff.
+  function reannounceRemainingParallelTurn(
+    threadId,
+    previousById,
+    nextTurns,
+    completedTurnIds,
+    startedTurnIds
+  ) {
+    const restorationTurnId = remainingParallelTurnRestorationId(
+      previousById,
+      nextTurns,
+      completedTurnIds
+    );
+    if (!restorationTurnId || startedTurnIds.has(restorationTurnId)) {
+      return;
+    }
+    const nextVisibleTurn = nextTurns.find((turn) => turn.id === restorationTurnId);
+    sendApplicationResponse(JSON.stringify(notificationWithTurnIdentityContinuity(
+      desktopLiveTurnLifecycleNotification("turn/started", threadId, nextVisibleTurn)
+    )));
+  }
+
+  function remainingParallelTurnRestorationId(previousById, nextTurns, completedTurnIds) {
+    const previousVisibleTurn = [...previousById.values()].at(-1);
+    if (!previousVisibleTurn || !completedTurnIds.has(previousVisibleTurn.id)) {
+      return "";
+    }
+    const nextVisibleTurn = nextTurns.at(-1);
+    return nextVisibleTurn && previousById.has(nextVisibleTurn.id)
+      ? nextVisibleTurn.id
+      : "";
+  }
+
+  function syncProjectedConversationState(threadId, nextState, { isFullSnapshot = false } = {}) {
+    const resumedAfterStaleYield = staleYieldedThreadIds.delete(threadId);
+    if (!canonicalHistoryThreadIds.has(threadId)
+      && hasNormalizedHistoryOutsideRawTurns(
+        nextState,
+        normalizedLiveIndexesByThreadId.get(threadId)
+      )) {
+      canonicalHistoryThreadIds.add(threadId);
+    }
+    const liveState = boundedDesktopLiveStateForThread(threadId, nextState);
+    if (canonicalHistoryThreadIds.has(threadId)
+      && !canonicalHistoryReplacementSentThreadIds.has(threadId)) {
+      canonicalHistoryReplacementSentThreadIds.add(threadId);
+      conversationProjector.remove(threadId);
+      // Project the bounded active tail before asking the phone for canonical
+      // history. On reconnect this snapshot may contain output produced while
+      // IPC was unavailable; silently seeding it would permanently eat that
+      // content when canonical JSONL/rollout history is still behind.
+      const bootstrapOutput = conversationProjector.project(threadId, liveState, {
+        includeAllActiveTurns: true,
+      });
+      sendApplicationResponse(JSON.stringify({
+        method: "thread/replaced",
+        params: {
+          threadId,
+          remodexDesktopMirror: true,
+          remodexDesktopIpcMirror: true,
+          remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+        },
+      }));
+      emitNormalizedReviewOverlays(
+        threadId,
+        normalizedLiveIndexesByThreadId.get(threadId),
+        liveState
+      );
+      emitDesktopSnapshotLifecycleTransition(threadId, liveState);
+      for (const notification of bootstrapOutput.notifications || []) {
+        if (readString(notification?.method).startsWith("item/")) {
+          sendApplicationResponse(JSON.stringify(notification));
+        }
+      }
+      rememberDesktopLiveProjection(threadId, liveState);
+      return;
+    }
+    if (isFullSnapshot && canonicalHistoryThreadIds.has(threadId)) {
+      // Litter can immediately rehydrate the same normalized snapshot with a
+      // completely different set of item IDs. Treat full snapshots as source
+      // baselines: preserve only turn lifecycle, then seed. Item diffs resume
+      // on subsequent patches and cannot replay hundreds of old rows.
+      const { completedTurnIds } = emitDesktopSnapshotLifecycleTransition(threadId, liveState);
+      const hasTerminalTurn = (liveState.turns || []).some((turn) => (
+        completedTurnIds.has(turnIdOf(turn))
+          && ["completed", "failed", "interrupted", "cancelled", "canceled"].includes(readString(turn.status).toLowerCase())
+      ));
+      if (hasTerminalTurn) {
+        // A terminal baseline can contain a final answer never sent as deltas.
+        // Reload canonical history once instead of replaying re-keyed items.
+        sendApplicationResponse(JSON.stringify({
+          method: "thread/replaced",
+          params: {
+            threadId,
+            remodexDesktopMirror: true,
+            remodexDesktopIpcMirror: true,
+            remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+          },
+        }));
+      }
+      emitNormalizedReviewOverlays(
+        threadId,
+        normalizedLiveIndexesByThreadId.get(threadId),
+        liveState
+      );
+      conversationProjector.seed(threadId, liveState);
+      rememberDesktopLiveProjection(threadId, liveState);
+      return;
+    }
+    if (resumedAfterStaleYield) {
+      // Switching back from rollout/app-server history to fresh Desktop state
+      // is a source epoch change. Force a baseline + thread/replaced repair.
+      conversationProjector.remove(threadId);
+    }
+    emitNormalizedReviewOverlays(
+      threadId,
+      normalizedLiveIndexesByThreadId.get(threadId),
+      liveState
+    );
+    const output = conversationProjector.project(threadId, liveState);
+    if (resumedAfterStaleYield || output.type === "fullReplace" || output.type === "baseline") {
+      // fullReplace: synthesized turn ids just became real, stale rows must go.
+      // baseline: the projector cache was evicted, so updates that arrived while
+      // unobserved were never mirrored. Both cases need the phone to rebuild the
+      // thread from canonical history instead of trusting incremental rows.
+      // The phone reacts to thread/replaced by re-reading canonical history;
+      // it never decodes an embedded thread, and heavy threads would blow the
+      // relay frame limit if we shipped one.
+      sendApplicationResponse(JSON.stringify({
+        method: "thread/replaced",
+        params: {
+          threadId,
+          remodexDesktopMirror: true,
+          remodexDesktopIpcMirror: true,
+          remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+        },
+      }));
+    }
+    const outputNotifications = output.notifications || [];
+    const previousById = desktopLiveLifecycleByThreadId.get(threadId) || new Map();
+    const nextTurns = activeDesktopTurnDescriptors(liveState);
+    const completedTurnIds = new Set(outputNotifications
+      .filter((notification) => notification.method === "turn/completed")
+      .map((notification) => readString(notification.params?.turnId))
+      .filter(Boolean));
+    const startedTurnIds = new Set(outputNotifications
+      .filter((notification) => notification.method === "turn/started")
+      .map((notification) => readString(notification.params?.turnId))
+      .filter(Boolean));
+    const parallelRestorationTurnId = remainingParallelTurnRestorationId(
+      previousById,
+      nextTurns,
+      completedTurnIds
+    );
+    for (const notification of outputNotifications) {
+      const notificationTurnId = readString(notification.params?.turnId);
+      const preservesTurnIdentity = notification.method === "turn/started"
+        && (parallelRestorationTurnId === notificationTurnId
+          || output.turnIdentityContinuityTurnIds?.includes(notificationTurnId));
+      const projectedNotification = preservesTurnIdentity
+        ? notificationWithTurnIdentityContinuity(notification)
+        : notification;
+      sendApplicationResponse(JSON.stringify(projectedNotification));
+    }
+    reannounceRemainingParallelTurn(
+      threadId,
+      previousById,
+      nextTurns,
+      completedTurnIds,
+      startedTurnIds
+    );
+    rememberDesktopLiveProjection(threadId, liveState);
+  }
+
+  function emitNormalizedReviewOverlays(threadId, index, projectedState) {
+    if (!index || !Array.isArray(index.pendingReviewOverlays)) {
+      return;
+    }
+    const overlays = index.pendingReviewOverlays.splice(0);
+    const projectedTurnIds = new Set(
+      (Array.isArray(projectedState?.turns) ? projectedState.turns : [])
+        .map(turnIdOf)
+        .filter(Boolean)
+    );
+    const fingerprints = normalizedReviewFingerprintsByThreadId.get(threadId) || new Map();
+    for (const overlay of overlays) {
+      // Reviews on turns in the projected live tail may also be emitted by
+      // projector output; that duplication is intentional. The projector only
+      // re-emits items for active turns (and not after a silent reseed), so
+      // suppressing the overlay here would permanently drop reviews on
+      // completed tail turns. The phone upserts by reviewId, so duplicates
+      // cost one redundant notification and nothing else.
+      const item = overlay?.item;
+      const review = item?.review && typeof item.review === "object" ? item.review : item;
+      const reviewId = readString(item?.reviewId)
+        || readString(item?.id).replace(/^automatic-approval-review:/, "");
+      const status = readString(review?.status);
+      if (!reviewId || !status || !item?.action) {
+        continue;
+      }
+      // Completed approved reviews are ordinary tool history. Replaying every
+      // normalized-history review after a bounded canonical read appends old
+      // rows at the phone's live tail, detached from their original disclosure.
+      // The projected tail still emits its approvals so they reconcile in the
+      // owning turn; non-approved outcomes remain global because they may need
+      // the user's attention.
+      if (normalizeToken(status) === "approved"
+        && !projectedTurnIds.has(readString(overlay.turnId))) {
+        continue;
+      }
+      const fingerprint = createHash("sha256")
+        .update(JSON.stringify({ status, item }))
+        .digest("hex");
+      if (fingerprints.get(reviewId) === fingerprint) {
+        continue;
+      }
+      // Refresh insertion order so the cache is a bounded per-thread LRU.
+      fingerprints.delete(reviewId);
+      fingerprints.set(reviewId, fingerprint);
+      while (fingerprints.size > MAX_NORMALIZED_REVIEW_FINGERPRINTS_PER_THREAD) {
+        const oldestReviewId = fingerprints.keys().next().value;
+        fingerprints.delete(oldestReviewId);
+      }
+      sendApplicationResponse(JSON.stringify({
+        method: normalizeToken(status) === "inprogress"
+          ? "item/autoApprovalReview/started"
+          : "item/autoApprovalReview/completed",
+        params: {
+          threadId,
+          turnId: overlay.turnId,
+          reviewId,
+          targetItemId: readString(item.targetItemId) || null,
+          startedAtMs: item.startedAtMs ?? null,
+          completedAtMs: item.completedAtMs ?? null,
+          decisionSource: readString(item.decisionSource)
+            || readString(item?.event?.decision_source)
+            || null,
+          review: cloneJSON(review),
+          action: cloneJSON(item.action),
+          remodexDesktopMirror: true,
+          remodexDesktopIpcMirror: true,
+          remodexGuardianRetrySupported: false,
+          remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+        },
+      }));
+    }
+    normalizedReviewFingerprintsByThreadId.set(threadId, fingerprints);
+  }
+
+  // Unopened chats only need run-state signals for the sidebar. Sending the
+  // projector's full bootstrap here would replay every historical item from
+  // every running Desktop chat onto the phone during a sidebar refresh.
+  function syncBackgroundThreadLifecycle(threadId, _previousState, nextState) {
+    const announcedTurn = announcedBackgroundTurnsByThreadId.get(threadId) || null;
+    const previousTurnId = readString(announcedTurn?.id);
+    const retainedTurnIds = previousTurnId ? new Set([previousTurnId]) : new Set();
+    const liveState = boundedDesktopLiveState(
+      nextState,
+      now(),
+      retainedTurnIds,
+      normalizedLiveIndexesByThreadId.get(threadId) || null
+    );
+    const nextActiveTurn = latestActiveRawTurn(liveState);
+    const nextTurnId = readString(nextActiveTurn?.id);
+
+    if (previousTurnId && previousTurnId !== nextTurnId) {
+      const settledTurn = backgroundRawTurnById(liveState, previousTurnId)
+        || announcedTurn;
+      const settledStatus = readString(settledTurn?.status);
+      settleAnnouncedBackgroundTurn(
+        threadId,
+        settledStatus === "failed" || settledStatus === "interrupted"
+          ? settledStatus
+          : "completed",
+        settledTurn
+      );
+    }
+
+    if (nextTurnId && nextTurnId !== previousTurnId) {
+      sendApplicationResponse(JSON.stringify(backgroundTurnLifecycleNotification(
+        "turn/started",
+        threadId,
+        nextActiveTurn
+      )));
+      announcedBackgroundTurnsByThreadId.set(threadId, nextActiveTurn);
+    }
+  }
+
+  function settleAnnouncedBackgroundTurn(threadId, status = "interrupted", turn = null) {
+    const announcedTurn = announcedBackgroundTurnsByThreadId.get(threadId);
+    if (!announcedTurn) {
+      return false;
+    }
+    const settledTurn = {
+      ...announcedTurn,
+      ...(turn && typeof turn === "object" ? turn : {}),
+      id: announcedTurn.id,
+      status,
+    };
+    sendApplicationResponse(JSON.stringify(backgroundTurnLifecycleNotification(
+      "turn/completed",
+      threadId,
+      settledTurn
+    )));
+    announcedBackgroundTurnsByThreadId.delete(threadId);
+    backgroundTurnReannouncedAtByThreadId.delete(threadId);
+    return true;
+  }
+
+  // Re-sends the start of runs that are still in flight, so a phone that missed
+  // the original announcement (fresh app session, reconnect after the run began)
+  // gets its sidebar badge on the next sidebar refresh instead of only when the
+  // chat is opened. The phone treats a repeated start for the same turn as a
+  // no-op, and the identity marker keeps a phone that already saw it from
+  // treating this as a second run. Only worth doing while Desktop IPC is
+  // responsive: the matching completion arrives over the same link, so this
+  // cannot keep a phantom badge alive on its own.
+  function reannounceActiveBackgroundTurns() {
+    if (announcedBackgroundTurnsByThreadId.size === 0 || !hasResponsiveDesktopIpc()) {
+      return;
+    }
+
+    const reannouncedAt = now();
+    for (const [threadId, announcedTurn] of announcedBackgroundTurnsByThreadId) {
+      const lastReannouncedAt = backgroundTurnReannouncedAtByThreadId.get(threadId) || 0;
+      if (reannouncedAt - lastReannouncedAt < BACKGROUND_TURN_REANNOUNCE_MIN_INTERVAL_MS) {
+        continue;
+      }
+      backgroundTurnReannouncedAtByThreadId.set(threadId, reannouncedAt);
+      sendApplicationResponse(JSON.stringify(notificationWithTurnIdentityContinuity(
+        backgroundTurnLifecycleNotification("turn/started", threadId, announcedTurn)
+      )));
+    }
+  }
+
+  function syncThreadArchiveBroadcast(envelope) {
+    const params = envelope.params || {};
+    const threadId = readString(params.conversationId) || readString(params.conversation_id);
+    if (!threadId) {
+      return;
+    }
+    if (envelope.method === "thread-archived") {
+      cancelPendingSnapshot(threadId);
+      settleAnnouncedBackgroundTurn(threadId, "interrupted");
+      if (backgroundOnlyThreadIds.delete(threadId)) {
+        activeThreadIds.delete(threadId);
+      }
+      rawStatesByThreadId.delete(threadId);
+      rawStateUpdatedAtByThreadId.delete(threadId);
+      canonicalHistoryThreadIds.delete(threadId);
+      canonicalHistoryReplacementSentThreadIds.delete(threadId);
+      projectedLiveActiveTurnIdsByThreadId.delete(threadId);
+      desktopLiveLifecycleByThreadId.delete(threadId);
+      normalizedLiveIndexesByThreadId.delete(threadId);
+      normalizedReviewFingerprintsByThreadId.delete(threadId);
+      conversationProjector.remove(threadId);
+      syncProjectedActions(threadId, []);
+      notifyActivityRemoval(threadId, "archived");
+    }
+    sendApplicationResponse(JSON.stringify({
+      method: envelope.method === "thread-archived" ? "thread/archived" : "thread/unarchived",
+      params: {
+        threadId,
+        conversationId: threadId,
+        cwd: readString(params.cwd),
+        remodexDesktopMirror: true,
+        remodexDesktopIpcMirror: true,
+        remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+      },
+    }));
   }
 
   function desktopRouteForResponse(message) {
@@ -204,18 +2337,19 @@ function createDesktopIpcActionFollower({
       return;
     }
 
-    ipc.sendRequest(payload.method, payload.params)
+    ipc.sendRequest(payload.method, payload.params, {
+      targetClientId: confirmedDesktopOwnerClientIdsByThreadId.get(route.threadId),
+    })
       .then(() => {
         pendingRoutesByRequestId.delete(route.requestId);
-        sendApplicationResponse(JSON.stringify({
-          method: "serverRequest/resolved",
-          params: {
-            threadId: route.threadId,
-            requestId: route.requestId,
-          },
-        }));
+        sendApplicationResponse(JSON.stringify(
+          projectedResolvedNotification(route.threadId, route.desktopRequestId)
+        ));
       })
       .catch((error) => {
+        if (/no-client-found|client-disconnected/.test(readString(error?.message))) {
+          confirmedDesktopOwnerClientIdsByThreadId.delete(route.threadId);
+        }
         console.warn(`${logPrefix} desktop action reply failed for ${route.threadId}: ${error.message}`);
         sendApplicationResponse(JSON.stringify({
           id: responseMessage.id,
@@ -227,6 +2361,298 @@ function createDesktopIpcActionFollower({
       });
   }
 
+  function buildDesktopFollowerRoute(message) {
+    const requestId = requestIdKey(message?.id);
+    if (!requestId) {
+      return null;
+    }
+    const method = readString(message?.method);
+    const params = message?.params && typeof message.params === "object" && !Array.isArray(message.params)
+      ? message.params
+      : {};
+    const threadId = readThreadId(params);
+    if (!threadId) {
+      return null;
+    }
+
+    if (method === "thread/settings/update") {
+      const threadSettings = normalizeDesktopRequestPermissions(normalizeThreadSettingsUpdate(params));
+      return {
+        threadId,
+        method: "thread-follower-update-thread-settings",
+        params: { conversationId: threadId, threadSettings },
+      };
+    }
+    if (method === "turn/start") {
+      return {
+        threadId,
+        method: "thread-follower-start-turn",
+        params: { conversationId: threadId },
+        senderRequestId: requestId,
+        turnStartParams: params,
+      };
+    }
+    if (method === "turn/steer") {
+      const input = normalizeDesktopInputEntries(params.input);
+      const state = rawStatesByThreadId.get(threadId);
+      const cwd = readString(state?.cwd) || readString(state?.current_working_directory) || null;
+      const clientUserMessageId = readString(params.clientUserMessageId) || requestId;
+      return {
+        threadId,
+        method: "thread-follower-steer-turn",
+        params: {
+          conversationId: threadId,
+          input,
+          ...Object.fromEntries(["clientUserMessageId", "additionalContext", "toolOutput"].filter((key) => hasOwn(params, key)).map((key) => [key, cloneJSON(params[key])])),
+          clientUserMessageId,
+          // Desktop's steerTurn reads restoreMessage.cwd and .context before
+          // forwarding to app-server. Without it, the follower request throws.
+          restoreMessage: {
+            id: clientUserMessageId,
+            text: visibleUserPromptFromInputEntries(input),
+            cwd,
+            context: {
+              workspaceRoots: cwd ? [cwd] : [],
+              commentAttachments: [],
+            },
+            createdAt: now(),
+          },
+          expectedTurnId: readString(params.expectedTurnId) || readString(params.expected_turn_id),
+        },
+      };
+    }
+    if (method === "turn/interrupt") {
+      return {
+        threadId,
+        method: "thread-follower-interrupt-turn",
+        params: {
+          conversationId: threadId,
+          mode: "user-stop",
+          expectedTurnId: readString(params.turnId) || readString(params.turn_id),
+        },
+      };
+    }
+    if (method === "thread/compact/start") {
+      return {
+        threadId,
+        method: "thread-follower-compact-thread",
+        params: {
+          conversationId: threadId,
+        },
+      };
+    }
+
+    return null;
+  }
+
+  function submitDesktopFollowerRequest(route, originalMessage) {
+    let requestPhase = route.method;
+    const startedAt = now();
+    const alreadyDesktopRoutable = isDesktopRoutableThread(route.threadId);
+    // Lock this thread to the Desktop route while the request is queued or in
+    // flight. A second phone mutation must not escape to the local app-server
+    // just because the ownership probe expires or IPC disconnects in between.
+    desktopMutationRiskThreadIds.add(route.threadId);
+    enqueueMutation(route.threadId, async () => {
+      if (liveOwnerThreadIds.has(route.threadId) || isLocallyOwnedThread(route.threadId)) {
+        return { forwardLocally: true };
+      }
+      const revisionBefore = runtimeSettingsStore?.get?.(route.threadId)?.revision;
+      const resolvedRequest = await resolveFollowerRequest(route);
+      if (liveOwnerThreadIds.has(route.threadId) || isLocallyOwnedThread(route.threadId)) {
+        return { forwardLocally: true };
+      }
+      if (route.method === "thread-follower-start-turn") {
+        // A rejected settings update does not relinquish the Desktop writer.
+        // Propagate it without turning a timeout into local delivery failure.
+        try {
+          requestPhase = "thread-follower-update-thread-settings";
+          await syncDesktopOwnerRuntimeSettings(route.threadId, resolvedRequest.turnStartParams);
+        } catch (error) {
+          // Failure to deliver settings does not prove that a turn sent locally
+          // would be safe. Only the start-turn route can authorize that fallback.
+          throw new Error(error.message, { cause: error });
+        }
+      }
+      requestPhase = route.method;
+      return {
+        resolvedRequest,
+        revisionBefore,
+        result: await ipc.sendRequest(route.method, resolvedRequest.params, {
+          targetClientId: confirmedDesktopOwnerClientIdsByThreadId.get(route.threadId),
+        }),
+      };
+    })
+      .then(({ resolvedRequest, revisionBefore, result, forwardLocally }) => {
+        if (forwardLocally) {
+          desktopMutationRiskThreadIds.delete(route.threadId);
+          forwardToLocalCodex?.(JSON.stringify(originalMessage));
+          return;
+        }
+        const currentSettings = runtimeSettingsStore?.get?.(route.threadId);
+        const receivedOwnerSettings = currentSettings && currentSettings.revision !== revisionBefore;
+        let appServerResult = appServerResultForFollowerRequest(route.method, result);
+        if (route.method === "thread-follower-update-thread-settings") {
+          const settings = receivedOwnerSettings ? currentSettings
+            : runtimeSettingsStore?.commit?.(route.threadId, route.params.threadSettings, { source: "phone" });
+          appServerResult = { runtimeSettings: settings || null };
+        }
+        if (route.method === "thread-follower-start-turn" && !receivedOwnerSettings) {
+          commitPhoneRuntimeSettings(
+            route.threadId,
+            resolvedRequest.turnStartParams,
+            readTurnIdFromAppServerResult(appServerResult)
+          );
+        }
+        sendApplicationResponse(JSON.stringify({
+          id: originalMessage.id,
+          result: appServerResult,
+        }));
+      })
+      .catch((error) => {
+        if (/no-client-found|client-disconnected/.test(readString(error?.message))) {
+          confirmedDesktopOwnerClientIdsByThreadId.delete(route.threadId);
+        }
+        console.warn(`${logPrefix} desktop follower request failed method=${requestPhase} elapsedMs=${now() - startedAt}: ${error.message}`);
+        // Only rerun the request locally when we know Desktop never received it.
+        // Timeouts and explicit remote errors stay errors: the turn may already be
+        // running on Desktop, and executing it again locally would duplicate it.
+        const desktopOwnerStillKnown = alreadyDesktopRoutable
+          || rawStatesByThreadId.has(route.threadId)
+          || desktopOwnedByProbeThreadIds.has(route.threadId)
+          || desktopOriginThreadIds.has(route.threadId);
+        if (typeof forwardToLocalCodex === "function"
+          && isDeliveryFailureError(error)
+          && route.method !== "thread-follower-update-thread-settings"
+          && !desktopOwnerStillKnown) {
+          const threadId = readString(route.threadId) || readString(route.params?.conversationId);
+          if (threadId) {
+            releaseDesktopThreadState(threadId);
+          }
+          forwardToLocalCodex(JSON.stringify(originalMessage));
+          return;
+        }
+        const steer = route.method === "thread-follower-steer-turn";
+        const desktopRejectedSteer = steer && error?.desktopIpcResponse === true;
+        const activeTurnEnded = desktopRejectedSteer
+          && /^Cannot steer conversation \S+ because its active turn already ended$/i.test(readString(error.message));
+        const definitiveStaleSteer = desktopRejectedSteer && isDefinitiveStaleSteerError(error.message);
+        const steerErrorCode = activeTurnEnded ? "desktop_steer_turn_ended"
+          : steer && !definitiveStaleSteer ? "desktop_steer_delivery_unknown" : null;
+        sendApplicationResponse(JSON.stringify({
+          id: originalMessage.id,
+          error: {
+            code: -32000,
+            message: activeTurnEnded ? "The active run ended before this message could steer it."
+              : definitiveStaleSteer ? error.message
+              : "Could not continue this Codex Desktop-owned thread from the phone.",
+            ...(steerErrorCode ? { data: { errorCode: steerErrorCode } } : {}),
+          },
+        }));
+      });
+  }
+
+  function isDefinitiveStaleSteerError(message) {
+    const detail = readString(message);
+    return /\bactiveTurnNotSteerable\b/i.test(detail)
+      || /\bturn is not steerable\b/i.test(detail);
+  }
+
+  function appServerResultForFollowerRequest(method, result) {
+    if ((method === "thread-follower-start-turn" || method === "thread-follower-steer-turn")
+      && result
+      && typeof result === "object"
+      && !Array.isArray(result)
+      && Object.prototype.hasOwnProperty.call(result, "result")) {
+      return result.result ?? null;
+    }
+    return result ?? null;
+  }
+
+  function readTurnIdFromAppServerResult(result) {
+    return readString(result?.turn?.id)
+      || readString(result?.turnId)
+      || readString(result?.turn_id)
+      || "";
+  }
+
+  // Desktop-owned threads build the actual app-server turn from the owner's
+  // local composer state. Passing model/effort only inside start-turn leaves
+  // that state untouched, so Desktop silently starts with its old selection.
+  // Apply the phone's complete runtime choice first, then start the turn.
+  async function syncDesktopOwnerRuntimeSettings(threadId, turnStartParams) {
+    const params = turnStartParams && typeof turnStartParams === "object"
+      ? turnStartParams
+      : {};
+    const patch = runtimeSettingsPatch(params);
+    const threadSettings = {
+      ...(patch.model ? { model: patch.model } : {}),
+      ...(hasOwn(patch, "reasoningEffort") ? { effort: patch.reasoningEffort } : {}),
+      ...(hasOwn(patch, "serviceTier") ? { serviceTier: patch.serviceTier } : {}),
+      ...(params.collaborationMode ? { collaborationMode: cloneJSON(params.collaborationMode) } : {}),
+    };
+    if (Object.keys(threadSettings).length === 0) return;
+    await ipc.sendRequest("thread-follower-update-thread-settings", {
+      conversationId: threadId,
+      threadSettings,
+    }, {
+      targetClientId: confirmedDesktopOwnerClientIdsByThreadId.get(threadId),
+    });
+  }
+
+  function commitPhoneRuntimeSettings(threadId, turnStartParams, turnId) {
+    try {
+      runtimeSettingsStore?.commit?.(threadId, turnStartParams, {
+        source: "phone",
+        turnId,
+      });
+    } catch (error) {
+      console.warn(`${logPrefix} runtime settings persistence failed: ${error.message}`);
+    }
+  }
+
+  // Desktop-followed turn starts must apply the same param normalization as
+  // requests forwarded straight to the local app-server.
+  async function resolveFollowerRequest(route) {
+    if (route.method !== "thread-follower-start-turn") {
+      return {
+        params: route.params,
+        turnStartParams: null,
+      };
+    }
+
+    const normalized = await Promise.resolve(
+      normalizeTurnStartParams(cloneJSON(route.turnStartParams))
+    );
+    const turnStartParams = normalized && typeof normalized === "object" && !Array.isArray(normalized)
+      ? normalized
+      : route.turnStartParams;
+    const request = normalizeDesktopRequestPermissions(cloneJSON(turnStartParams));
+    request.input = normalizeDesktopInputEntries(request.input);
+    if (!readString(request.clientUserMessageId)) {
+      request.clientUserMessageId = route.senderRequestId;
+    }
+    return {
+      params: {
+        ...route.params,
+        turnStart: {
+          request,
+          context: {
+            inheritThreadSettings: true,
+          },
+        },
+      },
+      turnStartParams,
+    };
+  }
+
+  // App-server fills omitted sandbox defaults; Desktop reads these fields before
+  // the request reaches app-server, so its in-memory policy must be complete.
+  function normalizeDesktopRequestPermissions(params) {
+    const sandboxPolicy = normalizeSandboxPolicyCompatibility(params.sandboxPolicy);
+    return sandboxPolicy ? { ...params, sandboxPolicy } : params;
+  }
+
   function queueThreadChange(threadId, change) {
     if (!change || typeof change !== "object") {
       return;
@@ -234,6 +2660,11 @@ function createDesktopIpcActionFollower({
 
     const queuedChanges = queuedChangesByThreadId.get(threadId) || [];
     queuedChanges.push(change);
+    // Patches without a baseline are useless beyond a bound; keep the tail so
+    // memory stays flat while recovery waits for the thread to materialize.
+    if (queuedChanges.length > MAX_QUEUED_CHANGES_PER_THREAD) {
+      queuedChanges.splice(0, queuedChanges.length - MAX_QUEUED_CHANGES_PER_THREAD);
+    }
     queuedChangesByThreadId.set(threadId, queuedChanges);
   }
 
@@ -242,21 +2673,41 @@ function createDesktopIpcActionFollower({
       || rawStatesByThreadId.has(threadId)) {
       return;
     }
+    const recoveryState = baselineRecoveryStateByThreadId.get(threadId) || {
+      attempts: 0,
+      nextAttemptAt: 0,
+    };
+    if (recoveryState.attempts >= MAX_BASELINE_RECOVERY_ATTEMPTS) {
+      // Give up until a snapshot arrives; a fresh snapshot resets this state.
+      return;
+    }
+    if (now() < recoveryState.nextAttemptAt) {
+      return;
+    }
+    recoveryState.attempts += 1;
+    recoveryState.nextAttemptAt = now() + Math.min(
+      BASELINE_RECOVERY_MAX_DELAY_MS,
+      BASELINE_RECOVERY_BASE_DELAY_MS * (2 ** (recoveryState.attempts - 1))
+    );
+    baselineRecoveryStateByThreadId.set(threadId, recoveryState);
 
     recoveringThreadIds.add(threadId);
     Promise.resolve()
       .then(() => readConversationState(threadId))
       .then((baselineState) => {
         if (!baselineState || typeof baselineState !== "object") {
-          recoverThreadBaselineFromQueuedChanges(threadId, null);
           return;
         }
 
+        baselineRecoveryStateByThreadId.delete(threadId);
         recoverThreadBaselineFromQueuedChanges(threadId, baselineState);
       })
       .catch((error) => {
-        console.warn(`${logPrefix} desktop IPC baseline recovery failed for ${threadId}: ${error.message}`);
-        recoverThreadBaselineFromQueuedChanges(threadId, null);
+        if (recoveryState.attempts === 1
+          || recoveryState.attempts === MAX_BASELINE_RECOVERY_ATTEMPTS) {
+          console.warn(`${logPrefix} desktop IPC baseline recovery failed for ${threadId} (attempt ${recoveryState.attempts}/${MAX_BASELINE_RECOVERY_ATTEMPTS}): ${error.message}`);
+        }
+        // Keep queued changes: a later attempt or snapshot may still recover.
       })
       .finally(() => {
         recoveringThreadIds.delete(threadId);
@@ -278,37 +2729,109 @@ function createDesktopIpcActionFollower({
     }
 
     rawStatesByThreadId.set(threadId, nextState);
-    syncProjectedAssistantDeltas(threadId, baselineState, nextState);
+    rawStateUpdatedAtByThreadId.set(threadId, now());
+    rebuildNormalizedLiveIndex(threadId, nextState);
+    notifyActivityState(threadId, nextState);
+    if (baselineState && typeof baselineState === "object"
+      && !backgroundOnlyThreadIds.has(threadId)) {
+      const liveState = boundedDesktopLiveState(
+        baselineState,
+        now(),
+        projectedLiveActiveTurnIdsByThreadId.get(threadId) || new Set(),
+        createNormalizedLiveIndex(baselineState)
+      );
+      conversationProjector.seed(threadId, liveState);
+      rememberDesktopLiveProjection(threadId, liveState);
+    }
+    if (backgroundOnlyThreadIds.has(threadId)) {
+      syncBackgroundThreadLifecycle(threadId, baselineState, nextState);
+    } else {
+      syncProjectedConversationState(threadId, nextState);
+    }
     syncProjectedActions(threadId, projectPendingDesktopActions(threadId, nextState));
-  }
-
-  function syncProjectedAssistantDeltas(threadId, previousState, nextState) {
-    const previousTexts = assistantMessageTextsByThreadId.get(threadId);
-    if (!previousTexts && !previousState) {
-      assistantMessageTextsByThreadId.set(threadId, snapshotAssistantMessageTexts(nextState));
-      return;
-    }
-
-    const notifications = projectDesktopAssistantDeltaNotifications(
-      threadId,
-      previousState,
-      nextState,
-      previousTexts || snapshotAssistantMessageTexts(previousState)
-    );
-    if (notifications.length === 0) {
-      assistantMessageTextsByThreadId.set(threadId, snapshotAssistantMessageTexts(nextState));
-      return;
-    }
-
-    for (const notification of notifications) {
-      sendApplicationResponse(JSON.stringify(notification));
-    }
-    assistantMessageTextsByThreadId.set(threadId, snapshotAssistantMessageTexts(nextState));
+    releaseHeldFollowerRequests(threadId, { toDesktop: true });
   }
 
   return {
     observeInbound,
+    observeThreadListResponse,
+    observeThreadMetadata,
     stopAll,
+    isLocallyAcquiredThread(threadId) {
+      return locallyAcquiredThreadIds.has(readString(threadId));
+    },
+    claimNewLocalThread(threadId) {
+      const normalizedThreadId = readString(threadId);
+      if (!normalizedThreadId) return false;
+      locallyAcquiredThreadIds.add(normalizedThreadId);
+      releaseDesktopThreadState(normalizedThreadId);
+      return true;
+    },
+    releaseLocallyAcquiredThread(threadId) {
+      const normalizedThreadId = readString(threadId);
+      if (!locallyAcquiredThreadIds.has(normalizedThreadId)) return false;
+      removeDesktopThreadState(normalizedThreadId);
+      return true;
+    },
+    // True while this thread has live Desktop-owned IPC state mirrored to the
+    // phone; used to keep fallback mirrors (rollout tail) silent.
+    hasLiveThreadState(threadId) {
+      const normalizedThreadId = readString(threadId);
+      if (pendingSnapshotsByThreadId.has(normalizedThreadId)) {
+        // A debounced snapshot is an in-flight authoritative Desktop update.
+        // Do not briefly wake rollout between IPC patches and duplicate rows.
+        return true;
+      }
+      const rawState = rawStatesByThreadId.get(normalizedThreadId);
+      if (!rawState) {
+        return false;
+      }
+      const liveState = boundedDesktopLiveStateForThread(normalizedThreadId, rawState);
+      if (!Array.isArray(liveState.turns) || liveState.turns.length === 0) {
+        return false;
+      }
+      const thread = projectDesktopConversationStateToThread(normalizedThreadId, liveState, { now });
+      if (hasActiveProjectedTurn(thread)
+        && isRawStateStaleForActiveRead(normalizedThreadId)
+        && !hasResponsiveDesktopIpc()) {
+        staleYieldedThreadIds.add(normalizedThreadId);
+        return false;
+      }
+      return true;
+    },
+    // Fallback rollout mirroring must only yield to a Desktop snapshot that
+    // has actually moved recently. Keep hasLiveThreadState's broader meaning
+    // for callers that need cached/idle Desktop state, but expose this explicit
+    // lease check for source arbitration.
+    hasFreshLiveThreadState(threadId, { fallbackActivityAt = 0, probeFallbackActivity = false } = {}) {
+      const normalizedThreadId = readString(threadId);
+      if (pendingSnapshotsByThreadId.has(normalizedThreadId)) {
+        return Boolean(normalizedThreadId);
+      }
+      const rawState = rawStatesByThreadId.get(normalizedThreadId);
+      if (!rawState) {
+        return false;
+      }
+      const liveState = boundedDesktopLiveStateForThread(normalizedThreadId, rawState);
+      if (!Array.isArray(liveState.turns) || liveState.turns.length === 0) {
+        return false;
+      }
+      const thread = projectDesktopConversationStateToThread(normalizedThreadId, liveState, { now });
+      // A connected Desktop stream with an explicitly active projected turn is
+      // authoritative during a genuinely quiet tool/reasoning interval. Once
+      // its cached state is stale, yield only when the rollout file proves that
+      // newer per-thread activity exists; connection state alone is not enough.
+      if (hasActiveProjectedTurn(thread)) {
+        const updatedAt = rawStateUpdatedAtByThreadId.get(normalizedThreadId) || 0;
+        const hasNewerFallbackActivity = Number(fallbackActivityAt) > updatedAt;
+        // Let a stale stream check file metadata before deciding who emits.
+        // The subsequent check with the real mtime still protects quiet work.
+        return hasResponsiveDesktopIpc()
+          && (!isRawStateStaleForActiveRead(normalizedThreadId)
+            || (!probeFallbackActivity && !hasNewerFallbackActivity));
+      }
+      return !isRawStateStaleForActiveRead(normalizedThreadId);
+    },
   };
 }
 
@@ -320,21 +2843,40 @@ function createDesktopIpcClient({
   requestTimeoutMs,
   logPrefix,
   onEnvelope,
+  onConnected,
   onDisconnect,
 }) {
+  const resolveSocketPaths = toSocketPathCandidatesResolver(socketPath);
   let socket = null;
   let clientId = "";
   let isConnecting = false;
-  let readBuffer = Buffer.alloc(0);
+  let lastActivityAt = 0;
+  let remainingSocketPaths = [];
   const pendingRequests = new Map();
+  const pendingDiscoveries = new Map();
+  const frameReader = createFrameReader({
+    onFrame: (envelope) => dispatchEnvelope(envelope),
+    onOverflow: () => close(),
+  });
 
   function ensureConnected() {
     if (socket || isConnecting) {
       return;
     }
 
+    remainingSocketPaths = resolveSocketPaths();
+    connectNextSocket();
+  }
+
+  function connectNextSocket() {
+    const nextSocketPath = remainingSocketPaths.shift();
+    if (!nextSocketPath) {
+      isConnecting = false;
+      return;
+    }
+
     isConnecting = true;
-    const nextSocket = netModule.createConnection(socketPath);
+    const nextSocket = netModule.createConnection(nextSocketPath);
     socket = nextSocket;
 
     nextSocket.on("connect", () => {
@@ -342,6 +2884,7 @@ function createDesktopIpcClient({
       sendRequest("initialize", { clientType: "remodex-bridge" })
         .then((result) => {
           clientId = readString(result?.clientId) || clientId;
+          onConnected?.(clientId);
         })
         .catch((error) => {
           console.warn(`${logPrefix} desktop IPC initialize failed: ${error.message}`);
@@ -349,35 +2892,50 @@ function createDesktopIpcClient({
         });
     });
     nextSocket.on("data", handleData);
-    nextSocket.on("close", handleClose);
+    nextSocket.on("close", () => handleClose(nextSocket));
     nextSocket.on("error", (error) => {
+      if ((error?.code === "ENOENT" || error?.code === "ECONNREFUSED")
+          && remainingSocketPaths.length > 0) {
+        retryNextSocket(nextSocket);
+        return;
+      }
       if (error?.code !== "ENOENT" && error?.code !== "ECONNREFUSED") {
         console.warn(`${logPrefix} desktop IPC connection failed: ${error.message}`);
       }
     });
   }
 
-  function sendRequest(method, params) {
+  function retryNextSocket(failedSocket) {
+    if (socket === failedSocket) {
+      socket = null;
+    }
+    isConnecting = false;
+    frameReader.reset();
+    failedSocket.destroy();
+    connectNextSocket();
+  }
+
+  function sendRequest(method, params, { targetClientId = "", timeoutMs = requestTimeoutMs, returnEnvelope = false } = {}) {
     ensureConnected();
     if (!socket || socket.destroyed) {
-      return Promise.reject(new Error("Desktop IPC is not connected."));
+      return Promise.reject(markDeliveryFailureError(new Error("Desktop IPC is not connected.")));
     }
 
     const requestId = `remodex-${now().toString(36)}-${Math.random().toString(16).slice(2)}`;
-    const envelope = {
-      type: "request",
+    const envelope = buildIpcRequestEnvelope({
       requestId,
-      sourceClientId: method === "initialize" ? "initializing-client" : clientId || "remodex-bridge",
-      version: METHOD_VERSION_BY_NAME.get(method) || 1,
       method,
-      params: params || {},
-    };
+      params,
+      clientId,
+      initializing: method === "initialize",
+    });
+    if (targetClientId) envelope.targetClientId = targetClientId;
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         pendingRequests.delete(requestId);
         reject(new Error(`Desktop IPC request timed out: ${method}`));
-      }, requestTimeoutMs);
+      }, timeoutMs);
       timeout.unref?.();
 
       pendingRequests.set(requestId, {
@@ -385,6 +2943,7 @@ function createDesktopIpcClient({
         resolve,
         reject,
         timeout,
+        returnEnvelope,
       });
       writeFrame(socket, JSON.stringify(envelope), (error) => {
         if (!error) {
@@ -393,30 +2952,72 @@ function createDesktopIpcClient({
 
         clearTimeout(timeout);
         pendingRequests.delete(requestId);
+        // socket.write may have delivered a partial or complete frame before
+        // reporting failure. Its callback cannot authorize a second writer.
         reject(error);
       });
     });
   }
 
-  function handleData(chunk) {
-    readBuffer = Buffer.concat([readBuffer, chunk]);
-    while (readBuffer.length >= FRAME_HEADER_BYTES) {
-      const frameLength = readBuffer.readUInt32LE(0);
-      if (frameLength > MAX_FRAME_BYTES) {
-        close();
-        return;
-      }
-      if (readBuffer.length < FRAME_HEADER_BYTES + frameLength) {
-        return;
-      }
-
-      const payload = readBuffer.slice(FRAME_HEADER_BYTES, FRAME_HEADER_BYTES + frameLength).toString("utf8");
-      readBuffer = readBuffer.slice(FRAME_HEADER_BYTES + frameLength);
-      const envelope = safeParseJSON(payload);
-      if (envelope) {
-        dispatchEnvelope(envelope);
-      }
+  // Resolves true/false from a discovery answer, or null when nobody answers in
+  // time, so callers can fall back to their own timers.
+  function sendDiscoveryRequest(request, timeoutMs) {
+    ensureConnected();
+    if (!socket || socket.destroyed) {
+      return Promise.resolve(null);
     }
+
+    const requestId = `remodex-discovery-${now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingDiscoveries.delete(requestId);
+        resolve(null);
+      }, timeoutMs);
+      timeout.unref?.();
+
+      pendingDiscoveries.set(requestId, {
+        resolve,
+        timeout,
+      });
+      writeEnvelope({
+        type: "client-discovery-request",
+        requestId,
+        request,
+      }, (error) => {
+        if (!error) {
+          return;
+        }
+        clearTimeout(timeout);
+        pendingDiscoveries.delete(requestId);
+        resolve(null);
+      });
+    });
+  }
+
+  function sendBroadcast(method, params, { targetClientIds } = {}) {
+    ensureConnected();
+    if (!socket || socket.destroyed || !clientId) {
+      return false;
+    }
+    const envelope = {
+      type: "broadcast",
+      method,
+      sourceClientId: clientId,
+      params: params || {},
+      version: METHOD_VERSION_BY_NAME.get(method) || 1,
+    };
+    if (Array.isArray(targetClientIds) && targetClientIds.length > 0) {
+      envelope.targetClientIds = targetClientIds;
+    }
+    writeEnvelope(envelope);
+    return true;
+  }
+
+  function handleData(chunk) {
+    if (chunk.length > 0) {
+      lastActivityAt = now();
+    }
+    frameReader.push(chunk);
   }
 
   function dispatchEnvelope(envelope) {
@@ -431,6 +3032,17 @@ function createDesktopIpcClient({
       return;
     }
 
+    if (envelope.type === "client-discovery-response") {
+      const requestId = requestIdKey(envelope.requestId);
+      const pendingDiscovery = requestId ? pendingDiscoveries.get(requestId) : null;
+      if (pendingDiscovery) {
+        pendingDiscoveries.delete(requestId);
+        clearTimeout(pendingDiscovery.timeout);
+        pendingDiscovery.resolve(Boolean(envelope.response?.canHandle));
+      }
+      return;
+    }
+
     if (envelope.type === "response") {
       const requestId = requestIdKey(envelope.requestId);
       const waiter = requestId ? pendingRequests.get(requestId) : null;
@@ -441,27 +3053,43 @@ function createDesktopIpcClient({
       pendingRequests.delete(requestId);
       clearTimeout(waiter.timeout);
       if (envelope.resultType === "error") {
-        waiter.reject(new Error(envelope.error || `Desktop IPC request failed: ${waiter.method}`));
+        const detail = typeof envelope.error === "string"
+          ? envelope.error : readString(envelope.error?.message);
+        const error = new Error(detail || `Desktop IPC request failed: ${waiter.method}`);
+        error.desktopIpcResponse = true;
+        // Desktop's router and a renderer handling a request can both reply
+        // "no-client-found". The error text cannot prove this mutation was
+        // never delivered, so replaying it in the local app-server is unsafe.
+        waiter.reject(error);
         return;
       }
 
-      waiter.resolve(envelope.result ?? null);
+      waiter.resolve(waiter.returnEnvelope ? envelope : envelope.result ?? null);
       return;
     }
 
     onEnvelope(envelope);
   }
 
-  function handleClose() {
+  function handleClose(closedSocket) {
+    if (socket && socket !== closedSocket) {
+      return;
+    }
     socket = null;
     clientId = "";
     isConnecting = false;
-    readBuffer = Buffer.alloc(0);
+    lastActivityAt = 0;
+    frameReader.reset();
     for (const waiter of pendingRequests.values()) {
       clearTimeout(waiter.timeout);
       waiter.reject(new Error("Desktop IPC connection closed."));
     }
     pendingRequests.clear();
+    for (const pendingDiscovery of pendingDiscoveries.values()) {
+      clearTimeout(pendingDiscovery.timeout);
+      pendingDiscovery.resolve(null);
+    }
+    pendingDiscoveries.clear();
     onDisconnect();
   }
 
@@ -485,8 +3113,21 @@ function createDesktopIpcClient({
   }
 
   return {
+    get clientId() {
+      return clientId;
+    },
     ensureConnected,
+    isConnected() {
+      return Boolean(socket && !socket.destroyed && clientId);
+    },
+    hasRecentActivity(maxAgeMs) {
+      return Boolean(socket && !socket.destroyed && clientId)
+        && lastActivityAt > 0
+        && now() - lastActivityAt <= Math.max(0, Number(maxAgeMs) || 0);
+    },
     sendRequest,
+    sendDiscoveryRequest,
+    sendBroadcast,
     close,
   };
 }
@@ -495,6 +3136,22 @@ function desktopFollowerPayloadForResponse(route, responseMessage) {
   const method = REPLY_METHOD_BY_ACTION_METHOD.get(route.method);
   if (!method || responseMessage?.error) {
     return null;
+  }
+
+  if (route.method === "item/permissions/requestApproval") {
+    const result = responseMessage?.result;
+    if (!result?.permissions || typeof result.permissions !== "object"
+      || Array.isArray(result.permissions) || !["turn", "session"].includes(result.scope)) {
+      return null;
+    }
+    return {
+      method,
+      params: {
+        conversationId: route.threadId,
+        requestId: route.desktopRequestId ?? route.requestId,
+        response: cloneJSON(result),
+      },
+    };
   }
 
   if (route.method === "item/tool/requestUserInput") {
@@ -507,7 +3164,7 @@ function desktopFollowerPayloadForResponse(route, responseMessage) {
       method,
       params: {
         conversationId: route.threadId,
-        requestId: route.requestId,
+        requestId: route.desktopRequestId ?? route.requestId,
         response: {
           answers,
         },
@@ -515,7 +3172,7 @@ function desktopFollowerPayloadForResponse(route, responseMessage) {
     };
   }
 
-  const decision = desktopApprovalDecisionForResponse(route.method, responseMessage?.result);
+  const decision = readString(responseMessage?.result?.decision);
   if (!APPROVAL_DECISIONS.has(decision)) {
     return null;
   }
@@ -524,51 +3181,10 @@ function desktopFollowerPayloadForResponse(route, responseMessage) {
     method,
     params: {
       conversationId: route.threadId,
-      requestId: route.requestId,
+      requestId: route.desktopRequestId ?? route.requestId,
       decision,
     },
   };
-}
-
-function desktopApprovalDecisionForResponse(method, result) {
-  const explicitDecision = readString(result?.decision);
-  if (explicitDecision) {
-    return explicitDecision;
-  }
-
-  if (method !== "item/permissions/requestApproval") {
-    return "";
-  }
-
-  // Permission approvals use a grant payload on app-server, while Desktop IPC
-  // currently exposes only decision-style follower replies.
-  return hasGrantedPermission(result?.permissions) ? "accept" : "decline";
-}
-
-function hasGrantedPermission(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-
-  if (Object.keys(value).length === 0) {
-    return false;
-  }
-
-  return Object.values(value).some((entry) => {
-    if (entry == null) {
-      return false;
-    }
-    if (typeof entry === "boolean") {
-      return entry;
-    }
-    if (Array.isArray(entry)) {
-      return entry.length > 0;
-    }
-    if (typeof entry === "object") {
-      return Object.keys(entry).length > 0;
-    }
-    return true;
-  });
 }
 
 function projectPendingDesktopActions(threadId, conversationState) {
@@ -685,11 +3301,15 @@ function projectPendingDesktopAction(threadId, request) {
   }
 
   return {
-    id: requestId,
+    // Keep the original JSON-RPC scalar for the relay request and the Desktop
+    // follower reply. requestIdKey is only an internal map/deduplication key.
+    id: request.id,
     method,
     params: {
       ...params,
       remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+      remodexDesktopMirror: true,
+      remodexDesktopIpcMirror: true,
       threadId: readString(params.threadId) || readString(params.thread_id) || threadId,
     },
   };
@@ -713,15 +3333,836 @@ function applyConversationStateChange(previousState, change) {
     return previousState || null;
   }
 
-  const nextState = cloneJSON(previousState);
+  // Copy-on-write: clone only the nodes along each patch path and share the
+  // rest with the previous state. Besides skipping an O(state) deep clone per
+  // broadcast, preserving the identity of untouched turns lets the projector
+  // reuse their cached projection instead of re-diffing them.
+  let nextState = shallowCloneNode(previousState);
+  const clonedNodes = new Set([nextState]);
   for (const patch of patches) {
-    applyImmerPatch(nextState, patch);
+    if (Array.isArray(patch?.path) && patch.path.length === 0) {
+      const op = readString(patch?.op).toLowerCase();
+      if (op === "add" || op === "replace") {
+        nextState = cloneJSON(patch.value);
+        clonedNodes.clear();
+        clonedNodes.add(nextState);
+        continue;
+      }
+      return null;
+    }
+    if (!applyImmerPatchCopyOnWrite(nextState, patch, clonedNodes)) {
+      return null;
+    }
   }
   return nextState;
 }
 
+function shallowCloneNode(value) {
+  return Array.isArray(value) ? value.slice() : { ...value };
+}
+
 function isPatchChange(change) {
   return change?.type === "patches" || change?.type === "Patches";
+}
+
+function isSnapshotChange(change) {
+  return change?.type === "snapshot" || change?.type === "Snapshot";
+}
+
+function normalizedTurnStore(state) {
+  const turnHistory = state?.turnHistory ?? state?.turn_history;
+  const history = turnHistory?.history;
+  const entities = history?.entitiesByKey ?? history?.entities_by_key;
+  if (!entities || typeof entities !== "object" || Array.isArray(entities)) {
+    return null;
+  }
+  return { history, entities };
+}
+
+function hasNormalizedTurnStore(state) {
+  return Boolean(normalizedTurnStore(state));
+}
+
+function normalizedTurnIdForEntity(entityKey, entity) {
+  const keyedTurnId = entityKey.startsWith("turn:")
+    ? readString(entityKey.slice("turn:".length))
+    : "";
+  const entityTurnId = readString(entity?.turnId) || readString(entity?.turn_id);
+  const looksLikeTurn = Boolean(keyedTurnId)
+    || (Boolean(entityTurnId) && (entity?.status != null || Array.isArray(entity?.items)));
+  return looksLikeTurn ? keyedTurnId || entityTurnId : "";
+}
+
+function createNormalizedLiveIndex(state) {
+  const store = normalizedTurnStore(state);
+  if (!store) {
+    return null;
+  }
+  const rawTurns = Array.isArray(state?.turns) ? state.turns : [];
+  const rawTurnIds = new Set();
+  const rawIndexByTurnId = new Map();
+  for (let rawIndex = 0; rawIndex < rawTurns.length; rawIndex += 1) {
+    const rawTurnId = turnIdOf(rawTurns[rawIndex]);
+    if (rawTurnId) {
+      rawTurnIds.add(rawTurnId);
+      rawIndexByTurnId.set(rawTurnId, rawIndex);
+    }
+  }
+  const turnIdByEntityKey = new Map();
+  const normalizedTurnIds = new Set();
+  for (const [entityKey, entity] of Object.entries(store.entities)) {
+    if (!entity || typeof entity !== "object") {
+      continue;
+    }
+    const turnId = normalizedTurnIdForEntity(entityKey, entity);
+    if (!turnId) {
+      continue;
+    }
+    turnIdByEntityKey.set(entityKey, turnId);
+    normalizedTurnIds.add(turnId);
+  }
+
+  const entries = [];
+  const entryIndexByTurnId = new Map();
+  const appendEntityKey = (key) => {
+    const entityKey = readString(key);
+    const turnId = entityKey ? turnIdByEntityKey.get(entityKey) : "";
+    if (!turnId || entryIndexByTurnId.has(turnId)) {
+      return;
+    }
+    entryIndexByTurnId.set(turnId, entries.length);
+    entries.push({ id: turnId, entityKey, rawIndex: rawIndexByTurnId.get(turnId) ?? null });
+  };
+  for (const island of Array.isArray(store.history?.islands) ? store.history.islands : []) {
+    for (const entry of Array.isArray(island?.entries) ? island.entries : []) {
+      appendEntityKey(readString(entry?.value) || readString(entry?.key));
+    }
+  }
+  if (entries.length === 0) {
+    for (const entityKey of turnIdByEntityKey.keys()) {
+      appendEntityKey(entityKey);
+    }
+  }
+  for (let rawIndex = 0; rawIndex < rawTurns.length; rawIndex += 1) {
+    const rawTurn = rawTurns[rawIndex];
+    if (!rawTurn || typeof rawTurn !== "object") {
+      continue;
+    }
+    const rawTurnId = turnIdOf(rawTurn) || `ipc-turn-${entries.length}`;
+    if (entryIndexByTurnId.has(rawTurnId)) {
+      continue;
+    }
+    entryIndexByTurnId.set(rawTurnId, entries.length);
+    entries.push({
+      id: rawTurnId,
+      entityKey: null,
+      rawIndex: rawIndexByTurnId.get(rawTurnId) ?? rawIndex,
+    });
+  }
+
+  const index = {
+    entries,
+    entryIndexByTurnId,
+    turnIdByEntityKey,
+    activeTurnIds: new Set(),
+    pendingReviewOverlays: [],
+    hasHistoryOutsideRawTurns: Array.from(normalizedTurnIds).some(
+      (turnId) => !rawTurnIds.has(turnId)
+    ),
+  };
+  for (const entry of entries) {
+    const turn = resolveIndexedTurn(state, entry);
+    if (turn && isActiveRawTurn(turn)) {
+      index.activeTurnIds.add(entry.id);
+    }
+    if (turn && entry.rawIndex == null) {
+      for (const item of Array.isArray(turn.items) ? turn.items : []) {
+        if (normalizeToken(item?.type) === "automaticapprovalreview") {
+          const overlay = { turnId: entry.id, item };
+          index.pendingReviewOverlays.push(overlay);
+        }
+      }
+    }
+  }
+  return index;
+}
+
+function normalizedLiveIndexNeedsRebuild(change) {
+  for (const patch of Array.isArray(change?.patches) ? change.patches : []) {
+    const path = Array.isArray(patch?.path) ? patch.path : [];
+    if (path.length === 0) {
+      return true;
+    }
+    if (path[0] === "turns") {
+      if (path.length <= 2 || path[2] === "id" || path[2] === "turnId" || path[2] === "turn_id") {
+        return true;
+      }
+      continue;
+    }
+    if (path[0] !== "turnHistory" && path[0] !== "turn_history") {
+      continue;
+    }
+    if (path.length <= 3 || path[1] !== "history") {
+      return true;
+    }
+    if (path[2] === "islands") {
+      return true;
+    }
+    if (path[2] !== "entitiesByKey" && path[2] !== "entities_by_key") {
+      continue;
+    }
+    if (path.length <= 4 || path[4] === "turnId" || path[4] === "turn_id" || path[4] === "id") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function refreshTouchedNormalizedActiveTurns(index, state, change) {
+  const touchedTurnIds = new Set();
+  const touchedReviewTurnIds = new Set();
+  for (const patch of Array.isArray(change?.patches) ? change.patches : []) {
+    const path = Array.isArray(patch?.path) ? patch.path : [];
+    if (path[0] === "turns" && Number.isInteger(path[1]) && path[2] === "status") {
+      const rawTurn = Array.isArray(state?.turns) ? state.turns[path[1]] : null;
+      const turnId = turnIdOf(rawTurn);
+      if (turnId) {
+        touchedTurnIds.add(turnId);
+      }
+      continue;
+    }
+    if ((path[0] === "turnHistory" || path[0] === "turn_history")
+      && path[1] === "history"
+      && (path[2] === "entitiesByKey" || path[2] === "entities_by_key")
+      && path[4] === "status") {
+      const turnId = index.turnIdByEntityKey.get(readString(path[3]));
+      if (turnId) {
+        touchedTurnIds.add(turnId);
+      }
+    }
+    if ((path[0] === "turnHistory" || path[0] === "turn_history")
+      && path[1] === "history"
+      && (path[2] === "entitiesByKey" || path[2] === "entities_by_key")
+      && path[4] === "items") {
+      const turnId = index.turnIdByEntityKey.get(readString(path[3]));
+      const entryIndex = turnId ? index.entryIndexByTurnId.get(turnId) : null;
+      const entry = entryIndex == null ? null : index.entries[entryIndex];
+      const turn = entry ? resolveIndexedTurn(state, entry) : null;
+      const item = Number.isInteger(path[5]) && Array.isArray(turn?.items)
+        ? turn.items[path[5]]
+        : null;
+      const isStructuralItemPatch = path.length <= 6 || path[6] === "type";
+      if (turnId && (isStructuralItemPatch
+        || normalizeToken(item?.type) === "automaticapprovalreview")) {
+        touchedReviewTurnIds.add(turnId);
+      }
+    }
+  }
+  for (const turnId of touchedTurnIds) {
+    const entryIndex = index.entryIndexByTurnId.get(turnId);
+    const entry = entryIndex == null ? null : index.entries[entryIndex];
+    const turn = entry ? resolveIndexedTurn(state, entry) : null;
+    if (turn && isActiveRawTurn(turn)) {
+      index.activeTurnIds.add(turnId);
+    } else {
+      index.activeTurnIds.delete(turnId);
+    }
+  }
+  for (const turnId of touchedReviewTurnIds) {
+    const entryIndex = index.entryIndexByTurnId.get(turnId);
+    const entry = entryIndex == null ? null : index.entries[entryIndex];
+    const turn = entry ? resolveIndexedTurn(state, entry) : null;
+    if (!turn || entry?.rawIndex != null) {
+      continue;
+    }
+    for (const item of Array.isArray(turn.items) ? turn.items : []) {
+      if (normalizeToken(item?.type) !== "automaticapprovalreview") {
+        continue;
+      }
+      const overlay = { turnId, item };
+      index.pendingReviewOverlays.push(overlay);
+    }
+  }
+}
+
+function latestActiveRawTurn(state) {
+  const turns = Array.isArray(state?.turns) ? state.turns : [];
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const status = normalizeToken(turns[index]?.status);
+    if (status === "inprogress"
+      || status === "running"
+      || status === "active"
+      || status === "processing") {
+      return backgroundRawTurn(turns[index], index);
+    }
+  }
+  return null;
+}
+
+function boundedDesktopLiveState(
+  state,
+  nowValue = Date.now(),
+  retainedTurnIds = new Set(),
+  normalizedIndex = null
+) {
+  return {
+    ...(state && typeof state === "object" ? state : {}),
+    turns: boundedDesktopLiveTurns(state, nowValue, retainedTurnIds, normalizedIndex),
+  };
+}
+
+function boundedDesktopActivityState(state) {
+  const rawState = state && typeof state === "object" ? state : {};
+  return {
+    title: readString(rawState.title) || readString(rawState.name),
+    cwd: readString(rawState.cwd) || readString(rawState.current_working_directory),
+    threadRuntimeStatus: compactDesktopRuntimeStatus(rawState.threadRuntimeStatus),
+    status: compactDesktopRuntimeStatus(rawState.status),
+    hasUnreadTurn: rawState.hasUnreadTurn ?? rawState.has_unread_turn,
+    unreadMessageCount: rawState.unreadMessageCount ?? rawState.unread_message_count,
+    requests: (Array.isArray(rawState.requests) ? rawState.requests : []).map((request) => ({
+      id: request?.id,
+      method: readString(request?.method),
+      completed: request?.completed === true,
+    })),
+    turns: (Array.isArray(rawState.turns) ? rawState.turns : []).map(compactDesktopActivityTurn),
+  };
+}
+
+function compactDesktopRuntimeStatus(status) {
+  if (status && typeof status === "object" && !Array.isArray(status)) {
+    return {
+      type: readString(status.type),
+      activeFlags: Array.isArray(status.activeFlags) ? status.activeFlags.filter((flag) => (
+        flag === "waitingOnApproval" || flag === "waitingOnUserInput"
+      )) : [],
+    };
+  }
+  return readString(status);
+}
+
+function compactDesktopActivityTurn(turn) {
+  return {
+    id: readString(turn?.id),
+    turnId: readString(turn?.turnId),
+    turn_id: readString(turn?.turn_id),
+    status: readString(turn?.status),
+    error: turn?.error ? true : null,
+    startedAt: finiteTimestamp(turn?.startedAt),
+    started_at: finiteTimestamp(turn?.started_at),
+    completedAt: finiteTimestamp(turn?.completedAt),
+    completed_at: finiteTimestamp(turn?.completed_at),
+    turnStartedAtMs: finiteTimestamp(turn?.turnStartedAtMs),
+    turn_started_at_ms: finiteTimestamp(turn?.turn_started_at_ms),
+    turnCompletedAtMs: finiteTimestamp(turn?.turnCompletedAtMs),
+    turn_completed_at_ms: finiteTimestamp(turn?.turn_completed_at_ms),
+    startedAtMs: finiteTimestamp(turn?.startedAtMs ?? turn?.started_at_ms),
+    completedAtMs: finiteTimestamp(turn?.completedAtMs ?? turn?.completed_at_ms),
+    items: compactLatestActivityItems(turn),
+  };
+}
+
+function compactLatestActivityItems(turn) {
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  // Token patches must not copy the growing item history. A small tail is
+  // enough for a current semantic label; absence remains unknown.
+  for (let index = items.length - 1; index >= Math.max(0, items.length - 32); index -= 1) {
+    const item = items[index];
+    if (!projectSemanticItem(item)) {
+      continue;
+    }
+    return [{
+      id: readString(item?.id),
+      itemId: readString(item?.itemId),
+      item_id: readString(item?.item_id),
+      type: readString(item?.type),
+    }];
+  }
+  return [];
+}
+
+function finiteTimestamp(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function boundedDesktopLiveTurns(
+  state,
+  nowValue = Date.now(),
+  retainedTurnIds = new Set(),
+  normalizedIndex = null
+) {
+  if (normalizedIndex) {
+    return boundedIndexedDesktopLiveTurns(
+      state,
+      normalizedIndex,
+      nowValue,
+      retainedTurnIds
+    );
+  }
+  const orderedTurns = backgroundHistoryTurns(state);
+  if (orderedTurns.length <= 1) {
+    return normalizeBoundedTurnsForRuntime(
+      orderedTurns.map((turn, index) => withStableProjectedTurnId(turn, index)),
+      state,
+      retainedTurnIds
+    );
+  }
+
+  // History is canonical elsewhere. Live projection needs only the newest turn,
+  // fresh parallel work, and turns retained for one terminal diff.
+  const selectedIndexes = new Set([orderedTurns.length - 1]);
+  const freshActiveIndexes = [];
+  for (let index = 0; index < orderedTurns.length; index += 1) {
+    const turn = orderedTurns[index];
+    if (isActiveRawTurn(turn) && isRawTurnActivityFresh(turn, nowValue)) {
+      freshActiveIndexes.push(index);
+    }
+    const turnId = turnIdOf(turn);
+    if (turnId && retainedTurnIds.has(turnId)) {
+      selectedIndexes.add(index);
+    }
+  }
+  // Preserve parallel live work without letting an ancient stale inProgress
+  // entity resurrect itself. Two active turns plus the canonical tail keeps
+  // projection bounded even for multi-gigabyte histories.
+  for (const index of freshActiveIndexes.slice(-2)) {
+    selectedIndexes.add(index);
+  }
+  const selectedTurns = Array.from(selectedIndexes)
+    .sort((left, right) => left - right)
+    .map((index) => withStableProjectedTurnId(orderedTurns[index], index));
+  return normalizeBoundedTurnsForRuntime(selectedTurns, state, retainedTurnIds);
+}
+
+function boundedIndexedDesktopLiveTurns(state, index, nowValue, retainedTurnIds, canonicalActivity = false) {
+  if (index.entries.length === 0) {
+    return [];
+  }
+  const selectedTurnIds = new Set();
+  const tailEntry = index.entries[index.entries.length - 1];
+  if (tailEntry?.id) {
+    selectedTurnIds.add(tailEntry.id);
+  }
+  for (const turnId of retainedTurnIds) {
+    if (index.entryIndexByTurnId.has(turnId)) {
+      selectedTurnIds.add(turnId);
+    }
+  }
+  const freshActiveTurnIds = [];
+  for (const turnId of index.activeTurnIds) {
+    const entryIndex = index.entryIndexByTurnId.get(turnId);
+    if (entryIndex == null) {
+      continue;
+    }
+    const turn = resolveIndexedTurn(state, index.entries[entryIndex]);
+    if (turn && isRawTurnActivityFresh(turn, nowValue)) {
+      freshActiveTurnIds.push(turnId);
+    }
+  }
+  freshActiveTurnIds.sort((left, right) => (
+    index.entryIndexByTurnId.get(left) - index.entryIndexByTurnId.get(right)
+  ));
+  for (const turnId of freshActiveTurnIds.slice(-2)) {
+    selectedTurnIds.add(turnId);
+  }
+  const selectedTurns = Array.from(selectedTurnIds)
+    .map((turnId) => index.entryIndexByTurnId.get(turnId))
+    .filter((entryIndex) => entryIndex != null)
+    .sort((left, right) => left - right)
+    .map((entryIndex) => {
+      const entry = index.entries[entryIndex];
+      const turn = resolveIndexedTurn(state, entry);
+      if (!turn) {
+        return null;
+      }
+      return turnIdOf(turn) || (canonicalActivity && entry.rawIndex != null)
+        ? turn : { ...turn, id: entry.id };
+    })
+    .filter(Boolean);
+  return canonicalActivity ? selectedTurns : normalizeBoundedTurnsForRuntime(selectedTurns, state, retainedTurnIds);
+}
+
+function resolveIndexedTurn(state, entry) {
+  if (entry.rawIndex != null) {
+    return Array.isArray(state?.turns) ? state.turns[entry.rawIndex] : null;
+  }
+  const store = normalizedTurnStore(state);
+  return entry.entityKey && store ? store.entities[entry.entityKey] || null : null;
+}
+
+function turnIdOf(turn) {
+  return readString(turn?.id)
+    || readString(turn?.turnId)
+    || readString(turn?.turn_id);
+}
+
+function withStableProjectedTurnId(turn, fullHistoryIndex) {
+  return turnIdOf(turn)
+    ? turn
+    : { ...turn, id: `ipc-turn-${fullHistoryIndex}` };
+}
+
+function activeDesktopTurnDescriptors(state) {
+  const turns = Array.isArray(state?.turns) ? state.turns : [];
+  const descriptors = [];
+  for (const turn of turns) {
+    if (!isActiveRawTurn(turn)) {
+      continue;
+    }
+    const id = turnIdOf(turn);
+    if (id) {
+      descriptors.push({
+        id,
+        status: readString(turn?.status) || "inProgress",
+        turn,
+      });
+    }
+  }
+  return descriptors;
+}
+
+function desktopLiveTurnLifecycleNotification(method, threadId, turn) {
+  const status = readString(turn?.status) || (method === "turn/started" ? "inProgress" : "completed");
+  return {
+    method,
+    params: {
+      threadId,
+      turnId: turn.id,
+      id: turn.id,
+      status,
+      turn: { id: turn.id, status },
+      remodexDesktopMirror: true,
+      remodexDesktopIpcMirror: true,
+      // Lets a live authoritative start clear a guessed `.stopped` marker that
+      // survived a prior disconnect, even when the chat is already selected.
+      remodexBackgroundDiscovery: method === "turn/started",
+      remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+    },
+  };
+}
+
+function notificationWithTurnIdentityContinuity(notification) {
+  if (notification?.method !== "turn/started") {
+    return notification;
+  }
+  return {
+    ...notification,
+    params: {
+      ...(notification.params || {}),
+      // This is the same logical run re-announced under canonical Desktop IDs,
+      // not a new turn. The phone keeps its recovered-turn viewport ownership.
+      remodexTurnIdentityContinuity: true,
+    },
+  };
+}
+
+function normalizeBoundedTurnsForRuntime(turns, state, retainedTurnIds = new Set()) {
+  if (!isExplicitlyIdleDesktopRuntime(state)) {
+    return turns;
+  }
+  return turns.map((turn) => (
+    isActiveRawTurn(turn) && !retainedTurnIds.has(turnIdOf(turn))
+      ? { ...turn, status: "completed" }
+      : turn
+  ));
+}
+
+function desktopRuntimeStatusToken(state) {
+  return normalizeToken(
+    readString(state?.threadRuntimeStatus?.type)
+      || readString(state?.thread_runtime_status?.type)
+      || readString(state?.runtimeStatus?.type)
+      || readString(state?.runtime_status?.type)
+  );
+}
+
+function isExplicitlyIdleDesktopRuntime(state) {
+  const status = desktopRuntimeStatusToken(state);
+  return status === "idle"
+    || status === "inactive"
+    || status === "completed"
+    || status === "stopped"
+    || status === "notrunning";
+}
+
+function isActiveRawTurn(turn) {
+  const status = normalizeToken(turn?.status);
+  return status === "inprogress"
+    || status === "running"
+    || status === "active"
+    || status === "processing";
+}
+
+function isRawTurnActivityFresh(turn, nowValue) {
+  const startedAt = Number(turn?.turnStartedAtMs ?? turn?.turn_started_at_ms);
+  const durationMs = Number(turn?.durationMs ?? turn?.duration_ms);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) {
+    return false;
+  }
+  const activityAt = Number.isFinite(durationMs) && durationMs >= 0
+    ? startedAt + durationMs
+    : startedAt;
+  return nowValue - activityAt <= STALE_ACTIVE_READ_MAX_AGE_MS;
+}
+
+function backgroundRawTurnById(state, turnId) {
+  const turns = Array.isArray(state?.turns) ? state.turns : [];
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = backgroundRawTurn(turns[index], index);
+    if (turn.id === turnId) {
+      return turn;
+    }
+  }
+  return null;
+}
+
+function backgroundHistoryTurns(state) {
+  const turns = Array.isArray(state?.turns) ? state.turns.filter(Boolean) : [];
+  const turnHistory = state?.turnHistory ?? state?.turn_history;
+  const history = turnHistory?.history;
+  const entities = history?.entitiesByKey ?? history?.entities_by_key;
+  if (!entities || typeof entities !== "object" || Array.isArray(entities)) {
+    return turns;
+  }
+
+  const rawTurnsById = new Map();
+  for (const turn of turns) {
+    const turnId = readString(turn?.id)
+      || readString(turn?.turnId)
+      || readString(turn?.turn_id);
+    if (turnId) {
+      rawTurnsById.set(turnId, turn);
+    }
+  }
+  const orderedTurns = [];
+  const addedTurnIds = new Set();
+  const addedEntityKeys = new Set();
+  const appendEntity = (key) => {
+    const entityKey = readString(key);
+    const entity = entities[entityKey];
+    if (!entityKey || addedEntityKeys.has(entityKey) || !entity || typeof entity !== "object") {
+      return;
+    }
+    const keyedTurnId = entityKey.startsWith("turn:")
+      ? readString(entityKey.slice("turn:".length))
+      : "";
+    const entityTurnId = readString(entity?.turnId) || readString(entity?.turn_id);
+    const turnId = keyedTurnId || entityTurnId;
+    const looksLikeTurn = Boolean(keyedTurnId)
+      || (Boolean(entityTurnId) && (entity?.status != null || Array.isArray(entity?.items)));
+    if (!looksLikeTurn || !turnId || addedTurnIds.has(turnId)) {
+      return;
+    }
+    addedEntityKeys.add(entityKey);
+    addedTurnIds.add(turnId);
+    // Prefer the fresher legacy/live object when Litter materialized this same
+    // turn in both stores, but keep the canonical island position.
+    orderedTurns.push(rawTurnsById.get(turnId) || entity);
+  };
+
+  // Litter's islands preserve timeline order even though entitiesByKey is a
+  // normalized object store. Prefer that order, then tolerate snapshots that
+  // provide only the entity map.
+  for (const island of Array.isArray(history?.islands) ? history.islands : []) {
+    for (const entry of Array.isArray(island?.entries) ? island.entries : []) {
+      appendEntity(readString(entry?.value) || readString(entry?.key));
+    }
+  }
+  // When islands exist they are the canonical order. Do not append orphaned
+  // normalized entities after the tail: a stale unreferenced inProgress turn
+  // would otherwise look newer than the real current turn. Entity-map order is
+  // only a compatibility fallback for snapshots that omit islands entirely.
+  if (orderedTurns.length === 0) {
+    for (const key of Object.keys(entities)) {
+      appendEntity(key);
+    }
+  }
+  for (const turn of turns) {
+    const turnId = readString(turn?.id)
+      || readString(turn?.turnId)
+      || readString(turn?.turn_id);
+    if (!turnId || !addedTurnIds.has(turnId)) {
+      orderedTurns.push(turn);
+    }
+  }
+  return orderedTurns.length > 0 ? orderedTurns : turns;
+}
+
+function backgroundRawTurn(turn, index) {
+  const id = readString(turn?.turnId)
+    || readString(turn?.turn_id)
+    || readString(turn?.id)
+    // Must match desktop-ipc-conversation-projector so opening the thread
+    // mid-run does not replace the active id and strand iOS running state.
+    || `ipc-turn-${index}`;
+  const status = normalizeToken(turn?.status);
+  let normalizedStatus = "completed";
+  if (status === "inprogress" || status === "running" || status === "active" || status === "processing") {
+    normalizedStatus = "inProgress";
+  } else if (status === "failed" || status === "error" || status === "systemerror") {
+    normalizedStatus = "failed";
+  } else if (status === "interrupted" || status === "cancelled" || status === "canceled" || status === "stopped") {
+    normalizedStatus = "interrupted";
+  }
+  const identityItems = (Array.isArray(turn?.items) ? turn.items : []).flatMap((item) => {
+    const itemId = readString(item?.id) || readString(item?.itemId) || readString(item?.item_id);
+    const itemType = readString(item?.type);
+    if (!itemType || (!itemId && normalizeToken(itemType) !== "usermessage")) {
+      return [];
+    }
+    return [{
+      ...(itemId ? { id: itemId } : {}),
+      type: itemType,
+      ...(normalizeToken(itemType) === "usermessage"
+        ? { content: compactBackgroundPromptEntries(item?.content) }
+        : {}),
+    }];
+  });
+  const paramsInput = Array.isArray(turn?.params?.input)
+    ? compactBackgroundPromptEntries(turn.params.input)
+    : null;
+  const startedAt = turn?.startedAt
+    ?? turn?.started_at
+    ?? turn?.turnStartedAtMs
+    ?? turn?.turn_started_at_ms
+    ?? null;
+  return {
+    id,
+    status: normalizedStatus,
+    error: turn?.error ?? null,
+    ...(paramsInput ? { params: { input: paramsInput } } : {}),
+    ...(identityItems.length > 0 ? { items: identityItems } : {}),
+    ...(startedAt != null ? { startedAt } : {}),
+  };
+}
+
+// Background discovery retains only the text needed to recognize the same run
+// after id promotion; image payloads and expanded runtime context stay in the
+// canonical raw state instead of being duplicated in lifecycle bookkeeping.
+function compactBackgroundPromptEntries(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.flatMap((entry) => {
+    if (typeof entry === "string") {
+      return entry ? [entry] : [];
+    }
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+    const text = readString(entry.text)
+      || readString(entry.message)
+      || readString(entry.content);
+    return text ? [{ text }] : [];
+  });
+}
+
+function backgroundTurnLifecycleNotification(method, threadId, turn) {
+  const turnId = readString(turn?.id);
+  const params = {
+    threadId,
+    remodexDesktopMirror: true,
+    remodexDesktopIpcMirror: true,
+    remodexBackgroundDiscovery: true,
+    remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+  };
+  if (turnId) {
+    params.turnId = turnId;
+    params.id = turnId;
+  }
+  if (method === "turn/completed") {
+    params.status = readString(turn?.status) || "completed";
+    if (turn?.error != null) {
+      params.error = cloneJSON(turn.error);
+    }
+  }
+  return { method, params };
+}
+
+function isRemodexLiveOwnerBroadcast(params) {
+  return readString(params?.remodexOwnerSource) === REMODEX_LIVE_OWNER_SOURCE;
+}
+
+// Resolutions of Desktop-owned prompts are mirror events too; the tags let iOS
+// reconcile them without treating them as local runtime work.
+function projectedResolvedNotification(threadId, requestId) {
+  return {
+    method: "serverRequest/resolved",
+    params: {
+      threadId,
+      requestId,
+      remodexDesktopMirror: true,
+      remodexDesktopIpcMirror: true,
+      remodexActionSource: DESKTOP_IPC_ACTION_SOURCE,
+    },
+  };
+}
+
+function isPeerOwnershipSnapshot(params) {
+  return !isRemodexLiveOwnerBroadcast(params) && normalizeToken(params?.change?.type) === "snapshot";
+}
+
+function markDeliveryFailureError(error) {
+  error.remodexDeliveryFailed = true;
+  return error;
+}
+
+function isDeliveryFailureError(error) {
+  return error?.remodexDeliveryFailed === true;
+}
+
+// Thread/list is available before the first Desktop IPC snapshot. Its rollout
+// path gives an immutable session origin without guessing from a missing
+// discovery answer. Unknown or unreadable provenance stays unknown.
+function desktopOriginFromThreadRow(thread) {
+  const threadId = readString(thread?.id);
+  if (!threadId) {
+    return null;
+  }
+  if (isDesktopRolloutOrigin({
+    originator: thread?.originator || thread?.metadata?.originator,
+    source: thread?.source || thread?.metadata?.source,
+  })) {
+    return true;
+  }
+
+  const filePath = readString(thread?.path) || readString(thread?.rolloutPath);
+  if (!filePath) {
+    return null;
+  }
+  let fileHandle;
+  try {
+    const size = fs.statSync(filePath).size;
+    if (!size) {
+      return null;
+    }
+    fileHandle = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(Math.min(size, DESKTOP_ORIGIN_METADATA_HEAD_BYTES));
+    const bytesRead = fs.readSync(fileHandle, buffer, 0, buffer.length, 0);
+    const head = buffer.toString("utf8", 0, bytesRead);
+    const lineEnd = head.indexOf("\n");
+    const firstLine = lineEnd < 0 ? head : head.slice(0, lineEnd);
+    const entry = safeParseJSON(firstLine);
+    const payload = entry?.type === "session_meta" ? entry.payload : null;
+    if (readString(payload?.id) !== threadId) {
+      return null;
+    }
+    return isDesktopRolloutOrigin(payload);
+  } catch {
+    return null;
+  } finally {
+    if (fileHandle !== undefined) {
+      try {
+        fs.closeSync(fileHandle);
+      } catch {
+        // A failed metadata read must not interrupt thread/list delivery.
+      }
+    }
+  }
 }
 
 function seedConversationStateFromThreadRead(response) {
@@ -746,58 +4187,68 @@ function createEmptyConversationState() {
   };
 }
 
-function applyImmerPatch(target, patch) {
+function applyImmerPatchCopyOnWrite(target, patch, clonedNodes) {
   const patchPath = Array.isArray(patch?.path) ? patch.path : [];
   const op = readString(patch?.op).toLowerCase();
   if (!op || patchPath.length === 0) {
-    return;
+    return false;
   }
 
   let parent = target;
   for (let index = 0; index < patchPath.length - 1; index += 1) {
-    parent = parent?.[patchPath[index]];
-    if (parent == null) {
-      return;
+    const key = patchPath[index];
+    const child = parent?.[key];
+    if (child == null || typeof child !== "object") {
+      return false;
     }
+    if (clonedNodes.has(child)) {
+      parent = child;
+      continue;
+    }
+    const clonedChild = shallowCloneNode(child);
+    clonedNodes.add(clonedChild);
+    parent[key] = clonedChild;
+    parent = clonedChild;
   }
 
   const key = patchPath[patchPath.length - 1];
   if (op === "remove") {
     if (Array.isArray(parent) && Number.isInteger(key)) {
+      if (key < 0 || key >= parent.length) {
+        return false;
+      }
       parent.splice(key, 1);
+      return true;
     } else if (parent && typeof parent === "object") {
+      if (!Object.prototype.hasOwnProperty.call(parent, key)) {
+        return false;
+      }
       delete parent[key];
+      return true;
     }
-    return;
+    return false;
   }
 
   if (op === "add" || op === "replace") {
     if (Array.isArray(parent) && Number.isInteger(key)) {
       if (op === "add") {
+        if (key < 0 || key > parent.length) {
+          return false;
+        }
         parent.splice(key, 0, patch.value);
       } else {
+        if (key < 0 || key >= parent.length) {
+          return false;
+        }
         parent[key] = patch.value;
       }
+      return true;
     } else if (parent && typeof parent === "object") {
       parent[key] = patch.value;
+      return true;
     }
   }
-}
-
-function writeFrame(socket, payload, callback) {
-  const body = Buffer.from(payload, "utf8");
-  const header = Buffer.alloc(FRAME_HEADER_BYTES);
-  header.writeUInt32LE(body.length, 0);
-  socket.write(Buffer.concat([header, body]), callback);
-}
-
-function resolveDefaultIpcSocketPath() {
-  if (process.platform === "win32") {
-    return "\\\\.\\pipe\\codex-ipc";
-  }
-
-  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
-  return path.join(os.tmpdir(), "codex-ipc", `ipc-${uid}.sock`);
+  return false;
 }
 
 function readThreadId(params) {
@@ -807,40 +4258,9 @@ function readThreadId(params) {
     || readString(params?.conversation_id);
 }
 
-function requestIdKey(value) {
-  if (typeof value === "string" && value) {
-    return value;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  return "";
-}
-
-function readString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
-function normalizeToken(value) {
-  return typeof value === "string"
-    ? value.toLowerCase().replace(/[_-\s]+/g, "")
-    : "";
-}
-
-function cloneJSON(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function safeParseJSON(value) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
 module.exports = {
   applyConversationStateChange,
+  buildDesktopTurnsListResult,
   createDesktopIpcActionFollower,
   desktopFollowerPayloadForResponse,
   projectDesktopAssistantDeltaNotifications,

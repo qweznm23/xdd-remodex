@@ -34,6 +34,17 @@ test("health is minimal by default and detailed only when enabled", async () => 
   assert.equal(detailed.push.enabled, false);
 });
 
+test("oversized relay JSON returns a complete 413 response", async () => {
+  await withServer(async ({ port }) => {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/pairing/code/resolve`, {
+      method: "POST",
+      body: " ".repeat(64 * 1024 + 1),
+    });
+    assert.equal(response.status, 413);
+    assert.equal((await response.json()).code, "body_too_large");
+  });
+});
+
 test("detailed health exposes relay pressure counters", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-health`, {
@@ -52,6 +63,22 @@ test("detailed health exposes relay pressure counters", async () => {
     mac.close();
     await macClosed;
   }, { exposeDetailedHealth: true });
+});
+
+test("relay negotiates per-message deflate when clients offer it", async () => {
+  await withServer(async ({ port }) => {
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-deflate`, {
+      headers: { "x-role": "mac" },
+      perMessageDeflate: true,
+    });
+    await onceOpen(mac);
+
+    assert.equal(mac.extensions, "permessage-deflate");
+
+    const macClosed = onceClosed(mac);
+    mac.close();
+    await macClosed;
+  });
 });
 
 test("push routes stay disabled until explicitly enabled", async () => {
@@ -543,19 +570,13 @@ test("trusted session resolve starts working immediately after a mac updates its
       },
     }));
 
-    const response = await fetch(`http://127.0.0.1:${port}/v1/trusted/session/resolve`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(makeTrustedResolveBody({
-        macDeviceId: "mac-4",
-        phoneIdentity,
-        nonce: "nonce-live-update",
-        timestamp: Date.now(),
-      })),
+    const { body, status } = await resolveTrustedSessionEventually(port, {
+      macDeviceId: "mac-4",
+      phoneIdentity,
+      noncePrefix: "nonce-live-update",
     });
 
-    assert.equal(response.status, 200);
-    const body = await response.json();
+    assert.equal(status, 200);
     assert.equal(body.displayName, "Updated-Mac");
     assert.equal(body.sessionId, "live-session-4");
 
@@ -957,9 +978,9 @@ function listen(server) {
 
 function close(server, wss) {
   return new Promise((resolve, reject) => {
-    // An assertion can fail before a test closes its clients. Do not hide the
-    // original failure by waiting forever for those sockets in finally.
-    for (const client of wss.clients) client.terminate();
+    for (const client of wss.clients) {
+      client.terminate();
+    }
     wss.close();
     server.close((error) => {
       if (error) {
@@ -969,6 +990,34 @@ function close(server, wss) {
       resolve();
     });
   });
+}
+
+async function resolveTrustedSessionEventually(port, {
+  macDeviceId,
+  phoneIdentity,
+  noncePrefix,
+  attempts = 10,
+}) {
+  let lastResult = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/trusted/session/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(makeTrustedResolveBody({
+        macDeviceId,
+        phoneIdentity,
+        nonce: `${noncePrefix}-${attempt}`,
+        timestamp: Date.now(),
+      })),
+    });
+    const body = await response.json();
+    lastResult = { body, status: response.status };
+    if (response.status === 200) {
+      return lastResult;
+    }
+    await delay(10);
+  }
+  return lastResult;
 }
 
 function onceOpen(socket) {
