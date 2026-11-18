@@ -412,6 +412,17 @@ class SecureHistoryReceiveTest {
                 val saved = persistence.loadRelaySnapshot()
                 assertEquals(service.secureSession?.bridgeReplayEpoch, saved.relayBridgeReplayEpoch)
                 assertEquals("4", saved.relayLastAppliedBridgeOutboundSeq)
+                // fix73 saves the trusted identities and a naked cursor, without an epoch.
+                offlineCommand("""{"fixture":"backlog","count":0}""")
+                persistence.saveRelaySnapshot(saved.copy(
+                    relayProtocolVersion = "1", relayBridgeReplayEpoch = null, relayLastAppliedBridgeOutboundSeq = "900",
+                ))
+                connect()
+                echo()
+                val migrated = persistence.loadRelaySnapshot()
+                assertEquals(saved.relayBridgeReplayEpoch, migrated.relayBridgeReplayEpoch)
+                assertEquals("5", migrated.relayLastAppliedBridgeOutboundSeq)
+                assertEquals("2", migrated.relayProtocolVersion)
             } finally {
                 service.connectionGeneration++
                 service.webSocket?.cancel()
