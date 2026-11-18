@@ -79,6 +79,19 @@ test("bridge forwards official item pages, live events, and native unsupported e
     codexEndpoint: "ws://test", refreshCommand: "", codexBundleId: "", codexAppPath: "",
   }});
   await waitFor(() => socket?.readyState === WebSocket.OPEN);
+  socket.send(JSON.stringify({ id: "hello", method: "initialize", params: { clientInfo: { name: "codexmobile_android" } } }));
+  await waitForMessage(replies, reply => reply.id === "hello");
+  const sessionsRoot = require("../src/rollout-watch").resolveSessionsRoot();
+  const sessionFileAccess = [];
+  for (const name of ["existsSync", "readdirSync", "statSync", "openSync", "readFileSync"]) {
+    const original = fs[name];
+    t.mock.method(fs, name, (...args) => {
+      if (typeof args[0] === "string" && (args[0] === sessionsRoot || args[0].startsWith(sessionsRoot + path.sep))) {
+        sessionFileAccess.push({ name, path: args[0] });
+      }
+      return original(...args);
+    });
+  }
   socket.send(JSON.stringify({id:"page",method:"thread/items/list",params:{threadId:"thread",limit:30,sortDirection:"desc"}}));
   await waitFor(() => requests.length === 1);
   fake.emitMessage({method:"item/agentMessage/delta",params:{threadId:"thread",turnId:"t",itemId:"live",delta:"now"}});
@@ -93,6 +106,13 @@ test("bridge forwards official item pages, live events, and native unsupported e
   fake.emitMessage({id:requests[1].id,error});
   assert.deepEqual((await waitForMessage(replies,r=>r.id==="old-host")).error,error);
   assert.equal(fake.sent.filter(r=>r.method==="thread/turns/list").length,0);
+  socket.send(JSON.stringify({ id: "fallback", method: "thread/turns/list", params: { threadId: "thread", limit: 1 } }));
+  await waitFor(() => fake.sent.some(r => r.method === "thread/turns/list"));
+  const fallback = fake.sent.find(r => r.method === "thread/turns/list");
+  const turnPage = { data: [{ id: "turn", items: [{ id: "answer", type: "agentMessage", text: "reply" }] }], nextCursor: "older" };
+  fake.emitMessage({ id: fallback.id, result: turnPage });
+  assert.deepEqual((await waitForMessage(replies, r => r.id === "fallback")).result, turnPage);
+  assert.deepEqual(sessionFileAccess, []);
 });
 
 test("repeated phone account status reads never force credential rotation", async t => {

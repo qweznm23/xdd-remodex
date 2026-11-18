@@ -4177,12 +4177,6 @@ test("fetchAdaptiveThreadTurnsListForRelay keeps thread context while sizing nat
   assert.ok(sanitizeContexts.length > 0);
   assert.equal(sanitizeContexts.every(({ requestMethod }) => requestMethod === "thread/turns/list"), true);
   assert.equal(sanitizeContexts.every(({ requestContext }) => (
-    requestContext.threadId === "thread-sizing-context"
-
+    requestContext.threadId === "thread-sizing-context" && requestContext.skipJsonlArtifactAugmentation === true
   )), true);
-});
-
-
-test("native page context does not enable local history scans", () => {
-  assert.deepEqual(buildThreadTurnsListRelaySanitizeContext({params:{threadId:"thread"}}), {threadId:"thread"});
 });

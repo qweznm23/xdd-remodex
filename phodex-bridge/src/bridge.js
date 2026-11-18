@@ -51,6 +51,7 @@ const { createComposerPredictor } = require("./composer-prediction");
 const { readRuntimeAuthFileInfo } = require("./auth-file-info");
 const { manageAuthProfiles, verifySwitchedRuntime } = require("./auth-profiles");
 const { createAuthMaintenance } = require("./auth-maintenance");
+const { fetchBoundedThreadItemsPage } = require("./thread-items-page");
 const {
   loadOrCreateBridgeDeviceState,
   rememberLastSeenClientDeviceKind,
@@ -874,6 +875,7 @@ function startBridge({
     startedAt: 0,
   };
   let activePhoneSummary = null;
+  let androidNativeHistory = false;
   const secureTransport = createBridgeSecureTransport({
     sessionId,
     relayUrl: relayBaseUrl,
@@ -884,6 +886,7 @@ function startBridge({
       sendRelayRegistrationUpdate(nextDeviceState);
     },
     onSecureSessionReady(session) {
+      androidNativeHistory = false;
       activityStore.resetSubscriber();
       activePhoneSummary = buildActivePhoneSummary(session, deviceState);
       const lastPublishedBridgeStatus = bridgeStatusPublisher.latest();
@@ -1447,6 +1450,7 @@ function startBridge({
     }
     desktopRefresher.handleInbound(rawMessage, parsedMessage);
     rolloutLiveMirror?.observeInbound(rawMessage, parsedMessage);
+    if (androidNativeHistory && handleAndroidHistoryRequest(rawMessage, parsedMessage)) return;
     // Track the request method BEFORE follower interception: responses the
     // follower serves from projected Desktop state must hit the same relay
     // sanitize/trim budget as app-server responses, or heavy threads ship as
@@ -1688,6 +1692,38 @@ function startBridge({
       openCodeCatalogRefresh = null;
     });
     return openCodeCatalogRefresh;
+  }
+
+  function handleAndroidHistoryRequest(rawMessage, request) {
+    if (request?.id == null) return false;
+    const { method, params } = request;
+    if (method !== "thread/items/list" && method !== "thread/turns/list") return false;
+    rememberThreadFromMessage("phone", rawMessage, request);
+    const threadId = threadIdFromRequestParams(params);
+    const fetchPage = page => sendCodexRequest(method, page);
+    const pending = method === "thread/items/list"
+      ? fetchBoundedThreadItemsPage(request, {
+          fetchPage, sanitize: response => sanitizeThreadItemsForRelay(response, threadId),
+        })
+      : fetchAdaptiveThreadTurnsListForRelay(request, { fetchPage });
+    pending.then(response => {
+      if (isShuttingDown) return;
+      if (method === "thread/turns/list") {
+        sendBridgeManagedThreadTurnsListResponse(request, response, sendApplicationResponse, {
+          skipJsonlArtifactAugmentation: true,
+        });
+      } else {
+        sendApplicationResponse(JSON.stringify(response));
+      }
+    }).catch(error => {
+      if (isShuttingDown) return;
+      sendApplicationResponse(JSON.stringify({ id: request.id, error: {
+        code: Number.isInteger(error.code) ? error.code : -32000,
+        message: error.message,
+        data: error.data ?? { stage: method },
+      } }));
+    });
+    return true;
   }
 
   function handleBridgeManagedThreadTurnsListRequest(rawMessage, sendResponse = sendApplicationResponse) {
@@ -2377,6 +2413,7 @@ function startBridge({
     const clientInfo = params && typeof params === "object" ? params.clientInfo : null;
     const clientName = normalizeNonEmptyString(clientInfo?.name);
     const clientDeviceKind = classifyClientDeviceKind(clientName);
+    androidNativeHistory = clientDeviceKind === "android";
     if (clientDeviceKind) {
       deviceState = rememberLastSeenClientDeviceKind(deviceState, clientDeviceKind);
       if (activePhoneSummary?.connected) {
@@ -3837,6 +3874,15 @@ function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod, requestC
   });
 
   return trimThreadPayloadForRelay(parseBridgeJSON(sanitizedPayload), null, trimOptions) ?? sanitizedPayload;
+}
+
+function sanitizeThreadItemsForRelay(response, threadId) {
+  const data = [];
+  for (const entry of response.result.data) {
+    const turn = sanitizeRelayHistoryTurn({ id: entry.turnId, items: [entry.item] }, threadId);
+    if (turn.items.length) data.push({ ...entry, item: turn.items[0] });
+  }
+  return { ...response, result: { ...response.result, data } };
 }
 
 function sanitizeThreadTurnsListForRelay(rawMessage, requestContext = {}) {
@@ -5769,6 +5815,7 @@ module.exports = {
   routeLocalRuntimeSettingsRequest,
   sanitizeLiveGeneratedImageMessageForRelay,
   sanitizeLiveUserNotification,
+  sanitizeThreadItemsForRelay,
   sanitizeThreadHistoryImagesForRelay,
   shouldSuppressRolloutMirrorForThread,
   startBridge,
