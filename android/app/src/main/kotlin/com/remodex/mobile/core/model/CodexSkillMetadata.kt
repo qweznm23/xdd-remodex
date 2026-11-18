@@ -63,12 +63,14 @@ data class CodexSkillMetadata(
     }
 }
 
+@kotlinx.serialization.Serializable
 data class CodexTurnSkillMention(
     val id: String,
     val name: String? = null,
     val path: String? = null,
 )
 
+@kotlinx.serialization.Serializable
 data class CodexTurnMention(
     val name: String,
     val path: String,

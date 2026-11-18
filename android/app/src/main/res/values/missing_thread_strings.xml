@@ -1,0 +1,5 @@
+<resources>
+    <string name="removed_thread_draft_saved">Conversation no longer exists. Your unsent message is saved.</string>
+    <string name="removed_thread_new_chat">New chat with draft</string>
+    <string name="removed_thread_stay">Stay here</string>
+</resources>

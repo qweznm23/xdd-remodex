@@ -35,19 +35,23 @@ internal object MessageHistoryAesGcm {
         wrapped: ByteArray,
         key: ByteArray,
     ): ByteArray? {
-        if (wrapped.size < IV_LENGTH + 16) return null
         return try {
-            val iv = wrapped.copyOfRange(0, IV_LENGTH)
-            val ciphertext = wrapped.copyOfRange(IV_LENGTH, wrapped.size)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(key, "AES"),
-                GCMParameterSpec(TAG_LENGTH_BITS, iv),
-            )
-            cipher.doFinal(ciphertext)
+            decryptOrThrow(wrapped, key)
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun decryptOrThrow(wrapped: ByteArray, key: ByteArray): ByteArray {
+        require(wrapped.size >= IV_LENGTH + 16) { "Truncated encrypted payload" }
+        val iv = wrapped.copyOfRange(0, IV_LENGTH)
+        val ciphertext = wrapped.copyOfRange(IV_LENGTH, wrapped.size)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            SecretKeySpec(key, "AES"),
+            GCMParameterSpec(TAG_LENGTH_BITS, iv),
+        )
+        return cipher.doFinal(ciphertext)
     }
 }

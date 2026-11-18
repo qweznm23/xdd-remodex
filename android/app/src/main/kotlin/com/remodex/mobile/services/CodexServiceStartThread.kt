@@ -15,6 +15,7 @@ internal suspend fun CodexService.startThreadInternal(
     model: String? = null,
     cwd: String? = null,
     serviceTier: String? = null,
+    beforeActivate: ((String) -> Unit)? = null,
 ): CodexThread {
     if (!sessionReady) throw CodexServiceError.Disconnected
     val normalizedCwd = CodexThread.normalizeThreadStartCwd(cwd?.trim()?.takeIf { it.isNotEmpty() })
@@ -70,6 +71,7 @@ internal suspend fun CodexService.startThreadInternal(
     return runNewThreadOpenFlow(
         thread = patched,
         normalizedCwd = normalizedCwd,
+        beforeActivate = beforeActivate,
         sink =
             CodexServiceNewThreadOpenSink(
                 service = this,
@@ -94,6 +96,7 @@ internal suspend fun runNewThreadOpenFlow(
     thread: CodexThread,
     normalizedCwd: String?,
     sink: NewThreadOpenFlowSink,
+    beforeActivate: ((String) -> Unit)? = null,
 ): CodexThread {
     sink.publishStartedThread(thread)
     val resumed =
@@ -107,6 +110,8 @@ internal suspend fun runNewThreadOpenFlow(
             thread
         }
     runCatching { sink.syncStartedThreadHistory(thread.id) }
+        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+    beforeActivate?.invoke(thread.id)
     sink.activateStartedThread(thread.id)
     return resumed
 }

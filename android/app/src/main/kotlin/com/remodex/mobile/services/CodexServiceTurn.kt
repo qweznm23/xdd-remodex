@@ -5,7 +5,6 @@ import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CodexImageAttachment
 import com.remodex.mobile.core.model.CodexTurnMention
 import com.remodex.mobile.core.model.CodexTurnSkillMention
-import com.remodex.mobile.core.model.isExplicitServerThreadMissing
 import com.remodex.mobile.core.model.CodexMessageDeliveryState
 import com.remodex.mobile.core.model.CodexThreadSyncState
 import com.remodex.mobile.core.model.JSONValue
@@ -32,65 +31,29 @@ internal suspend fun CodexService.startTurnInternal(
     collaborationMode: CodexCollaborationModeKind? = null,
 ) {
     if (!sessionReady) throw CodexServiceError.Disconnected
-    val tid = threadId.trim()
+    val targetThreadId = threadId.trim()
     val trimmed = userText.trim()
     val readyAttachments =
         attachments.filter { attachment ->
             !attachment.payloadDataURL.isNullOrBlank()
         }
-    if (tid.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
+    if (targetThreadId.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
     if (trimmed.isEmpty() && readyAttachments.isEmpty()) {
         throw CodexServiceError.InvalidInput("Message is empty")
     }
 
-    var targetThreadId = tid
     var imageUrlKey = "url"
 
-    suspend fun resumeTargetOrThrow() {
-        val row = _threads.value.find { it.id == targetThreadId }
-        try {
-            ensureThreadResumedInternal(
-                threadId = targetThreadId,
-                force = false,
-                preferredProjectPath = row?.gitWorkingDirectory,
-                modelIdentifierOverride = row?.model,
-            )
-        } catch (e: Exception) {
-            if (!shouldAllowProjectRebindWithoutResume(e)) throw e
-        }
-    }
-
-    suspend fun continuationAfterExplicitMissing(archivedId: String) {
-        val prior = _threads.value.find { it.id == archivedId }
-        handleMissingThread(archivedId)
-        val continuation =
-            try {
-                createContinuationThreadInternal(archivedId, prior)
-            } catch (_: Throwable) {
-                throw CodexServiceError.ThreadRemovedOnServer
-            }
-        targetThreadId = continuation.id
-        try {
-            ensureThreadResumedInternal(
-                threadId = targetThreadId,
-                force = false,
-                preferredProjectPath = continuation.gitWorkingDirectory,
-                modelIdentifierOverride = continuation.model,
-            )
-        } catch (e: CodexServiceError.RpcFailure) {
-            if (e.rpcError.isExplicitServerThreadMissing()) {
-                handleMissingThread(targetThreadId)
-                throw CodexServiceError.ThreadRemovedOnServer
-            }
-            throw e
-        }
-    }
-
+    val row = _threads.value.find { it.id == targetThreadId }
     try {
-        resumeTargetOrThrow()
-    } catch (e: CodexServiceError.RpcFailure) {
-        if (!e.rpcError.isExplicitServerThreadMissing()) throw e
-        continuationAfterExplicitMissing(targetThreadId)
+        ensureThreadResumedInternal(
+            threadId = targetThreadId,
+            force = false,
+            preferredProjectPath = row?.gitWorkingDirectory,
+            modelIdentifierOverride = row?.model,
+        )
+    } catch (e: Exception) {
+        if (!shouldAllowProjectRebindWithoutResume(e)) throw e
     }
 
     val automaticTitleSeed = automaticThreadTitleSeedIfNeeded(trimmed, readyAttachments, targetThreadId)
@@ -172,44 +135,12 @@ internal suspend fun CodexService.startTurnInternal(
     }
 
     try {
-        _activeThreadId.value = targetThreadId
-        persistActiveThreadId(targetThreadId)
         noteProtectedRunningFallback(targetThreadId, true)
         val response = sendTurnStartWithImageFallback(targetThreadId)
         markTurnStartAccepted(targetThreadId, pendingId, response)
         scheduleAutomaticThreadTitleGenerationIfNeeded(automaticTitleSeed, targetThreadId, readyAttachments)
     } catch (e: Throwable) {
         noteTurnFinished(targetThreadId)
-        if (e is CodexServiceError.RpcFailure && e.rpcError.isExplicitServerThreadMissing()) {
-            continuationAfterExplicitMissing(targetThreadId)
-            val newId = targetThreadId
-            val retryAutomaticTitleSeed = automaticThreadTitleSeedIfNeeded(trimmed, readyAttachments, newId)
-            val retryPendingId = messageTimelineStore.appendPendingUserMessage(newId, trimmed, readyAttachments)
-            try {
-                _activeThreadId.value = newId
-                persistActiveThreadId(newId)
-                noteProtectedRunningFallback(newId, true)
-                val response = sendTurnStartWithImageFallback(newId)
-                markTurnStartAccepted(newId, retryPendingId, response)
-                scheduleAutomaticThreadTitleGenerationIfNeeded(retryAutomaticTitleSeed, newId, readyAttachments)
-            } catch (e2: Throwable) {
-                noteTurnFinished(newId)
-                runCatching {
-                    messageTimelineStore.markUserMessageOutcome(
-                        threadId = newId,
-                        messageId = retryPendingId,
-                        deliveryState = CodexMessageDeliveryState.failed,
-                        turnId = null,
-                    )
-                }
-                if (e2 is CodexServiceError.RpcFailure && e2.rpcError.isExplicitServerThreadMissing()) {
-                    handleMissingThread(newId)
-                    throw CodexServiceError.ThreadRemovedOnServer
-                }
-                throw e2
-            }
-            return
-        }
         runCatching {
             messageTimelineStore.markUserMessageOutcome(
                 threadId = targetThreadId,
@@ -217,7 +148,7 @@ internal suspend fun CodexService.startTurnInternal(
                 deliveryState = CodexMessageDeliveryState.failed,
                 turnId = null,
             )
-        }
+        }.exceptionOrNull()?.let(e::addSuppressed)
         throw e
     }
 }

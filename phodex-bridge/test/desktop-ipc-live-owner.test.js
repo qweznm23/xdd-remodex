@@ -2078,10 +2078,12 @@ test("live owner releases ownership after bounded initial hydration failures", a
   );
 });
 
-test("live owner cancels initial hydration when the originating turn is rejected", async (t) => {
+test("live owner cancels initial hydration when the originating turn is rejected", { timeout: 3000 }, async (t) => {
   const { tempDir, socketPath } = createIpcTestSocket("remodex-live-owner-hydrate-rejected-");
   let serverSocket = null;
   let readAttempts = 0;
+  let signalFirstRead;
+  const firstRead = new Promise(resolve => { signalFirstRead = resolve; });
 
   const server = net.createServer((socket) => {
     serverSocket = socket;
@@ -2113,6 +2115,7 @@ test("live owner cancels initial hydration when the originating turn is rejected
     async sendCodexRequest(method) {
       if (method === "thread/read") {
         readAttempts += 1;
+        signalFirstRead();
         throw new Error("thread not found");
       }
       return { ok: true };
@@ -2128,7 +2131,7 @@ test("live owner cancels initial hydration when the originating turn is rejected
       input: [{ type: "input_text", text: "will fail" }],
     },
   }));
-  await waitFor(() => readAttempts === 1);
+  await firstRead;
   owner.observeOutbound(JSON.stringify({
     id: "turn-start-hydrate-rejected",
     error: { code: -32000, message: "thread not found" },

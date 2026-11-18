@@ -295,6 +295,13 @@ interface CodexRepository {
         serviceTier: String? = null,
     ): CodexThread
 
+    /** Prepare an editable recovered draft before exposing the new conversation as active. */
+    suspend fun startThreadForRecoveredDraft(
+        model: String?,
+        cwd: String?,
+        prepare: (String) -> Unit,
+    ): CodexThread = throw UnsupportedOperationException("Draft recovery is unavailable")
+
     fun requestBranchPickerForThread(threadId: String) {}
 
     fun consumeBranchPickerRequest(threadId: String) {}

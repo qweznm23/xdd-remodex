@@ -1,0 +1,5 @@
+<resources>
+    <string name="removed_thread_draft_saved">原会话已不存在，待发送内容已保留。</string>
+    <string name="removed_thread_new_chat">新建会话并带入草稿</string>
+    <string name="removed_thread_stay">留在当前会话</string>
+</resources>

@@ -262,7 +262,8 @@ class CodexMessagePersistence(
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    private fun messageHistoryKey(): ByteArray {
+    @Synchronized
+    internal fun messageHistoryKey(): ByteArray {
         secureStore.readData(CodexSecureKeys.messageHistoryKey)?.let {
             if (it.size == 32) return it
         }

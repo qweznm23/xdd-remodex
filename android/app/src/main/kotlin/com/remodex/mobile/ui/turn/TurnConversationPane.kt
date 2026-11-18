@@ -237,6 +237,9 @@ fun TurnConversationPane(
     val currentTrustedMacDeviceId by repository.currentTrustedMacDeviceId.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val recoveryStore = remember(context) { MissingThreadDraftStore(java.io.File(context.noBackupFilesDir, "unsent-turns"), AppContainer.messagePersistence::messageHistoryKey) }
+    var missingDraft by remember(threadId, currentTrustedMacDeviceId) { mutableStateOf<MissingThreadDraft?>(null) }
+    var keepEditing by remember(threadId, currentTrustedMacDeviceId) { mutableStateOf(false) }
     val aiChangeSetPersistence = LocalAIChangeSetPersistence.current
     var sending by remember(threadId) { mutableStateOf(false) }
     var lastError by remember(threadId) { mutableStateOf<String?>(null) }
@@ -746,6 +749,33 @@ fun TurnConversationPane(
             }.getOrDefault(emptyList())
     }
 
+    fun restoreUnsentDraft(saved: MissingThreadDraft) {
+        draft = stripMergedMentionPrefix(saved.text, saved.skills, saved.mentions)
+        mentionChips = restoreMentionChips(saved.skills, saved.mentions)
+        composerAttachments = saved.images.map { TurnComposerAttachment(state = TurnComposerAttachmentState.ReadyImage(it)) }
+        reviewTargetName = saved.review?.name
+        reviewBaseBranch = saved.branch
+        if (saved.plan) setPlanModeEnabled(true)
+    }
+
+    val sourceDeviceId = currentTrustedMacDeviceId
+    suspend fun retainMissingDraft(error: Throwable, saved: MissingThreadDraft) {
+        missingDraft = saved
+        keepEditing = false
+        retryFailedSend = null
+        lastError = null
+        val device = sourceDeviceId ?: return
+        try {
+            withContext(Dispatchers.IO) { recoveryStore.save(device, threadId, saved) }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (storage: Exception) {
+            error.addSuppressed(storage)
+            Log.e("RemodexSend", "Missing target draft persistence failed for thread=$threadId", error)
+            lastError = storage.message
+        }
+    }
+
     LaunchedEffect(threadId, currentTrustedMacDeviceId) {
         val draftKey = "${currentTrustedMacDeviceId.orEmpty()}|$threadId"
         loadedDraftKey = null
@@ -756,9 +786,30 @@ fun TurnConversationPane(
         resetVoiceMeteringState()
         lastError = null
         draft = runCatching { repository.loadComposerDraft(threadId) }.getOrDefault("")
-        loadedDraftKey = draftKey
         composerAttachments = emptyList()
         mentionChips = emptyList()
+        val device = currentTrustedMacDeviceId
+        if (device != null) {
+            try {
+                val saved = withContext(Dispatchers.IO) { recoveryStore.read(device, threadId) }
+                if (saved != null) {
+                    val restoredText = stripMergedMentionPrefix(saved.text, saved.skills, saved.mentions)
+                    if (saved.transferred || draft.isEmpty() || draft == restoredText) restoreUnsentDraft(saved)
+                    if (saved.transferred) {
+                        repository.saveComposerDraft(threadId, draft)
+                        withContext(Dispatchers.IO) { recoveryStore.clear(device, threadId) }
+                    } else {
+                        missingDraft = saved
+                    }
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                Log.e("RemodexSend", "Could not restore retained draft for thread=$threadId", error)
+                lastError = error.message
+            }
+        }
+        loadedDraftKey = draftKey
     }
 
     LaunchedEffect(threadId, currentTrustedMacDeviceId, draft, loadedDraftKey) {
@@ -1367,6 +1418,14 @@ fun TurnConversationPane(
                     sending = false
                     if (e is CancellationException) throw e
                     Log.e("RemodexSend", "Message failed stage=start-turn thread=$threadId request=$requestId attempt=$attempt", e)
+                    if (e.isMissingSendTarget()) {
+                        val saved = MissingThreadDraft(text, attachments, skillMentions, fileMentions,
+                            plan = collaborationMode == CodexCollaborationModeKind.plan,
+                            cwd = activeThread?.gitWorkingDirectory, model = activeThread?.model)
+                        retainMissingDraft(e, saved)
+                        if (fromQueue && draft.isBlank()) restoreUnsentDraft(saved)
+                        return@onFailure
+                    }
                     if (fromQueue) {
                         runCatching {
                             repository.enqueueTurnDraft(
@@ -1467,6 +1526,16 @@ fun TurnConversationPane(
                     screen = "composer",
                 )
             }.onFailure { e ->
+                if (e is CancellationException) throw e
+                if (e.isMissingSendTarget()) {
+                    Log.e("RemodexSend", "Missing queued turn target thread=$threadId", e)
+                    val saved = MissingThreadDraft(pending.wireText, pending.attachments, pending.skillMentions, pending.fileMentions,
+                        cwd = activeThread?.gitWorkingDirectory, model = activeThread?.model)
+                    retainMissingDraft(e, saved)
+                    pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
+                    if (draft.isBlank()) restoreUnsentDraft(saved)
+                    return@onFailure
+                }
                 lastError = com.remodex.mobile.ui.turn.formatTurnSendError(e)
             }.also {
                 if (!sendAsSteer) {
@@ -1506,6 +1575,7 @@ fun TurnConversationPane(
             isThreadRunning ||
             sending ||
             pendingSteerDrafts.isNotEmpty() ||
+            missingDraft != null ||
             queuedDraftCount <= 0 ||
             hasComposerDraftContent
         ) return@LaunchedEffect
@@ -1762,6 +1832,38 @@ fun TurnConversationPane(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             )
+        }
+        missingDraft?.takeUnless { keepEditing }?.let { saved ->
+            Text(stringResource(R.string.removed_thread_draft_saved), modifier = Modifier.padding(horizontal = 12.dp))
+            Row {
+                TextButton(enabled = ready && !sending && currentTrustedMacDeviceId != null, onClick = {
+                    if (sending) return@TextButton
+                    val device = currentTrustedMacDeviceId ?: return@TextButton
+                    sending = true
+                    scope.launch {
+                        try {
+                            repository.startThreadForRecoveredDraft(saved.model, saved.cwd) { newId ->
+                                check(repository.currentTrustedMacDeviceId.value == device && repository.activeThreadId.value == threadId) {
+                                    "Draft recovery source is no longer active"
+                                }
+                                recoveryStore.save(device, newId, saved.copy(transferred = true))
+                            }
+                            withContext(Dispatchers.IO) { recoveryStore.clear(device, threadId) }
+                            missingDraft = null
+                        } catch (cancel: CancellationException) {
+                            throw cancel
+                        } catch (error: Exception) {
+                            Log.e("RemodexSend", "Create conversation for retained draft thread=$threadId", error)
+                            lastError = formatTurnSendError(error)
+                        } finally {
+                            sending = false
+                        }
+                    }
+                }) { Text(stringResource(R.string.removed_thread_new_chat)) }
+                TextButton(enabled = !sending, onClick = { keepEditing = true }) {
+                    Text(stringResource(R.string.removed_thread_stay))
+                }
+            }
         }
         retryFailedSend?.let { retry ->
             TextButton(
@@ -2387,6 +2489,13 @@ fun TurnConversationPane(
                             clearReviewTarget()
                         }.onFailure { e ->
                             sending = false
+                            if (e is CancellationException) throw e
+                            if (e.isMissingSendTarget()) {
+                                Log.e("RemodexSend", "Missing review target thread=$threadId", e)
+                                retainMissingDraft(e, MissingThreadDraft(draft, review = activeReviewTarget, branch = activeReviewBaseBranch,
+                                    cwd = activeThread?.gitWorkingDirectory, model = activeThread?.model))
+                                return@onFailure
+                            }
                             lastError = com.remodex.mobile.ui.turn.formatTurnSendError(e)
                         }
                     }

@@ -6,7 +6,6 @@ import com.remodex.mobile.core.model.CodexReviewTarget
 import com.remodex.mobile.core.model.CodexThreadSyncState
 import com.remodex.mobile.core.model.JSONValue
 import com.remodex.mobile.core.model.RPCMessage
-import com.remodex.mobile.core.model.isExplicitServerThreadMissing
 import com.remodex.mobile.data.extractTurnIdFromRpcResult
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
@@ -18,94 +17,37 @@ internal suspend fun CodexService.startReviewInternal(
     baseBranch: String? = null,
 ) {
     if (!sessionReady) throw CodexServiceError.Disconnected
-    val tid = threadId.trim()
-    if (tid.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
+    val targetThreadId = threadId.trim()
+    if (targetThreadId.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
 
-    var targetThreadId = tid
     val reviewPrompt = reviewPromptText(target, baseBranch)
 
-    suspend fun resumeTargetOrThrow() {
-        val row = _threads.value.find { it.id == targetThreadId }
-        ensureThreadResumedInternal(
-            threadId = targetThreadId,
-            force = false,
-            preferredProjectPath = row?.gitWorkingDirectory,
-            modelIdentifierOverride = row?.model,
-        )
-    }
-
-    suspend fun continuationAfterExplicitMissing(archivedId: String) {
-        val prior = _threads.value.find { it.id == archivedId }
-        handleMissingThread(archivedId)
-        val continuation =
-            try {
-                createContinuationThreadInternal(archivedId, prior)
-            } catch (_: Throwable) {
-                throw CodexServiceError.ThreadRemovedOnServer
-            }
-        targetThreadId = continuation.id
-        ensureThreadResumedInternal(
-            threadId = targetThreadId,
-            force = false,
-            preferredProjectPath = continuation.gitWorkingDirectory,
-            modelIdentifierOverride = continuation.model,
-        )
-    }
-
-    try {
-        resumeTargetOrThrow()
-    } catch (e: CodexServiceError.RpcFailure) {
-        if (!e.rpcError.isExplicitServerThreadMissing()) throw e
-        continuationAfterExplicitMissing(targetThreadId)
-    }
+    val row = _threads.value.find { it.id == targetThreadId }
+    ensureThreadResumedInternal(
+        threadId = targetThreadId,
+        force = false,
+        preferredProjectPath = row?.gitWorkingDirectory,
+        modelIdentifierOverride = row?.model,
+    )
 
     val pendingId = messageTimelineStore.appendPendingUserMessage(targetThreadId, reviewPrompt, emptyList())
     noteProtectedRunningFallback(targetThreadId, true)
-    _activeThreadId.value = targetThreadId
-    persistActiveThreadId(targetThreadId)
 
     try {
         val response = sendReviewStart(targetThreadId, target, baseBranch)
         markReviewStartAccepted(targetThreadId, pendingId, response)
     } catch (e: Throwable) {
-        if (e is CodexServiceError.RpcFailure && e.rpcError.isExplicitServerThreadMissing()) {
-            noteProtectedRunningFallback(targetThreadId, false)
+        noteProtectedRunningFallback(targetThreadId, false)
+        try {
             messageTimelineStore.markUserMessageOutcome(
                 threadId = targetThreadId,
                 messageId = pendingId,
                 deliveryState = CodexMessageDeliveryState.failed,
                 turnId = null,
             )
-            continuationAfterExplicitMissing(targetThreadId)
-            val retryPendingId = messageTimelineStore.appendPendingUserMessage(targetThreadId, reviewPrompt, emptyList())
-            noteProtectedRunningFallback(targetThreadId, true)
-            try {
-                val response = sendReviewStart(targetThreadId, target, baseBranch)
-                markReviewStartAccepted(targetThreadId, retryPendingId, response)
-            } catch (e2: Throwable) {
-                noteProtectedRunningFallback(targetThreadId, false)
-                messageTimelineStore.markUserMessageOutcome(
-                    threadId = targetThreadId,
-                    messageId = retryPendingId,
-                    deliveryState = CodexMessageDeliveryState.failed,
-                    turnId = null,
-                )
-                if (e2 is CodexServiceError.RpcFailure && e2.rpcError.isExplicitServerThreadMissing()) {
-                    handleMissingThread(targetThreadId)
-                    throw CodexServiceError.ThreadRemovedOnServer
-                }
-                throw e2
-            }
-            return
+        } catch (cleanup: Exception) {
+            e.addSuppressed(cleanup)
         }
-
-        noteProtectedRunningFallback(targetThreadId, false)
-        messageTimelineStore.markUserMessageOutcome(
-            threadId = targetThreadId,
-            messageId = pendingId,
-            deliveryState = CodexMessageDeliveryState.failed,
-            turnId = null,
-        )
         throw e
     }
 }

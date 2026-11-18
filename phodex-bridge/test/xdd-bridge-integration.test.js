@@ -14,7 +14,7 @@ const path = require("node:path");
 const { setTimeout: wait } = require("node:timers/promises");
 const WebSocket = require("ws");
 
-test("Unix daemon bridge initializes once and reuses the connection after phone reconnect", async (t) => {
+test("Unix daemon bridge preserves initialize failure for waiting accounts and reuses the successful connection", async (t) => {
   const relayServer = new WebSocket.Server({ port: 0 });
   await new Promise(resolve => relayServer.once("listening", resolve));
   let relaySocket;
@@ -50,11 +50,22 @@ test("Unix daemon bridge initializes once and reuses the connection after phone 
   const init = { id: "first-init", method: "initialize", params: { clientInfo: { name: "codexmobile_android", version: "test" } } };
   relaySocket.send(JSON.stringify(init));
   await waitFor(() => fakeCodex.sent.some(message => message.id === init.id));
+  relaySocket.send(JSON.stringify({ id: "waiting-account", method: "account/status/read" }));
+  await wait(40);
+  assert.deepEqual(fakeCodex.sent.map(m => m.method), ["initialize"]);
+  fakeCodex.emitMessage({ id: init.id, error: {code:-32042,message:"fixture initialization denied"} });
+  const waiting = await waitForMessage(replies, m => m.id === "waiting-account");
+  assert.equal(waiting.error.data.stage, "codex_initialize");
+  assert.equal(waiting.error.data.upstreamCode, -32042);
+  assert.equal(waiting.error.message, "fixture initialization denied");
+  init.id = "second-init";
+  relaySocket.send(JSON.stringify(init));
+  await waitFor(() => fakeCodex.sent.some(m => m.id === init.id));
   fakeCodex.emitMessage({ id: init.id, result: { userAgent: "test" } });
   assert.deepEqual((await waitForMessage(replies, message => message.id === init.id)).result, { userAgent: "test", remodexRuntimeSettingsVersion: 2 });
   relaySocket.send(JSON.stringify({ ...init, id: "reconnect-init" }));
   assert.deepEqual((await waitForMessage(replies, message => message.id === "reconnect-init")).result, { bridgeManaged: true, remodexRuntimeSettingsVersion: 2 });
-  assert.equal(fakeCodex.sent.filter(message => message.method === "initialize").length, 1);
+  assert.equal(fakeCodex.sent.filter(message => message.method === "initialize").length, 2);
 });
 
 test("bridge forwards official item pages, live events, and native unsupported errors without local indexing", async t => {
@@ -160,6 +171,52 @@ test("repeated phone account status reads never force credential rotation", asyn
     assert.equal(rotations, 0, "Viewing account status must not request token rotation");
   }
   assert.equal(fake.sent.filter(request => request.method === "getAuthStatus").length, 3);
+});
+
+test("cold account requests share initialization with background maintenance and a connecting phone", async t => {
+  const relay = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  await new Promise(resolve => relay.once("listening", resolve));
+  const replies = [];
+  let socket;
+  relay.on("connection", client => {
+    socket = client;
+    client.on("message", data => replies.push(JSON.parse(data.toString())));
+  });
+  const fake = createFakeCodexTransport();
+  const { startBridge } = loadBridgeWithTestDoubles({ createCodexTransportImpl: () => fake });
+  const previous = process.env.REMODEX_AUTH_SCHEDULE_ENABLED;
+  process.env.REMODEX_AUTH_SCHEDULE_ENABLED = "1";
+  const bridge = startBridge({ printPairingQr: false, config: {
+    relayUrl: "ws://127.0.0.1:" + relay.address().port, codexEndpoint: "ws+unix:///test-only:/",
+    refreshEnabled: false, keepMacAwakeEnabled: false, pushServiceUrl: "",
+  } });
+  if (previous == null) delete process.env.REMODEX_AUTH_SCHEDULE_ENABLED;
+  else process.env.REMODEX_AUTH_SCHEDULE_ENABLED = previous;
+  t.after(() => { bridge.stop(); socket?.close(); relay.close(); });
+  // Wait for the actual startup maintenance tick with no phone present.
+  await waitFor(() => fake.sent.some(m => m.method === "initialize"), 19_000);
+  const initialize = fake.sent.find(m => m.method === "initialize");
+  const rpc = (id,method) => socket.send(JSON.stringify({ id,method,params:{} }));
+  rpc("account","account/status/read");
+  rpc("profiles","account/profiles/list");
+  rpc("phone-init","initialize");
+  await wait(60);
+  assert.deepEqual(fake.sent.map(m => m.method), ["initialize"]);
+  fake.emitMessage({id:initialize.id,result:{}});
+  await waitForMessage(replies,m => m.id === "phone-init");
+  await waitFor(() => fake.sent.filter(m => m.method === "config/read").length === 3);
+  assert.equal(fake.sent.filter(m => m.method === "initialize").length, 1);
+  assert.equal(fake.sent[1].method, "initialized");
+  for (const m of [...fake.sent]) {
+    if (m.method === "config/read") fake.emitMessage({id:m.id,result:{config:{cli_auth_credentials_store:"keyring"}}});
+    if (m.method === "account/read") fake.emitMessage({id:m.id,result:{account:{type:"chatgpt",email:"sample@example.test",planType:"pro"}}});
+    if (m.method === "getAuthStatus") {
+      assert.equal(m.params.refreshToken,false);
+      fake.emitMessage({id:m.id,result:{authMethod:"chatgpt",authToken:"fixture"}});
+    }
+  }
+  assert.equal((await waitForMessage(replies,m=>m.id==="account")).result.email,"sample@example.test");
+  assert.equal((await waitForMessage(replies,m=>m.id==="profiles")).error.data.errorCode,"AUTH_PROFILES_UNAVAILABLE");
 });
 
 function loadBridgeWithTestDoubles({ createCodexTransportImpl }) {
@@ -383,6 +440,7 @@ test("authorization RPCs reach the bundled service through the normal bridge rou
     fake.send=raw=>{
       send(raw);
       const request=JSON.parse(raw);
+      if(request.method==='initialize') fake.emitMessage({id:request.id,result:{userAgent:'fixture'}});
       if(request.method==='config/read') {
         fake.emitMessage({id:request.id,result:{config:{cli_auth_credentials_store:'file'},
           layers:[{name:{type:'user',file:path.join(home,'config.toml')}}]}});

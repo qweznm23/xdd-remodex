@@ -714,6 +714,12 @@ class CodexService(
             serviceTier = serviceTier,
         )
 
+    override suspend fun startThreadForRecoveredDraft(
+        model: String?,
+        cwd: String?,
+        prepare: (String) -> Unit,
+    ): CodexThread = withContext(Dispatchers.IO) { startThreadInternal(model, cwd, beforeActivate = prepare) }
+
     override fun requestBranchPickerForThread(threadId: String) {
         val tid = CodexThread.normalizeIdentifier(threadId) ?: return
         _pendingBranchPickerThreadId.value = tid

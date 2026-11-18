@@ -825,6 +825,70 @@ function startBridge({
   const phoneInitializesUnixSocket = config.codexEndpoint?.startsWith("ws+unix:") && !initializeEndpoint;
   let codexHandshakeState = config.codexEndpoint && !phoneInitializesUnixSocket ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
+  let signalTransportStarted;
+  const transportStarted = new Promise(resolve => { signalTransportStarted = resolve; });
+  let privateInitialize = null;
+  let phoneInitializeWaiter = null;
+  let forwardedInitTimedOut = false;
+
+  function waitForPhoneInitialize() {
+    if (phoneInitializeWaiter) return phoneInitializeWaiter.promise;
+    let resolve, reject;
+    const promise = new Promise((onReady, onError) => { resolve = onReady; reject = onError; });
+    const timeout = setTimeout(() => {
+      forwardedInitTimedOut = true;
+      settlePhoneInitialize(Object.assign(new Error("Timed out waiting for the phone's Codex initialize response"), {
+        code: "ETIMEDOUT",
+      }));
+    }, 20_000);
+    phoneInitializeWaiter = { promise, resolve, reject, timeout };
+    return promise;
+  }
+
+  function settlePhoneInitialize(error) {
+    if (!phoneInitializeWaiter) return;
+    const waiter = phoneInitializeWaiter;
+    phoneInitializeWaiter = null;
+    clearTimeout(waiter.timeout);
+    if (error) waiter.reject(error);
+    else waiter.resolve();
+  }
+
+  // Account maintenance can be the first client after a bridge restart.
+  // Share one handshake with phone queries and keep the daily job independent of a phone visit.
+  function initializeForBridge() {
+    if (privateInitialize) return privateInitialize;
+    privateInitialize = (async () => {
+      try {
+        await sendCodexRequest("initialize", {
+          clientInfo: { name: "remodex", version: bridgePackageVersion },
+          capabilities: { experimentalApi: true },
+        });
+        if (isShuttingDown) throw new Error("Bridge stopped during Codex initialization");
+        codex.send(JSON.stringify({ method: "initialized" }));
+      } catch (error) {
+        if (error.code !== -32600 || error.message !== "Already initialized") throw error;
+      }
+      codexHandshakeState = "warm";
+    })().finally(() => { privateInitialize = null; });
+    return privateInitialize;
+  }
+
+  async function waitForAccountRuntime() {
+    try {
+      await transportStarted;
+      if (isShuttingDown) throw new Error("Bridge stopped before account initialization");
+      if (privateInitialize) await privateInitialize;
+      else if (codexHandshakeState !== "warm") {
+        if (forwardedInitializeRequestIds.size && !forwardedInitTimedOut) await waitForPhoneInitialize();
+        else await initializeForBridge();
+      }
+      if (isShuttingDown) throw new Error("Bridge stopped before account request");
+    } catch (error) {
+      error.accountStage = "codex_initialize";
+      throw error;
+    }
+  }
   const bridgeManagedCodexRequestWaiters = new Map();
   const forwardedRequestMethodsById = new Map();
   const pendingLocalThreadCreationRequestsById = new Map();
@@ -1010,7 +1074,10 @@ function startBridge({
     sendCodexRequest,
     logPrefix: "[remodex]",
   });
-  const authMaintenance = createAuthMaintenance({ resolveAuthFile, endpoint: config.codexEndpoint });
+  const authMaintenance = createAuthMaintenance({ resolveAuthFile: async () => {
+    await waitForAccountRuntime();
+    return resolveAuthFile();
+  }, endpoint: config.codexEndpoint });
   const bridgeStatusPublisher = createBridgeStatusPublisher({
     onBridgeStatus,
     getCodexLaunchState: () => codexLaunchState,
@@ -1050,14 +1117,11 @@ function startBridge({
   // A stock endpoint initializes once per socket, independently of phone reconnects.
   codex.onStarted(async () => {
     if (isShuttingDown) return;
+    signalTransportStarted();
     if (initializeEndpoint) {
       try {
-        await sendCodexRequest("initialize", {
-          clientInfo: { name: "remodex", version: bridgePackageVersion },
-          capabilities: { experimentalApi: true },
-        });
+        await initializeForBridge();
         if (isShuttingDown) return;
-        codex.send(JSON.stringify({ method: "initialized" }));
       } catch (error) {
         if (!isShuttingDown) handleCodexTransportError(error);
         return;
@@ -1091,6 +1155,8 @@ function startBridge({
 
   function prepareBridgeShutdown() {
     isShuttingDown = true;
+    signalTransportStarted();
+    settlePhoneInitialize(new Error("Codex transport stopped during initialization"));
     authMaintenance.stop();
     bridgeWakeAssertion.stop();
     clearReconnectTimer();
@@ -1955,6 +2021,9 @@ function startBridge({
 
   // Resolves bridge-owned account helpers like status reads and Mac-side browser opening.
   async function readBridgeManagedAccountResult(method, params) {
+    if (phoneProfileMethods.has(method) || method === "account/status/read" || method === "getAuthStatus") {
+      await waitForAccountRuntime();
+    }
     if (phoneProfileMethods.has(method)) {
       const authFile = await resolveAuthFile();
       const action = method.slice("account/profiles/".length);
@@ -2057,6 +2126,7 @@ function startBridge({
         data: {
           errorCode: error?.errorCode || defaultErrorCode,
           ...(error?.predictionStage ? { stage: error.predictionStage, upstreamCode: error.upstreamCode, upstreamData: error.cause?.data } : {}),
+          ...(error?.accountStage ? { stage: error.accountStage, upstreamCode: error.code } : {}),
           ...(error?.profileDiagnostic ? { diagnostic: error.profileDiagnostic } : {}),
         },
       },
@@ -2389,7 +2459,16 @@ function startBridge({
         return true;
       }
 
+      if (privateInitialize) {
+        privateInitialize.then(() => sendResponse(JSON.stringify({ id: parsed.id, result: bridgeManagedInitializeResult() })),
+          error => sendResponse(JSON.stringify({ id: parsed.id, error: {
+            code: Number.isInteger(error.code) ? error.code : -32000,
+            message: error.message, data: error.data,
+          } })));
+        return true;
+      }
       if (codexHandshakeState !== "warm") {
+        forwardedInitTimedOut = false;
         forwardedInitializeRequestIds.add(String(parsed.id));
         return false;
       }
@@ -2487,14 +2566,21 @@ function startBridge({
     }
     if (response.result != null) {
       codexHandshakeState = "warm";
+      settlePhoneInitialize();
       response.result.remodexRuntimeSettingsVersion = 2;
       return true;
     }
     if (response.error?.code === -32600 && response.error.message === "Already initialized") {
       codexHandshakeState = "warm";
+      settlePhoneInitialize();
       delete response.error;
       response.result = bridgeManagedInitializeResult();
       return true;
+    }
+    if (!forwardedInitializeRequestIds.size && phoneInitializeWaiter) {
+      settlePhoneInitialize(Object.assign(new Error(response.error?.message || "Invalid initialize response"), {
+        code: response.error?.code, data: response.error?.data,
+      }));
     }
     return false;
   }
