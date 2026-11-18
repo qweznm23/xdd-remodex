@@ -16,12 +16,14 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 1. **下载源码并安装服务端依赖。**
 
    ```bash
-   git clone https://github.com/qweznm23/xdd-remodex.git
+   git clone --branch v0.1.7-ws-fix73 https://github.com/qweznm23/xdd-remodex.git
    cd xdd-remodex
    npm --prefix phodex-bridge ci --ignore-scripts
    npm --prefix relay ci --ignore-scripts
    install -d -m 700 .local/config .local/runtime/workspace
    ```
+
+   这个标签包含上方 APK 对应的桥接和中继。也可以直接下载[同版服务端源码](https://github.com/qweznm23/xdd-remodex/archive/refs/tags/v0.1.7-ws-fix73.tar.gz)，解压后进入源码目录，从两条 npm 命令继续。
 
 2. **在电脑上启动中继和桥接。** 打开两个终端，都进入刚克隆的仓库。下面的 `192.168.1.20` 代表电脑的局域网 IP，两处都替换成手机能访问的实际地址。
 
@@ -72,6 +74,8 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 | `.local/` | 本机配置、密钥、缓存、运行状态、安装包和历史归档；不进 Git |
 
 ## 日常操作
+
+**升级已有部署**时，从目标 Release 取同一标签的服务端源码和 APK。先在服务端仓库运行 `git status --short` 并保存本地源码改动，再运行 `git fetch origin tag <目标标签>` 和 `git switch --detach <目标标签>`。重新执行上面两条 npm 命令，用原来的配置、工作目录和配对状态重启服务，确认桥接已连接后，再安装该 Release 的 APK。单独更新手机应用不会更新电脑上的服务端。后续发布新 APK 时，同步更新首页下载链接和安装命令中的标签。
 
 在仓库根目录执行：
 
