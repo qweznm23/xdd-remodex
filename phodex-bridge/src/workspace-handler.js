@@ -373,14 +373,15 @@ async function workspaceReadImage(params) {
     };
   }
 
-  const data = mimeType === "image/svg+xml"
+  const isVector = mimeType === "image/svg+xml";
+  const data = isVector
     ? await readSVGPreviewData(realImagePath, stat.size)
     : maxPixelDimension
     ? await readPreviewImageData(realImagePath, maxPixelDimension, stat.size)
     : await fs.promises.readFile(realImagePath);
   return {
     ...result,
-    mimeType: maxPixelDimension && process.platform === "linux" ? "image/jpeg" : mimeType,
+    mimeType: !isVector && maxPixelDimension && process.platform === "linux" ? "image/jpeg" : mimeType,
     dataByteLength: data.length,
     dataBase64: data.toString("base64"),
   };
