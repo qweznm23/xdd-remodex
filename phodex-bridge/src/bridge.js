@@ -800,7 +800,10 @@ function startBridge({
   let lastRelayActivityAt = 0;
   let lastConnectionStatus = null;
   let codexLaunchState = config.codexEndpoint && !initializeEndpoint ? "connected" : "starting";
-  let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
+  // The desktop Unix socket expects the phone's first initialize unless the
+  // bridge performs endpoint initialization itself before opening the relay.
+  const phoneInitializesUnixSocket = config.codexEndpoint?.startsWith("ws+unix:") && !initializeEndpoint;
+  let codexHandshakeState = config.codexEndpoint && !phoneInitializesUnixSocket ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
   const bridgeManagedCodexRequestWaiters = new Map();
   const forwardedRequestMethodsById = new Map();
@@ -1915,7 +1918,7 @@ function startBridge({
       }),
       sendCodexRequest("getAuthStatus", {
         includeToken: true,
-        refreshToken: true,
+        refreshToken: false,
       }),
       readBridgePackageVersionStatus(),
     ]);

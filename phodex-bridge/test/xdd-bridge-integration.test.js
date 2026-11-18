@@ -51,9 +51,9 @@ test("Unix daemon bridge initializes once and reuses the connection after phone 
   relaySocket.send(JSON.stringify(init));
   await waitFor(() => fakeCodex.sent.some(message => message.id === init.id));
   fakeCodex.emitMessage({ id: init.id, result: { userAgent: "test" } });
-  assert.deepEqual((await waitForMessage(replies, message => message.id === init.id)).result, { userAgent: "test" });
+  assert.deepEqual((await waitForMessage(replies, message => message.id === init.id)).result, { userAgent: "test", remodexRuntimeSettingsVersion: 2 });
   relaySocket.send(JSON.stringify({ ...init, id: "reconnect-init" }));
-  assert.deepEqual((await waitForMessage(replies, message => message.id === "reconnect-init")).result, { bridgeManaged: true });
+  assert.deepEqual((await waitForMessage(replies, message => message.id === "reconnect-init")).result, { bridgeManaged: true, remodexRuntimeSettingsVersion: 2 });
   assert.equal(fakeCodex.sent.filter(message => message.method === "initialize").length, 1);
 });
 
@@ -195,6 +195,9 @@ function createSecureDeviceStateDouble() {
         macIdentityPublicKey: "mac-key-test",
         trustedPhones: {},
       };
+    },
+    rememberLastSeenClientDeviceKind(deviceState) {
+      return deviceState;
     },
     rememberLastSeenPhoneAppVersion(deviceState) {
       return deviceState;
