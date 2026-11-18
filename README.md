@@ -7,7 +7,9 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
 ## 首次安装
 
-**已有服务端和 APK** 的用户可以直接在 Android 8.0 或更高版本的手机上打开 APK 安装。如果系统询问，允许当前浏览器或文件管理器安装此应用。安装后打开 Remodex，在应用内扫描服务端电脑上的配对二维码。
+**[下载 Android 安装包（0.1.7-ws-fix73）](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/remodex-0.1.7-ws-fix73.apk)** · [查看版本说明和 SHA-256](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix73)
+
+在 Android 8.0 或更高版本的手机上打开下载的 APK。如果系统询问，允许当前浏览器或文件管理器安装此应用。已有服务端的用户可直接打开 Remodex，扫描电脑上的配对二维码。第一次部署服务端，请完成下面的第 1、2 步，然后跳到第 4 步配对。
 
 **从源码自建**时，下面以 Linux 电脑和同一局域网内的 Android 手机为例。使用平时运行 Codex 的 Linux 用户，先确认该用户能在终端正常使用已登录的 `codex`。电脑准备 Git、Node.js 24 和 npm。
 
@@ -38,7 +40,7 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
    桥接默认从当前用户的 PATH 启动 `codex app-server`。如果要连接已经运行的 Codex 桌面服务，把 `REMODEX_CODEX_ENDPOINT` 设为该用户实际的控制套接字地址，格式见 [运行配置示例](ops/runtime.env.example)。在手机浏览器打开 `http://192.168.1.20:10004/health` 可以检查手机到中继的连通性。
 
-3. **构建并安装测试 APK。** 在装有 JDK 21、Android SDK Platform 36、Build Tools 35.0.0 的 Linux 电脑上，从仓库根目录执行：
+3. **可选：从源码构建测试 APK。** 在装有 JDK 21、Android SDK Platform 36、Build Tools 35.0.0 的 Linux 电脑上，从仓库根目录执行：
 
    ```bash
    install -d -m 700 .local/config
