@@ -53,6 +53,15 @@ class TimelineMessageGroupingTest {
             createdAt = t0,
         )
 
+    @Test fun generatedImagesAndMarkdownImagesRemainVisibleBeforeFinalAnswer() {
+        val image = CodexMessage(id="image",threadId="t1",turnId="turn",role=CodexMessageRole.assistant,text="",createdAt=t0,
+            attachments=listOf(com.remodex.mobile.core.model.CodexImageAttachment(thumbnailBase64JPEG="",sourceURL="/repo/image.png")))
+        val markdownImage = image.copy(id="markdown",attachments=emptyList(),text="![preview](/repo/image2.png)")
+        val final = image.copy(id="final",attachments=emptyList(),text="Done")
+        val items=listOf(image,markdownImage,final).toTimelineListItems()
+        assertTrue(items.filterIsInstance<TimelineListItem.Single>().map {it.message.id}.containsAll(listOf("image","markdown","final")))
+    }
+
     @Test
     fun upToTwoCommands_remainSingles() {
         val items = listOf(cmd("a"), cmd("b")).toTimelineListItems()

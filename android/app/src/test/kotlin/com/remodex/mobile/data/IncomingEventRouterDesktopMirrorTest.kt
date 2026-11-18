@@ -542,7 +542,7 @@ class IncomingEventRouterDesktopMirrorTest {
             val plan = timeline.messagesByThread.value["thread-1"].orEmpty().single()
             assertEquals(CodexMessageKind.plan, plan.kind)
             assertEquals("1. Inspect\n2. Patch\n3. Verify", plan.text)
-            assertEquals("\"proposed-plan-1\"", plan.itemId)
+            assertEquals("\"proposed-plan-1\"", plan.structuredUserInputRequest?.requestID?.stringValue)
         }
 
     @Test
@@ -601,10 +601,70 @@ class IncomingEventRouterDesktopMirrorTest {
             assertEquals(listOf("thread-1"), finished)
         }
 
+    @Test
+    fun completedAndLegacyDesktopTurnsRefreshThreadMetadata() = runTest {
+        for (method in listOf("turn/completed", "codex/event", "codex/event/agent_message")) {
+            var syncs = 0
+            val router = newRouter(onRequestThreadSync = { syncs++ })
+            val params = mutableMapOf<String, JSONValue>(
+                "threadId" to JSONValue.Str("thread-1"),
+                "message" to JSONValue.Str("Final answer"),
+            )
+            if (method != "codex/event/agent_message") params["turnId"] = JSONValue.Str("turn-1")
+            if (method == "codex/event") params["msg"] = JSONValue.Obj(mapOf("type" to JSONValue.Str("task_complete")))
+            router.dispatchNotification(method, JSONValue.Obj(params))
+            assertEquals(1, syncs, method)
+        }
+    }
+
+    @Test fun statusNotificationsUpdateUnopenedThreadsWithoutSelectingOrLoadingHistory() = runTest {
+        val running = mutableListOf<Pair<String, String?>>()
+        val finished = mutableListOf<String>()
+        var listRequests = 0
+        val router = newRouter(onTurnLifecycle = { id, turn -> running += id to turn },
+            onTurnFinished = { finished += it }, onRequestThreadSync = { listRequests++ })
+        fun status(type: String) = JSONValue.Obj(mapOf("threadId" to JSONValue.Str("unopened"),
+            "status" to JSONValue.Obj(mapOf("type" to JSONValue.Str(type)))))
+        router.dispatchNotification("thread/status/changed", status("active"))
+        assertEquals(listOf<Pair<String, String?>>("unopened" to null), running)
+        router.dispatchNotification("thread/status/changed", status("idle"))
+        assertEquals(listOf("unopened"), finished)
+        router.dispatchNotification("thread/status/changed", status("systemError"))
+        assertEquals(listOf("unopened", "unopened"), finished)
+        assertEquals(0, listRequests)
+    }
+
+    @Test fun missingUnloadedAndUnknownStatusDoNotInventCompletion() = runTest {
+        val changed = mutableListOf<String>()
+        val router = newRouter(onTurnLifecycle = { id, _ -> changed += id }, onTurnFinished = { changed += it })
+        for (type in listOf("notLoaded", "future-state", "")) {
+            router.dispatchNotification("thread/status/changed", JSONValue.Obj(mapOf("threadId" to JSONValue.Str("a"),
+                "status" to JSONValue.Obj(mapOf("type" to JSONValue.Str(type))))))
+        }
+        router.dispatchNotification("thread/status/changed", JSONValue.Obj(mapOf("status" to JSONValue.Obj(mapOf("type" to JSONValue.Str("active"))))))
+        router.dispatchNotification("thread/status/changed", JSONValue.Obj(mapOf("threadId" to JSONValue.Str("a"))))
+        assertEquals(emptyList(), changed)
+    }
+
+    @Test fun actualCompletionProvidesStableUnreadIdentityButIdleStatusDoesNot() = runTest {
+        val completed = mutableListOf<Pair<String, String>>()
+        val router = newRouter(onTurnCompletedActivity = { thread, turn -> completed += thread to turn })
+        router.dispatchNotification("thread/status/changed", JSONValue.Obj(mapOf("threadId" to JSONValue.Str("a"),
+            "status" to JSONValue.Obj(mapOf("type" to JSONValue.Str("idle"))))))
+        assertEquals(emptyList(), completed)
+        router.dispatchNotification("turn/completed", JSONValue.Obj(mapOf("threadId" to JSONValue.Str("a"),
+            "turn" to JSONValue.Obj(mapOf("id" to JSONValue.Str("turn-1"))))))
+        router.dispatchNotification("codex/event", JSONValue.Obj(mapOf("threadId" to JSONValue.Str("a"),
+            "turnId" to JSONValue.Str("turn-2"), "msg" to JSONValue.Obj(mapOf("type" to JSONValue.Str("task_complete"))))))
+        assertEquals(listOf("a" to "turn-1", "a" to "turn-2"), completed)
+    }
+
     private fun newRouter(
         messageTimeline: MessageTimelineStore = MessageTimelineStore(),
         onTurnLifecycle: (threadId: String, turnId: String?) -> Unit = { _, _ -> },
         onTurnFinished: (threadId: String) -> Unit = {},
+        onRequestThreadSync: () -> Unit = {},
+        onTurnCompletedActivity: (String, String) -> Unit = { _, _ -> },
         onStructuredInputRequest: (PendingStructuredInputRequest, (Map<String, List<String>>) -> Unit) -> Unit =
             { _: PendingStructuredInputRequest, _: (Map<String, List<String>>) -> Unit -> },
     ): IncomingEventRouter =
@@ -614,10 +674,11 @@ class IncomingEventRouterDesktopMirrorTest {
             activeThreadId = MutableStateFlow(null),
             messageTimeline = messageTimeline,
             commandDetailsStore = CommandExecutionDetailsStore(),
-            onRequestThreadSync = {},
+            onRequestThreadSync = onRequestThreadSync,
             onHydrateThread = {},
             onTurnLifecycle = onTurnLifecycle,
             onTurnFinished = onTurnFinished,
+            onTurnCompletedActivity = onTurnCompletedActivity,
             isTurnStreamingActive = { _, _ -> true },
             shouldAutoApproveRequests = { false },
             onApprovalRequest = { _: PendingApprovalRequest, _: (PendingApprovalDecision) -> Unit -> },

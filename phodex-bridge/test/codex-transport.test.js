@@ -48,6 +48,23 @@ class FakeWebSocket {
   }
 }
 
+test("Unix daemon endpoint uses the existing socket without spawning another writer", () => {
+  const endpoint = "ws+unix:///tmp/codex-test.sock:/";
+  const transport = createCodexTransport({
+    endpoint,
+    WebSocketImpl: FakeWebSocket,
+    spawnImpl() { assert.fail("must not spawn another app-server"); },
+  });
+  const socket = FakeWebSocket.latestInstance;
+  assert.equal(socket.endpoint, endpoint);
+  socket.readyState = FakeWebSocket.OPEN;
+  socket.emit("open");
+  transport.send('{"id":1,"method":"initialize"}');
+  assert.deepEqual(socket.sentMessages, ['{"id":1,"method":"initialize"}']);
+  transport.shutdown();
+  assert.equal(socket.readyState, FakeWebSocket.CLOSED);
+});
+
 test("endpoint transport only sends outbound messages after the websocket opens", () => {
   const transport = createCodexTransport({
     endpoint: "ws://127.0.0.1:4321/codex",

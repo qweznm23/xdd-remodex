@@ -1,5 +1,7 @@
 package com.remodex.mobile.ui.shell
 
+import com.remodex.mobile.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -133,15 +135,15 @@ fun GitActionBottomSheet(
                         value = commitMessage,
                         onValueChange = { commitMessage = it },
                         enabled = !isBusy,
-                        label = { Text("Commit message") },
-                        placeholder = { Text("Leave blank to generate automatically") },
+                        label = { Text(stringResource(R.string.git_commit_message)) },
+                        placeholder = { Text(stringResource(R.string.git_generate_automatically)) },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 GitActionSheetMode.push -> {
                     Text(
-                        text = "Pushes your local commits to the remote repository.",
+                        text = stringResource(R.string.git_push_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -185,7 +187,7 @@ fun GitActionBottomSheet(
             }
 
             Text(
-                text = "Next step",
+                text = stringResource(R.string.git_next_step),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -206,7 +208,7 @@ fun GitActionBottomSheet(
                     enabled = !isBusy,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.git_branch_create_cancel))
                 }
                 Button(
                     onClick = {
@@ -232,7 +234,7 @@ fun GitActionBottomSheet(
                             color = MaterialTheme.colorScheme.onPrimary,
                         )
                     } else {
-                        Text("Continue")
+                        Text(stringResource(R.string.onboarding_cta_continue))
                     }
                 }
             }
@@ -262,11 +264,11 @@ private fun ForkRemoteCheckbox(
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "Push to fork remote",
+                text = stringResource(R.string.git_push_fork),
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
-                text = "Runs git push fork HEAD instead of pushing to the tracked remote.",
+                text = stringResource(R.string.git_push_fork_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -303,15 +305,15 @@ private fun GitActionSheetHeader(
         Text(
             text =
                 when (mode) {
-                    GitActionSheetMode.commit -> "Commit changes"
-                    GitActionSheetMode.push -> "Push changes"
-                    GitActionSheetMode.createPullRequest -> "Create pull request"
+                    GitActionSheetMode.commit -> stringResource(R.string.git_commit_changes)
+                    GitActionSheetMode.push -> stringResource(R.string.git_push_changes)
+                    GitActionSheetMode.createPullRequest -> stringResource(R.string.git_create_pr)
                 },
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.weight(1f),
         )
         TextButton(onClick = onDismiss, enabled = dismissEnabled) {
-            Text("Close")
+            Text(stringResource(R.string.my_devices_close))
         }
     }
 }
@@ -324,12 +326,12 @@ private fun GitActionBranchRow(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         LabelValueRow(
-            label = "Branch",
+            label = stringResource(R.string.sidebar_project_picker_preview_branch),
             value = status?.currentBranch?.takeIf { it.isNotBlank() } ?: "unknown",
         )
         if (mode == GitActionSheetMode.createPullRequest) {
             LabelValueRow(
-                label = "Base",
+                label = stringResource(R.string.git_label_base),
                 value = defaultBaseBranch?.takeIf { it.isNotBlank() } ?: "unknown",
             )
         }
@@ -345,13 +347,13 @@ private fun GitActionChangesRow(status: GitRepoSyncResult?) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "Changes",
+            text = stringResource(R.string.git_action_section_changes),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                text = "${status?.files?.size ?: 0} files",
+                text = stringResource(R.string.git_files_count, status?.files?.size ?: 0),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -395,7 +397,7 @@ private fun PullRequestFields(
                 value = baseBranch,
                 onValueChange = onBaseBranchChange,
                 enabled = enabled,
-                label = { Text("Base branch") },
+                label = { Text(stringResource(R.string.turn_review_base_button_unset)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -404,8 +406,8 @@ private fun PullRequestFields(
             value = title,
             onValueChange = onTitleChange,
             enabled = enabled,
-            label = { Text("Title") },
-            placeholder = { Text("Leave blank to generate") },
+            label = { Text(stringResource(R.string.git_label_title)) },
+            placeholder = { Text(stringResource(R.string.git_generate_blank)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -413,8 +415,8 @@ private fun PullRequestFields(
             value = body,
             onValueChange = onBodyChange,
             enabled = enabled,
-            label = { Text("Description") },
-            placeholder = { Text("Leave blank to generate") },
+            label = { Text(stringResource(R.string.git_label_description)) },
+            placeholder = { Text(stringResource(R.string.git_generate_blank)) },
             minLines = 4,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -545,22 +547,24 @@ private fun nextStepsFor(mode: GitActionSheetMode): List<GitActionNextStep> =
             listOf(GitActionNextStep.createPullRequest)
     }
 
+@Composable
 private fun nextStepTitle(step: GitActionNextStep): String =
     when (step) {
-        GitActionNextStep.commit -> "Commit"
-        GitActionNextStep.commitAndPush -> "Commit and push"
-        GitActionNextStep.commitPushAndPullRequest -> "Commit, push and create PR"
-        GitActionNextStep.push -> "Push"
-        GitActionNextStep.pushAndPullRequest -> "Push and create PR"
-        GitActionNextStep.createPullRequest -> "Create PR"
+        GitActionNextStep.commit -> stringResource(R.string.git_step_commit)
+        GitActionNextStep.commitAndPush -> stringResource(R.string.git_step_commit_push)
+        GitActionNextStep.commitPushAndPullRequest -> stringResource(R.string.git_step_commit_push_pr)
+        GitActionNextStep.push -> stringResource(R.string.git_step_push)
+        GitActionNextStep.pushAndPullRequest -> stringResource(R.string.git_step_push_pr)
+        GitActionNextStep.createPullRequest -> stringResource(R.string.git_step_pr)
     }
 
+@Composable
 private fun nextStepDetail(step: GitActionNextStep): String? =
     when (step) {
         GitActionNextStep.commitPushAndPullRequest,
         GitActionNextStep.pushAndPullRequest,
         GitActionNextStep.createPullRequest,
-        -> "Opens GitHub with generated title and body if fields are empty."
+        -> stringResource(R.string.git_step_pr_hint)
         else -> null
     }
 

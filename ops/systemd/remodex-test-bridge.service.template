@@ -1,0 +1,19 @@
+[Unit]
+Description=Remodex Codex bridge
+Wants=network-online.target remodex-test-relay.service
+After=network-online.target remodex-test-relay.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+EnvironmentFile=@PROJECT_ROOT@/.local/config/runtime.env
+WorkingDirectory=@PROJECT_ROOT@/.local/runtime/workspace
+ExecStart=@NODE_BIN@ @PROJECT_ROOT@/scripts/launch-bridge.cjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

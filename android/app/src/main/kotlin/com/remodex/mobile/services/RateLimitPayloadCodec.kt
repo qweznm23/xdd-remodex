@@ -15,7 +15,7 @@ internal object RateLimitPayloadCodec {
         val byLimitId =
             payloadObject["rateLimitsByLimitId"]?.objectValue
                 ?: payloadObject["rate_limits_by_limit_id"]?.objectValue
-        if (byLimitId != null) {
+        if (!byLimitId.isNullOrEmpty()) {
             return byLimitId.mapNotNull { (limitId, value) -> decodeRateLimitBucket(limitId, value) }
         }
 
@@ -23,9 +23,7 @@ internal object RateLimitPayloadCodec {
             payloadObject["rateLimits"]?.objectValue
                 ?: payloadObject["rate_limits"]?.objectValue
         if (nested != null) {
-            if (containsDirectRateLimitWindows(nested)) {
-                return decodeDirectRateLimitBuckets(nested)
-            }
+            // Preserve the bucket identity so rolling updates replace that quota instead of adding a stale duplicate.
             val single = decodeRateLimitBucket(null, JSONValue.Obj(nested))
             if (single != null) return listOf(single)
         }
@@ -116,7 +114,8 @@ internal object RateLimitPayloadCodec {
 
     private fun decodeRateLimitWindow(value: JSONValue?): CodexRateLimitWindow? {
         val o = value?.objectValue ?: return null
-        val usedPercent = firstIntIn(o, listOf("usedPercent", "used_percent")) ?: 0
+        val usedPercent = firstIntIn(o, listOf("usedPercent", "used_percent"))
+            ?: throw com.remodex.mobile.core.error.CodexServiceError.InvalidResponse("Rate limit window missing usedPercent")
         val windowDurationMins =
             firstIntIn(
                 o,
@@ -140,10 +139,16 @@ internal object RateLimitPayloadCodec {
             val seconds = if (raw > 10_000_000_000.0) raw / 1000.0 else raw
             return Instant.ofEpochSecond(seconds.roundToLong())
         }
-        val s =
-            firstStringIn(o, listOf("resetsAt", "resets_at", "resetAt", "reset_at"))
-                ?: return null
-        return runCatching { Instant.parse(s) }.getOrNull()
+        val s = firstStringIn(o, listOf("resetsAt", "resets_at", "resetAt", "reset_at")) ?: return null
+        return try {
+            val number = s.toDoubleOrNull()
+            if (number != null) {
+                require(number.isFinite()) { "Non-finite reset time" }
+                Instant.ofEpochSecond((if (number > 10_000_000_000.0) number / 1000.0 else number).roundToLong())
+            } else Instant.parse(s)
+        } catch (failure: Exception) {
+            throw com.remodex.mobile.core.error.CodexServiceError.InvalidResponse("Invalid rate limit resetsAt").apply { initCause(failure) }
+        }
     }
 
     private fun containsDirectRateLimitWindows(o: Map<String, JSONValue>): Boolean =

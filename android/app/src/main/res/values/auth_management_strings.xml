@@ -1,0 +1,36 @@
+<resources>
+    <string name="auth_manage_section_title">Authorization files</string>
+    <string name="auth_manage_title">Authorization maintenance</string>
+    <string name="auth_manage_import">Import / replace</string>
+    <string name="auth_manage_file">Manage authorization file</string>
+    <string name="auth_manage_check">Check file and expiry</string>
+    <string name="auth_manage_export">Export to selected location</string>
+    <string name="auth_manage_schedule">Daily at 04:00 Beijing time · one automatic attempt per inactive account</string>
+    <string name="auth_manage_last_check">Last server check: %1$s</string>
+    <string name="auth_manage_last_run">Last daily maintenance: %1$s</string>
+    <string name="auth_manage_next_check">Next scheduled check: %1$s</string>
+    <string name="auth_manage_stale">This check record is not recent. Refresh the list for the latest status.</string>
+    <string name="auth_manage_active_note">The server checks current credentials every minute and saves newer versions to matching slots. Within 15 minutes of expiry it can ask Codex to refresh, at most once daily. Viewing this page never forces rotation.</string>
+    <string name="auth_manage_active_healthy">Current access token is within its validity period.</string>
+    <string name="auth_manage_active_refreshed">Current credentials refreshed and saved to matching slots.</string>
+    <string name="auth_manage_active_conflict">A saved version is newer or cannot be compared. Both versions were preserved.</string>
+    <string name="auth_manage_active_attempted">Fallback refresh already attempted today; automatic retries are paused.</string>
+    <string name="auth_manage_active_failed">Current credential maintenance did not complete. See the error details.</string>
+    <string name="auth_manage_active_unknown">Current credential maintenance status is not yet confirmed.</string>
+    <string name="auth_manage_current_file">Current authorization file</string>
+    <string name="auth_manage_auto_failed">Automatic refresh failed for %1$s · details</string>
+    <string name="auth_manage_checked">File structure checked. Server acceptance is not verified by this check.</string>
+    <string name="auth_manage_imported">Authorization imported. The current account was not switched.</string>
+    <string name="auth_manage_exported">Authorization saved to your selected location.</string>
+    <string name="auth_manage_token_expired">The access token timestamp has expired. This does not establish whether the refresh token is still usable.</string>
+    <string name="auth_manage_token_in_time">The access token is within its stated validity period.</string>
+    <string name="auth_manage_token_unknown">The access token expiry is unknown.</string>
+    <string name="auth_manage_importing">Uploading and importing authorization…</string>
+    <string name="auth_manage_exporting">Saving authorization…</string>
+    <string name="auth_manage_checking">Checking file and expiry…</string>
+    <string name="auth_manage_import_note">Choose a slot, then select auth.json (up to 64 KiB). Replacing a slot preserves its previous file on the server. The account currently in use cannot be replaced here.</string>
+    <string name="auth_manage_slot_active">%1$s · In use</string>
+    <string name="auth_manage_slot_replace">%1$s · Replace saved authorization</string>
+    <string name="auth_manage_slot_new">%1$s · Empty slot</string>
+    <string name="auth_manage_choose_file">Choose file and import</string>
+</resources>

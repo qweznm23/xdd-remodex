@@ -30,6 +30,8 @@ data class SidebarColorPalette(
     val onAccent: Color,
     val green: Color,
     val red: Color,
+    val unread: Color,
+    val unreadBackground: Color,
 )
 
 @Composable
@@ -55,6 +57,8 @@ fun rememberSidebarColorPalette(
                 onAccent = onAccent,
                 green = Color(0xFF55D979),
                 red = Color(0xFFFF6B6B),
+                unread = Color(0xFF9BC4FF),
+                unreadBackground = Color(0xFF203853),
             )
         } else {
             SidebarColorPalette(
@@ -69,6 +73,8 @@ fun rememberSidebarColorPalette(
                 onAccent = onAccent,
                 green = Color(0xFF18A957),
                 red = Color(0xFFC4484D),
+                unread = Color(0xFF215EA6),
+                unreadBackground = Color(0xFFDCEBFC),
             )
         }
     }

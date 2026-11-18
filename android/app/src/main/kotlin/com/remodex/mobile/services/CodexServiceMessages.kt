@@ -47,8 +47,12 @@ internal suspend fun CodexService.sendNotificationImpl(
 
 internal fun CodexService.sendMessage(message: RPCMessage) {
     val payload = jsonRpc.encodeMessage(message)
-    val wire = secureWireText(payload)
-    sendRawText(wire)
+    // Counter assignment and socket enqueue must keep the same order, including
+    // concurrent file chunks, history requests, and foreground refreshes.
+    synchronized(secureSessionLock) {
+        val wire = secureWireText(payload)
+        sendRawText(wire)
+    }
 }
 
 internal fun CodexService.processWireText(raw: String) {
@@ -94,11 +98,32 @@ internal fun CodexService.dispatchIncomingRpc(message: RPCMessage) {
             requestId = message.id!!,
             params = message.params,
         ) { response ->
-            runCatching { sendMessage(response) }
+            sendMessage(response)
         }
         return
     }
     if (method != null) {
+        if (method == "serverRequest/resolved") {
+            val params = message.params?.objectValue
+            val threadId = params?.get("threadId")?.stringValue
+            params?.get("requestId")?.let { requestId ->
+                val key = JSONValue.toJsonElement(requestId).toString()
+                synchronized(pendingStructuredInputResponders) {
+                    if (_pendingStructuredInputRequests.value[key]?.threadId == threadId) {
+                        pendingStructuredInputResponders.remove(key)
+                        _pendingStructuredInputRequests.value = _pendingStructuredInputRequests.value - key
+                        _pendingStructuredInputRequest.value = _pendingStructuredInputRequests.value.values.firstOrNull()
+                    }
+                }
+            }
+        }
+        if (method == "thread/status/changed") {
+            val params = message.params?.objectValue
+            val threadId = params?.get("threadId")?.stringValue
+            val waiting = params?.get("status")?.objectValue?.get("activeFlags")?.arrayValue?.any { it.stringValue == "waitingOnUserInput" } == true
+            if (threadId != null) _threads.value = _threads.value.map { if (it.id == threadId) it.copy(waitingOnUserInput = waiting) else it }
+        }
+        handleSidebarNotification(method, message.params)
         incomingRouter.dispatchNotification(method, message.params)
         return
     }

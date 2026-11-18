@@ -57,7 +57,22 @@ data class CodexStructuredUserInputRequest(
     @Serializable(JSONValueSerializer::class)
     val requestID: JSONValue,
     val questions: List<CodexStructuredUserInputQuestion>,
-)
+    /** async questions are message content; rpc questions require a live server responder. */
+    val source: String = "rpc",
+    val answers: Map<String, List<String>> = emptyMap(),
+    val submitted: Boolean = false,
+    val turnId: String? = null,
+    val itemId: String? = null,
+    /** Connection-local evidence from a live async event. Never restored from disk/history. */
+    @kotlinx.serialization.Transient val isLive: Boolean = false,
+) {
+    val isAnswerableAsync: Boolean get() = source == "async" && isLive && !submitted
+    /** Explicit user action only; this never makes old questions pending again. */
+    val canReplyFromHistory: Boolean get() = source in setOf("async", "rpc") && !submitted && questions.any { it.id !in answers }
+    val identity: String get() = JSONValue.toJsonElement(JSONValue.Arr(listOf(
+        JSONValue.Str(source), JSONValue.Str(turnId.orEmpty()), JSONValue.Str(itemId.orEmpty()), requestID,
+    ))).toString()
+}
 
 @Serializable
 data class CodexSubagentRef(

@@ -10,6 +10,7 @@ internal data class ThreadTurnInterruptSnapshot(
     val interruptibleTurnId: String?,
     val hasInterruptibleTurnWithoutId: Boolean,
     val latestTurnId: String?,
+    val latestSuccessfulTurnId: String? = null,
 )
 
 internal object ThreadTurnSnapshot {

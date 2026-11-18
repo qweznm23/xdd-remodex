@@ -12,19 +12,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.valentinilk.shimmer.shimmer
 import com.remodex.mobile.AppContainer
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.CodexMessage
@@ -37,13 +34,12 @@ import com.remodex.mobile.core.model.UserBubbleColor
 import com.remodex.mobile.ui.LocalUserBubbleColor
 import com.remodex.mobile.ui.agent.FileEditRow
 import com.remodex.mobile.ui.agent.ToolCallRow
-import com.remodex.mobile.ui.theme.accentBackground
+import com.remodex.mobile.ui.theme.RemodexLinkLight
+import com.remodex.mobile.ui.theme.RemodexLinkDark
 import com.remodex.mobile.ui.theme.bubbleBackground
 import com.remodex.mobile.ui.theme.bubbleForeground
 import com.remodex.mobile.ui.theme.isAgentLightChrome
 import com.remodex.mobile.ui.theme.mentionForeground
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -112,7 +108,7 @@ fun TurnMessageRow(
         if (message.role == CodexMessageRole.user) {
             userBubbleColor.mentionForeground(colors, isLightChrome, onBubble)
         } else {
-            userBubbleColor.accentBackground(colors, isLightChrome)
+            if (isLightChrome) RemodexLinkLight else RemodexLinkDark
         }
 
     Column(
@@ -177,40 +173,11 @@ fun TurnMessageRow(
                         skipThinkingHeadline = kindLabel != null,
                         cleanedDirectiveText = directiveOutcome.cleanedText,
                         hasDirectiveFindings = directiveOutcome.hasFindings,
-                    )
-                val proposedPlanExtraction =
-                    remember(message.id, message.role, message.kind, bodyMarkdown) {
-                        if (message.role == CodexMessageRole.assistant && message.kind == CodexMessageKind.chat) {
-                            ProposedPlanBlockParser.extract(bodyMarkdown)
-                        } else {
-                            ProposedPlanExtraction(visibleMarkdown = bodyMarkdown, plans = emptyList())
-                        }
-                    }
-                val renderedBodyMarkdown =
-                    if (proposedPlanExtraction.plans.isNotEmpty()) {
-                        proposedPlanExtraction.visibleMarkdown
-                    } else {
-                        bodyMarkdown
-                    }
-                val isStreamingAssistantChat =
-                    message.role == CodexMessageRole.assistant &&
-                        message.kind == CodexMessageKind.chat &&
-                        message.isStreaming
-                val revealedBodyMarkdown =
-                    rememberStreamingAssistantMarkdown(
-                        messageId = message.id,
-                        markdown = renderedBodyMarkdown,
-                        isStreaming = isStreamingAssistantChat,
-                    )
-                val displayedBodyMarkdown = revealedBodyMarkdown
-                val cappedBody =
-                    remember(message.id, message.role, message.kind, displayedBodyMarkdown) {
-                        capTimelineBody(message, displayedBodyMarkdown)
-                    }
-                val streamingModifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .streamingAssistantShimmer(isStreamingAssistantChat)
+                    ).let { if (message.role == CodexMessageRole.user) com.remodex.mobile.data.ConversationQuestionCodec.displayReply(it) else it }
+                val preparedBody = remember(message, bodyMarkdown) { prepareTimelineBody(message, bodyMarkdown) }
+                val proposedPlanExtraction = preparedBody.first
+                val cappedBody = preparedBody.second
+                val bodyModifier = Modifier.fillMaxWidth()
                 when (message.kind) {
                     CodexMessageKind.thinking -> {
                         TurnThinkingTimelineRow(
@@ -265,7 +232,7 @@ fun TurnMessageRow(
                                 TurnRichMarkdownBody(
                                     markdown = cappedBody.text,
                                     contentColor = onBubble,
-                                    modifier = streamingModifier,
+                                    modifier = bodyModifier,
                                     keyPrefix = message.id,
                                     linkColor = markdownLinkColor,
                                 )
@@ -279,7 +246,7 @@ fun TurnMessageRow(
                                             MaterialTheme.typography.bodyMedium
                                         },
                                     color = onBubble,
-                                    modifier = streamingModifier,
+                                    modifier = bodyModifier,
                                 )
                             }
                             if (cappedBody.truncated && onOpenFullMessage != null) {
@@ -340,7 +307,10 @@ fun TurnMessageRow(
                         color = onBubble.copy(alpha = 0.72f),
                     )
                 }
-                if (message.kind == CodexMessageKind.userInputPrompt) {
+                message.structuredUserInputRequest?.let { request ->
+                    ConversationQuestionCard(message.threadId, request)
+                }
+                if (message.kind == CodexMessageKind.userInputPrompt && message.structuredUserInputRequest == null) {
                     Text(
                         text = stringResource(R.string.turn_timeline_structured_input_hint),
                         style = MaterialTheme.typography.labelSmall,
@@ -363,66 +333,6 @@ fun TurnMessageRow(
     }
 }
 
-@Composable
-private fun rememberStreamingAssistantMarkdown(
-    messageId: String,
-    markdown: String,
-    isStreaming: Boolean,
-): String {
-    if (isStreaming && markdown.length > STREAMING_ASSISTANT_REVEAL_DISABLE_CHARS) {
-        return markdown
-    }
-    var displayed by remember(messageId) { mutableStateOf(if (isStreaming) "" else markdown) }
-    val latestMarkdown by rememberUpdatedState(markdown)
-
-    LaunchedEffect(messageId, isStreaming) {
-        if (!isStreaming) {
-            displayed = latestMarkdown
-            return@LaunchedEffect
-        }
-
-        if (displayed.isEmpty() && STREAMING_ASSISTANT_INITIAL_DELAY_MS > 0L) {
-            delay(STREAMING_ASSISTANT_INITIAL_DELAY_MS)
-        }
-
-        while (isActive) {
-            val target = latestMarkdown
-            displayed =
-                when {
-                    target.isEmpty() -> ""
-                    displayed.isEmpty() -> target.take(streamingRevealStep(target.length))
-                    target.startsWith(displayed) && displayed.length < target.length -> {
-                        val nextLength =
-                            (displayed.length + streamingRevealStep(target.length - displayed.length))
-                                .coerceAtMost(target.length)
-                        target.take(nextLength)
-                    }
-                    target == displayed -> displayed
-                    else -> target
-                }
-            delay(STREAMING_ASSISTANT_REVEAL_FRAME_MS)
-        }
-    }
-
-    return if (isStreaming) displayed else markdown
-}
-
-private fun streamingRevealStep(remaining: Int): Int =
-    when {
-        remaining > 180 -> 32
-        remaining > 80 -> 20
-        remaining > 24 -> 8
-        else -> 3
-    }
-
-@Composable
-private fun Modifier.streamingAssistantShimmer(enabled: Boolean): Modifier {
-    return if (enabled) this.shimmer() else this
-}
-
-private const val STREAMING_ASSISTANT_INITIAL_DELAY_MS = 80L
-private const val STREAMING_ASSISTANT_REVEAL_FRAME_MS = 34L
-private const val STREAMING_ASSISTANT_REVEAL_DISABLE_CHARS = 1_800
 private const val USER_MESSAGE_INLINE_MAX_CHARS = 1_200
 private const val USER_MESSAGE_INLINE_MAX_LINES = 12
 private const val ASSISTANT_MESSAGE_INLINE_MAX_LINES = 18
@@ -433,6 +343,24 @@ private data class CappedTimelineBody(
     val text: String,
     val truncated: Boolean,
 )
+
+private fun prepareTimelineBody(message: CodexMessage, body: String): Pair<ProposedPlanExtraction, CappedTimelineBody> {
+    val plans = if (message.role == CodexMessageRole.assistant && message.kind == CodexMessageKind.chat)
+        ProposedPlanBlockParser.extract(body) else ProposedPlanExtraction(visibleMarkdown = body, plans = emptyList())
+    val rendered = if (plans.plans.isNotEmpty()) plans.visibleMarkdown else body
+    val displayed = if (message.structuredUserInputRequest?.questions?.any { it.question.trim() == rendered.trim() } == true ||
+        message.kind == CodexMessageKind.userInputPrompt && message.structuredUserInputRequest != null) "" else rendered
+    return plans to capTimelineBody(message, displayed)
+}
+
+/** Same body transformation as the row, for background preparation of settled chat history. */
+internal fun settledTimelineMarkdown(message: CodexMessage): String? {
+    if (message.isStreaming || message.kind != CodexMessageKind.chat || message.role == CodexMessageRole.system) return null
+    val raw = TurnDirectiveRenderCache.parseCodeCommentDirectives(message.id, message.text).cleanedText.trim()
+    if (raw.isEmpty()) return null // Localized empty/streaming placeholders are tiny and stay in the UI.
+    val body = if (message.role == CodexMessageRole.user) com.remodex.mobile.data.ConversationQuestionCodec.displayReply(raw) else raw
+    return prepareTimelineBody(message, body).second.text
+}
 
 private fun capTimelineBody(
     message: CodexMessage,
@@ -602,7 +530,7 @@ private fun timelineBodyText(
     return when (message.kind) {
         CodexMessageKind.chat ->
             when {
-                raw.isEmpty() && message.attachments.isNotEmpty() -> ""
+                raw.isEmpty() && (message.attachments.isNotEmpty() || message.structuredUserInputRequest != null) -> ""
                 raw.isNotEmpty() ->
                     if (message.isStreaming) {
                         "$raw ..."

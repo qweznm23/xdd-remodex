@@ -23,6 +23,7 @@ data class PendingStructuredInputRequest(
     val threadId: String?,
     val turnId: String?,
     val questions: List<PendingStructuredInputQuestion>,
+    val itemId: String? = null,
 )
 
 data class PendingStructuredInputQuestion(
@@ -30,6 +31,7 @@ data class PendingStructuredInputQuestion(
     val header: String,
     val question: String,
     val options: List<PendingStructuredInputOption> = emptyList(),
+    val isSecret: Boolean = false,
 )
 
 data class PendingStructuredInputOption(

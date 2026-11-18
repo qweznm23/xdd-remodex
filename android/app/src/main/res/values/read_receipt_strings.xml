@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sidebar_mark_read_failed">Could not mark as read. Refresh the list and open the conversation again: %1$s</string>
+</resources>

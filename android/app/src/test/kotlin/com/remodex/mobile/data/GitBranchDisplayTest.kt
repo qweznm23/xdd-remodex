@@ -85,7 +85,9 @@ class GitBranchDisplayTest {
 
     @Test
     fun userVisibleMessage_mapsDisconnected() {
-        val msg = GitBranchDisplayMapper.userVisibleMessage(GitActionsError.Disconnected)
+        val msg = GitBranchDisplayMapper.userVisibleMessage(
+            GitActionsError.Disconnected(com.remodex.mobile.core.error.CodexServiceError.Disconnected),
+        )
         assertEquals("Not connected to bridge.", msg)
     }
 }

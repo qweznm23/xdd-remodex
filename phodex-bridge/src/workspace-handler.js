@@ -6,6 +6,7 @@
 
 const { execFile } = require("child_process");
 const fs = require("fs");
+const { createHash } = require("crypto");
 const os = require("os");
 const path = require("path");
 const { promisify, TextDecoder } = require("util");
@@ -43,6 +44,11 @@ const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
 /** Match git-handler.js: Node default maxBuffer is 1 MiB. */
 const GIT_EXEC_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const repoMutationLocks = new Map();
+const { createWorkspaceUploadHandler, uploadMethods } = require('./workspace-upload');
+const workspaceUpload = createWorkspaceUploadHandler();
+const fileStreams = process.env.REMODEX_FILE_STREAM_PORT ? require('./file-stream').createFileStreams() : null;
+if (fileStreams) fileStreams.server.listen(Number(process.env.REMODEX_FILE_STREAM_PORT), '127.0.0.1').unref();
+
 
 function handleWorkspaceRequest(rawMessage, sendResponse) {
   let parsed;
@@ -73,7 +79,14 @@ function handleWorkspaceRequest(rawMessage, sendResponse) {
           error: {
             code: -32000,
             message,
-            data: { errorCode },
+            data: {
+              errorCode,
+              ...(method === "workspace/fileInfo" || method === "workspace/readFileChunk" || method === "workspace/prepareTransfer" || uploadMethods.has(method) ? {
+                operation: method,
+                stage: "workspace_file_transfer",
+                diagnostic: downloadErrorDiagnostic(err),
+              } : {}),
+            },
           },
         })
       );
@@ -83,6 +96,11 @@ function handleWorkspaceRequest(rawMessage, sendResponse) {
 }
 
 async function handleWorkspaceMethod(method, params) {
+  if (method === 'workspace/prepareTransfer') return prepareFileTransfer(params);
+  if (uploadMethods.has(method)) return workspaceUpload(method, params);
+  if (method === "workspace/fileInfo" || method === "workspace/readFileChunk") {
+    return workspaceDownloadFile(method, params);
+  }
   if (method === "workspace/readImage") {
     return workspaceReadImage(params);
   }
@@ -115,6 +133,115 @@ async function handleWorkspaceMethod(method, params) {
     default:
       throw workspaceError("unknown_method", `Unknown workspace method: ${method}`);
   }
+}
+
+const DOWNLOAD_CHUNK_BYTES = 256 * 1024;
+
+function downloadErrorDiagnostic(error, depth = 0) {
+  if (depth >= 4) return { truncated: true };
+  return {
+    type: error.name, code: error.code, message: error.message,
+    stack: String(error.stack || "").slice(0, 8192),
+    truncated: String(error.stack || "").length > 8192,
+    cause: error.cause ? downloadErrorDiagnostic(error.cause, depth + 1) : undefined,
+    suppressed: error.suppressed?.map(e => downloadErrorDiagnostic(e, depth + 1)),
+  };
+}
+
+function downloadRevision(stat) {
+  return createHash("sha256").update([stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":")).digest("hex");
+}
+
+// Every request is scoped to the paired workspace; only a bounded chunk crosses the relay.
+async function workspaceDownloadFile(method, params) {
+  const requested = firstNonEmptyString([params.path, params.filePath]);
+  if (!requested) throw workspaceError("missing_file_path", "The request must include a file path.");
+  const cwd = await resolveWorkspaceCwd(params);
+  const root = await resolveReadableWorkspaceRoot(cwd);
+  const resolved = await resolveWorkspaceTextFilePath(cwd, requested, root);
+  if (!resolved) throw workspaceError("file_not_found", "The file no longer exists on this computer.");
+  if (!root || !isPathInside(resolved, root)) throw workspaceError("file_path_not_allowed", "Only files in the current workspace can be downloaded.");
+  const file = await fs.promises.open(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  let primaryError;
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) throw workspaceError("not_a_file", "Only regular files can be downloaded.");
+    const revision = downloadRevision(stat);
+    const metadata = { path: resolved, fileName: path.basename(resolved), byteLength: stat.size, revision };
+    if (method === "workspace/fileInfo") {
+      const sample = Buffer.alloc(Math.min(stat.size, BINARY_SNIFF_BYTES));
+      const { bytesRead } = await file.read(sample, 0, sample.length, 0);
+      const extension = path.extname(resolved).toLowerCase();
+      let isText = !sample.subarray(0, bytesRead).includes(0);
+      if (isText) {
+        try { new TextDecoder("utf-8", { fatal: true }).decode(sample.subarray(0, bytesRead), { stream: bytesRead < stat.size }); }
+        catch { isText = false; }
+      }
+      const binaryTypes = { ".apk": "application/vnd.android.package-archive", ".zip": "application/zip", ".pdf": "application/pdf", ".gz": "application/gzip", ".7z": "application/x-7z-compressed", ".jar": "application/java-archive", ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".3gp": "video/3gpp", ".3g2": "video/3gpp2", ".ogv": "video/ogg", ".mpeg": "video/mpeg", ".mpg": "video/mpeg", ".m2v": "video/mpeg", ".mp3": "audio/mpeg" };
+      const imageMime = IMAGE_MIME_TYPES_BY_EXTENSION.get(extension);
+      const mimeType = imageMime || binaryTypes[extension] || (isText ? "text/plain" : "application/octet-stream");
+      const previewKind = imageMime && (fileStreams || stat.size <= MAX_IMAGE_READ_BYTES) ? "image"
+        : !imageMime && !binaryTypes[extension] && isText && (fileStreams || stat.size <= MAX_TEXT_FILE_READ_BYTES) ? "text" : "none";
+      if (downloadRevision(await file.stat()) !== revision) throw workspaceError("file_changed", "The file changed while reading its metadata. Try again.");
+      return { ...metadata, mimeType, previewKind, binaryStream: !!fileStreams };
+    }
+    if (typeof params.revision !== "string" || params.revision !== revision) throw workspaceError("file_changed", "The file changed during download. Download it again.");
+    const offset = params.offset;
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > stat.size) throw workspaceError("invalid_offset", "Invalid download offset.");
+    const buffer = Buffer.alloc(Math.min(DOWNLOAD_CHUNK_BYTES, stat.size - offset));
+    let count = 0;
+    while (count < buffer.length) {
+      const { bytesRead } = await file.read(buffer, count, buffer.length - count, offset + count);
+      if (!bytesRead) throw workspaceError("file_changed", "The file ended unexpectedly during download.");
+      count += bytesRead;
+    }
+    if (downloadRevision(await file.stat()) !== revision) throw workspaceError("file_changed", "The file changed during download. Download it again.");
+    return { ...metadata, offset, nextOffset: offset + count, eof: offset + count === stat.size,
+      dataBase64: buffer.toString("base64"), sha256: createHash("sha256").update(buffer).digest("hex") };
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try { await file.close(); }
+    catch (error) {
+      if (primaryError) (primaryError.suppressed ||= []).push(error);
+      else throw error;
+    }
+  }
+}
+
+// Resolve workspace access before minting a short-lived, file-specific capability.
+async function prepareFileTransfer(params) {
+  if (!fileStreams) throw workspaceError('stream_unavailable', 'Binary file transfer is not configured');
+  const mode = params.mode || 'download';
+  if (!['download','image','text'].includes(mode)) throw workspaceError('invalid_mode','Invalid preview mode');
+  let info, data, nextOffset;
+  if (mode === 'image') {
+    const preview = await workspaceReadImage({...params, maxPixelDimension: Number(params.maxPixelDimension) || 1600});
+    const stat = await fs.promises.stat(preview.path);
+    if (downloadRevision(stat) !== preview.revision) throw workspaceError('file_changed','Image changed during preview');
+    info = {path:preview.path, revision:downloadRevision(stat)};
+    data = Buffer.from(preview.dataBase64, 'base64');
+  } else {
+    info = await workspaceDownloadFile('workspace/fileInfo', params);
+    if (params.revision && params.revision !== info.revision) throw workspaceError('file_changed','File changed before transfer');
+    if (mode === 'text') {
+      if (info.previewKind !== 'text') throw workspaceError('not_text','File cannot be previewed as text');
+      const offset = params.offset || 0;
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > info.byteLength) throw workspaceError('invalid_offset','Invalid text offset');
+      const file = await fs.promises.open(info.path, 'r'); let primary;
+      try {
+        const buffer = Buffer.alloc(Math.min(64 * 1024, info.byteLength - offset));
+        const {bytesRead} = await file.read(buffer,0,buffer.length,offset);
+        const content = new TextDecoder('utf-8',{fatal:true}).decode(buffer.subarray(0,bytesRead),{stream:offset+bytesRead<info.byteLength});
+        data = Buffer.from(content); nextOffset = offset + data.length;
+        if (downloadRevision(await file.stat()) !== info.revision) throw workspaceError('file_changed','File changed during preview');
+      } catch(error) { primary=error; throw error; }
+      finally { try { await file.close(); } catch(error) { if(primary) (primary.suppressed ||= []).push(error); else throw error; } }
+    }
+  }
+  const transfer = fileStreams.grant({path:info.path,revision:info.revision,byteLength:data ? data.length : info.byteLength,data});
+  return {...transfer, nextOffset, totalBytes:info.byteLength};
 }
 
 // Reads a UTF-8 text file from the active workspace for the phone-side read-only viewer.
@@ -228,6 +355,7 @@ async function workspaceReadImage(params) {
 
   const result = {
     path: realImagePath,
+    revision: downloadRevision(stat),
     fileName: path.basename(realImagePath),
     mimeType,
     byteLength: stat.size,
@@ -249,6 +377,7 @@ async function workspaceReadImage(params) {
     : await fs.promises.readFile(realImagePath);
   return {
     ...result,
+    mimeType: maxPixelDimension && process.platform === "linux" ? "image/jpeg" : mimeType,
     dataByteLength: data.length,
     dataBase64: data.toString("base64"),
   };
@@ -418,7 +547,40 @@ function countLines(content) {
   return content.endsWith("\n") ? newlineCount : newlineCount + 1;
 }
 
+const thumbnailCache = new Map();
+const thumbnailPending = new Map();
+let thumbnailBytes = 0;
+let thumbnailActive = 0;
+const thumbnailWaiters = [];
 async function readPreviewImageData(imagePath, maxPixelDimension, originalByteLength) {
+  const stat = await fs.promises.stat(imagePath);
+  const key = `${imagePath}:${downloadRevision(stat)}:${maxPixelDimension}`;
+  const cached = thumbnailCache.get(key);
+  if (cached) { thumbnailCache.delete(key); thumbnailCache.set(key,cached); return cached; }
+  if (thumbnailPending.has(key)) return thumbnailPending.get(key);
+  if (thumbnailPending.size >= 32) throw workspaceError('preview_busy','Image previews are busy; retry shortly');
+  const work = (async () => {
+    if (thumbnailActive >= 2) await new Promise(resolve => thumbnailWaiters.push(resolve));
+    else thumbnailActive++;
+    try { return await generatePreviewImageData(imagePath,maxPixelDimension,originalByteLength); }
+    finally { const next=thumbnailWaiters.shift(); if(next) next(); else thumbnailActive--; }
+  })().then(data => {
+    thumbnailCache.set(key,data); thumbnailBytes += data.length;
+    while (thumbnailBytes > 32 * 1024 * 1024) { const oldest=thumbnailCache.keys().next().value; thumbnailBytes-=thumbnailCache.get(oldest).length; thumbnailCache.delete(oldest); }
+    return data;
+  }).finally(()=>thumbnailPending.delete(key));
+  thumbnailPending.set(key,work);
+  return work;
+}
+async function generatePreviewImageData(imagePath, maxPixelDimension, originalByteLength) {
+  if (process.platform === 'linux') {
+    try {
+      const {stdout} = await execFileAsync(process.env.REMODEX_IMAGE_PYTHON || '/usr/bin/python3', [path.join(__dirname,'image-preview-linux.py'),imagePath,String(maxPixelDimension)], {encoding:'buffer',maxBuffer:MAX_IMAGE_PREVIEW_READ_BYTES,timeout:IMAGE_PREVIEW_TOTAL_TIMEOUT_MS});
+      return stdout;
+    } catch(cause) {
+      const error=workspaceError('image_preview_failed','Image preview conversion failed'); error.cause=cause; throw error;
+    }
+  }
   if (!usesNativeImagePreview()) {
     if (originalByteLength <= MAX_IMAGE_PREVIEW_READ_BYTES) {
       return fs.promises.readFile(imagePath);

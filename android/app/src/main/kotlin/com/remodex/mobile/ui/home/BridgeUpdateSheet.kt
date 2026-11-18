@@ -85,9 +85,9 @@ fun BridgeUpdateSheet(
                     Text(stringResource(R.string.bridge_update_copy_install_command))
                 }
             }
-            TextButton(onClick = onRetry) { Text("Retry") }
-            TextButton(onClick = onScanNewQr) { Text("Scan new QR") }
-            TextButton(onClick = onDismiss) { Text("Dismiss") }
+            TextButton(onClick = onRetry) { Text(stringResource(R.string.workspace_text_preview_retry)) }
+            TextButton(onClick = onScanNewQr) { Text(stringResource(R.string.nav_reconnect_scan_new_qr)) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_dismiss)) }
         }
     }
 }

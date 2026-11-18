@@ -2,7 +2,6 @@ package com.remodex.mobile.core.transport
 
 import com.remodex.mobile.core.model.SecureErrorMessage
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 
 /**
@@ -14,10 +13,12 @@ internal class SecureControlMultiplexer(
     private val onSecureError: (SecureErrorMessage) -> Unit,
 ) {
     private val lock = Any()
+    private var terminalFailure: Throwable? = null
     private val channels = mutableMapOf<String, Channel<String>>()
 
     private fun channel(kind: String): Channel<String> =
         synchronized(lock) {
+            terminalFailure?.let { throw it }
             channels.getOrPut(kind) { Channel(capacity = 16) }
         }
 
@@ -26,7 +27,7 @@ internal class SecureControlMultiplexer(
         timeoutMs: Long = 12_000L,
     ): String {
         val ch = channel(kind)
-        return withTimeout(timeoutMs) { ch.receive() }
+        return awaitConnectionStage(kind, timeoutMs) { ch.receive() }
     }
 
     fun offer(
@@ -51,6 +52,13 @@ internal class SecureControlMultiplexer(
             return
         }
         channel(kind).trySend(raw)
+    }
+
+    fun fail(error: Throwable) {
+        synchronized(lock) {
+            terminalFailure = error
+            channels.values.forEach { it.close(error) }
+        }
     }
 
     fun reset() {

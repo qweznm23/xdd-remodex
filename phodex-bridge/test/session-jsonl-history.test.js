@@ -583,3 +583,16 @@ test("parseSessionJsonlTurns hides subagent orchestration transcript internals",
     ]
   );
 });
+
+
+test("async input tool history matches native question items without losing original indices", () => {
+  const questions = [{ title: "Choose", options: ["A", "B"] }, { title: "Enter details" }];
+  const turns = parseSessionJsonlTurns(JSON.stringify({ type: "response_item", payload: {
+    type: "function_call", name: "request_user_input_async", call_id: "original-call",
+    arguments: JSON.stringify({ questions }),
+  }}));
+  assert.equal(turns[0].items[0].type, "agentMessage");
+  assert.equal(turns[0].items[0].id, "original-call");
+  assert.deepEqual(turns[0].items[0].questions, questions);
+  assert.equal(turns[0].items[0].text, "");
+});

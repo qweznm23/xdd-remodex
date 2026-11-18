@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_appearance_summary">主题：%1$s · 语言：%2$s</string>
+    <string name="settings_components">组件与工具</string>
+    <string name="settings_group_preferences">使用偏好</string>
+    <string name="settings_group_account_connection">账户与连接</string>
+    <string name="settings_group_application">应用</string>
+    <string name="settings_accounts_auth">账户与授权</string>
+    <string name="settings_accounts_summary">当前账户、登录状态与授权信息</string>
+    <string name="settings_usage_summary">额度剩余、重置时间与上下文</string>
+    <string name="settings_connection_summary">连接状态与网络设置</string>
+    <string name="settings_components_summary">手机应用、电脑桥接与终端工具</string>
+    <string name="settings_current_connection">当前连接</string>
+    <string name="settings_current_account">当前 Codex 账户</string>
+    <string name="settings_account_identity">账号</string>
+    <string name="settings_account_status">登录状态</string>
+    <string name="settings_account_plan">套餐</string>
+    <string name="settings_account_method">授权方式</string>
+    <string name="settings_auth_valid">已登录</string>
+    <string name="settings_auth_pending">等待登录</string>
+    <string name="settings_auth_expired">需要重新登录</string>
+    <string name="settings_auth_missing">未登录</string>
+    <string name="settings_auth_files">授权文件</string>
+    <string name="settings_auth_files_scope">当前连接尚未提供授权文件列表。账户信息仅代表当前使用的授权。</string>
+    <string name="settings_phone_component">手机端</string>
+    <string name="settings_computer_components">电脑端</string>
+    <string name="settings_bridge_version">Remodex 桥接版本</string>
+    <string name="settings_host_system">宿主系统</string>
+    <string name="settings_host_transport">Codex 连接模式</string>
+    <string name="settings_help_tools">工具与帮助</string>
+    <string name="settings_terminal_summary">Windows SSH 安装和连接说明</string>
+    <string name="settings_host_read_failed">读取失败，可重试或查看详情</string>
+    <string name="settings_host_read_source">来自当前连接的电脑</string>
+    <string name="settings_font_title">字体</string>
+    <string name="settings_pet_summary">显示与选择桌面宠物</string>
+</resources>

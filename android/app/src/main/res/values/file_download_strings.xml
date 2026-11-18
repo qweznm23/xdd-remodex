@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="file_download_action">Download file</string>
+    <string name="file_download_size">File size: %1$.2f MiB</string>
+    <string name="file_download_progress">Downloaded %1$.2f / %2$.2f MiB</string>
+    <string name="file_download_keep_open">Keep this window open until the download completes. Closing it cancels the download.</string>
+    <string name="file_download_saved">Saved to Downloads/Remodex.</string>
+    <string name="file_download_saved_selected">Saved to the selected location.</string>
+    <string name="file_download_open">Open file</string>
+    <string name="file_download_no_preview">This file does not support preview. You can download the original file.</string>
+    <string name="file_download_cancelled">Download cancelled. Incomplete file removed.</string>
+    <string name="file_preview_next_page">Next page</string>
+    <string name="file_preview_previous_page">Previous page</string>
+</resources>

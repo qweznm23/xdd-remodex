@@ -87,9 +87,16 @@ object AppContainer {
     lateinit var relayHealthClient: RelayHealthClient
         private set
 
+    internal lateinit var imagePreviews: com.remodex.mobile.services.WorkspacePreviewCache
+        private set
+
+    internal lateinit var appUpdates: com.remodex.mobile.update.AppUpdateController
+        private set
+
     fun initialize(context: Context) {
         val app = context.applicationContext
         appContext = app
+        imagePreviews = com.remodex.mobile.services.WorkspacePreviewCache(java.io.File(app.cacheDir,"workspace-previews"))
         secureStore = SecureStore(app)
         val terminalStore = SecureTerminalKeyValueStore(secureStore)
         terminalProfileRepository = TerminalProfileRepository(terminalStore)
@@ -105,6 +112,12 @@ object AppContainer {
                 .callTimeout(30, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(false)
                 .build()
+        appUpdates = com.remodex.mobile.update.AppUpdateController(app, httpCallClient) {
+            com.remodex.mobile.update.updateUrlFromRelay(
+                sessionPersistence.loadRelaySnapshot().relayUrl,
+                sessionPersistence.loadLocalRelayHostOverride().orEmpty(),
+            )
+        }
         httpClient =
             httpCallClient.newBuilder()
                 .pingInterval(30, TimeUnit.SECONDS)

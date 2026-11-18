@@ -25,6 +25,8 @@ sealed class CodexServiceError(
 
     data object Disconnected : CodexServiceError("WebSocket not connected")
 
+    data object NoPendingUserInput : CodexServiceError("This question no longer has an active input request")
+
     data object NoPendingApproval : CodexServiceError("No pending approval request")
 
     class RpcFailure(

@@ -133,3 +133,82 @@ test("workspace/readFile rejects binary files", async () => {
     /looks binary/
   );
 });
+
+test("workspace downloads APKs larger than the preview limit in bounded verified chunks", async (t) => {
+  const { createHash, randomBytes } = require("crypto");
+  const dir = makeGitWorkspace();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bytes = randomBytes(3 * 1024 * 1024 + 7);
+  fs.writeFileSync(path.join(dir, "app.apk"), bytes);
+  const info = await handleWorkspaceMethod("workspace/fileInfo", { cwd: dir, path: "app.apk" });
+  assert.equal(info.previewKind, "none");
+  assert.equal(info.mimeType, "application/vnd.android.package-archive");
+  const received = [];
+  let offset = 0;
+  while (offset < info.byteLength) {
+    const chunk = await handleWorkspaceMethod("workspace/readFileChunk", { cwd: dir, path: info.path, revision: info.revision, offset });
+    const data = Buffer.from(chunk.dataBase64, "base64");
+    assert.ok(data.length <= 256 * 1024);
+    assert.equal(chunk.sha256, createHash("sha256").update(data).digest("hex"));
+    assert.equal(chunk.offset, offset);
+    assert.equal(chunk.nextOffset, offset + data.length);
+    offset = chunk.nextOffset;
+    assert.equal(chunk.eof, offset === bytes.length);
+    received.push(data);
+  }
+  assert.deepEqual(Buffer.concat(received), bytes);
+});
+
+test("file metadata distinguishes text, images, archives, and oversized text", async (t) => {
+  const dir = makeGitWorkspace();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const [name, content, kind] of [
+    ["readme.md", "你好\n", "text"], ["photo.png", Buffer.from([137, 80, 78, 71, 0]), "image"],
+    ["archive.zip", "PKtest", "none"], ["large.log", "a".repeat(2 * 1024 * 1024 + 1), "none"],
+    ["empty.txt", "", "text"], ["unknown.bin", Buffer.from([0, 255]), "none"],
+  ]) {
+    fs.writeFileSync(path.join(dir, name), content);
+    const info = await handleWorkspaceMethod("workspace/fileInfo", { cwd: dir, path: name });
+    assert.equal(info.previewKind, kind, name);
+  }
+});
+
+test("download rejects a changed file and invalid offsets instead of mixing versions", async (t) => {
+  const dir = makeGitWorkspace();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "app.apk"), "payload");
+  const info = await handleWorkspaceMethod("workspace/fileInfo", { cwd: dir, path: "app.apk" });
+  for (const offset of [-1, 1.5, 8, "0"]) {
+    await assert.rejects(handleWorkspaceMethod("workspace/readFileChunk", { cwd: dir, path: info.path, revision: info.revision, offset }), e => e.errorCode === "invalid_offset");
+  }
+  fs.appendFileSync(info.path, "changed");
+  await assert.rejects(handleWorkspaceMethod("workspace/readFileChunk", { cwd: dir, path: info.path, revision: info.revision, offset: 0 }), e => e.errorCode === "file_changed");
+});
+
+test("downloads reject symlink escapes and retain diagnostic stage and error code", async (t) => {
+  const { handleWorkspaceRequest } = require("../src/workspace-handler");
+  const dir = makeGitWorkspace();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-outside-"));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); });
+  fs.writeFileSync(path.join(outside, "secret.apk"), "secret");
+  fs.symlinkSync(path.join(outside, "secret.apk"), path.join(dir, "escape.apk"));
+  await assert.rejects(handleWorkspaceMethod("workspace/fileInfo", { cwd: dir, path: "escape.apk" }), e => e.errorCode === "file_path_not_allowed");
+  const response = await new Promise(resolve => handleWorkspaceRequest(JSON.stringify({ id: 1, method: "workspace/fileInfo", params: {} }), raw => resolve(JSON.parse(raw))));
+  assert.equal(response.error.data.errorCode, "missing_file_path");
+  assert.equal(response.error.data.operation, "workspace/fileInfo");
+  assert.equal(response.error.data.stage, "workspace_file_transfer");
+  assert.match(response.error.data.diagnostic.stack, /workspaceDownloadFile/);
+});
+
+test('video files expose player MIME types and never enter text or image previews', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'remodex-video-types-'));
+  try {
+    for (const [extension, mime] of [['mp4','video/mp4'],['webm','video/webm'],['mov','video/quicktime'],['mkv','video/x-matroska'],['m4v','video/mp4']]) {
+      const file = path.join(tempDir, 'clip.' + extension);
+      fs.writeFileSync(file, 'synthetic video fixture');
+      const metadata = await handleWorkspaceMethod('workspace/fileInfo', {cwd:tempDir,path:file});
+      assert.equal(metadata.mimeType,mime);
+      assert.equal(metadata.previewKind,'none');
+    }
+  } finally { fs.rmSync(tempDir,{recursive:true,force:true}); }
+});

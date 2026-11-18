@@ -11,16 +11,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -29,11 +26,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -43,21 +38,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
@@ -71,8 +67,6 @@ import com.remodex.mobile.core.model.AppFontStyle
 import com.remodex.mobile.core.model.AppLanguagePreference
 import com.remodex.mobile.core.model.AppThemePreference
 import com.remodex.mobile.core.model.UserBubbleColor
-import com.remodex.mobile.core.model.ContextWindowUsage
-import com.remodex.mobile.core.model.CodexRateLimitBucket
 import com.remodex.mobile.core.notification.LocalNotificationSettings
 import com.remodex.mobile.core.readRemodexAppVersionName
 import com.remodex.mobile.core.model.RelayHealthSnapshot
@@ -86,10 +80,16 @@ import com.remodex.mobile.data.UserBubblePreferences
 import com.remodex.mobile.services.RelayHealthClient
 import com.remodex.mobile.services.SubscriptionService
 import com.remodex.mobile.services.CodexService
-import com.remodex.mobile.ui.shared.UsageStatusSummary
 import com.remodex.mobile.ui.theme.remodexScreenTopAppBarColors
-import com.remodex.mobile.ui.theme.swatchColor
 import com.remodex.mobile.terminal.TerminalWindowsSetupGuide
+
+private enum class SettingsPage(val title: Int) {
+    HOME(R.string.nav_settings), APPEARANCE(R.string.settings_section_appearance),
+    NOTIFICATIONS(R.string.settings_section_notifications), CONNECTION(R.string.settings_section_connection),
+    COMPONENTS(R.string.settings_components), TERMINAL(R.string.terminal_windows_guide_title),
+    PETS(R.string.settings_section_pet), UPDATES(R.string.app_update_title),
+    ACCOUNT(R.string.settings_accounts_auth), SUBSCRIPTION(R.string.settings_section_subscription),
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,325 +101,296 @@ fun SettingsScreen(
     onNavigateToTesterHq: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    BackHandler(onBack = onNavigateBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var page by rememberSaveable { mutableStateOf(SettingsPage.HOME) }
+    var usageOpen by rememberSaveable { mutableStateOf(false) }
+    val pageStates = rememberSaveableStateHolder()
+    fun back() { page = if (page == SettingsPage.TERMINAL) SettingsPage.COMPONENTS else SettingsPage.HOME }
+    val navigateBack = { if (page == SettingsPage.HOME) onNavigateBack() else back() }
+    BackHandler(onBack = navigateBack)
     val conn by repository.connectionState.collectAsStateWithLifecycle()
+    val ready by repository.isSessionReady.collectAsStateWithLifecycle()
+    val deviceId by repository.currentTrustedMacDeviceId.collectAsStateWithLifecycle()
+    val activeThread by repository.activeThreadId.collectAsStateWithLifecycle()
     var fontStyle by remember { mutableStateOf(AppFontPreferences.readFontStyle(context)) }
     var languagePreference by remember { mutableStateOf(LanguagePreferences.read(context)) }
     var themePreference by remember { mutableStateOf(ThemePreferences.read(context)) }
     var userBubbleColor by remember { mutableStateOf(UserBubblePreferences.read(context)) }
-    var localRelayHostOverride by remember {
-        mutableStateOf(AppContainer.sessionPersistence.loadLocalRelayHostOverride().orEmpty())
-    }
+    var localRelayHostOverride by remember { mutableStateOf(AppContainer.sessionPersistence.loadLocalRelayHostOverride().orEmpty()) }
     val versionName = remember { readRemodexAppVersionName(context) }
-
-    Scaffold(
-        modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.nav_settings)) },
-                colors = remodexScreenTopAppBarColors(),
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.cd_navigate_back),
-                        )
-                    }
-                },
-            )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .navigationBarsPadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.settings_section_appearance),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = stringResource(R.string.settings_font_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            AppFontStyle.entries.forEach { option ->
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = option == fontStyle,
-                                onClick = {
-                                    fontStyle = option
-                                    AppFontPreferences.writeFontStyle(context, option)
-                                },
-                                role = Role.RadioButton,
-                            )
-                            .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
-                        selected = option == fontStyle,
-                        onClick = null,
-                    )
-                    Column(modifier = Modifier.padding(start = 8.dp)) {
-                        Text(text = option.title, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            text = option.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+    var host by remember(repository, deviceId) { mutableStateOf<SettingsHostStatus?>(null) }
+    val authProfiles = remember(repository, deviceId) { AuthProfilesState(repository) }
+    var hostError by remember(repository, deviceId) { mutableStateOf<Exception?>(null) }
+    var hostLoading by remember(repository, deviceId) { mutableStateOf(false) }
+    var hostRequestRevision by remember(repository, deviceId) { mutableStateOf(0L) }
+    suspend fun refreshHost() {
+        if (hostLoading || authProfiles.switching || !ready || conn !is ConnectionState.Connected) return
+        hostLoading = true
+        val requestRevision = ++hostRequestRevision
+        var stage = "request"
+        try {
+            val response = repository.sendRequest("account/status/read", com.remodex.mobile.core.model.JSONValue.Obj(emptyMap()))
+            stage = "decode"
+            val decoded = SettingsHostStatus.decode(response.result)
+            if (requestRevision == hostRequestRevision) {
+                host = decoded
+                hostError = null
             }
-
-            Text(
-                text = stringResource(R.string.settings_user_bubble_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = stringResource(R.string.settings_user_bubble_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            UserBubbleColor.entries.forEach { option ->
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = option == userBubbleColor,
-                                onClick = {
-                                    val changed = option != userBubbleColor
-                                    userBubbleColor = option
-                                    UserBubblePreferences.write(context, option)
-                                    if (changed) {
-                                        scope.launch {
-                                            AppContainer.betaEngagementRepository.recordMissionEvent(
-                                                eventType = "user_bubble_color_changed",
-                                                screen = "settings",
-                                                refreshAfter = false,
-                                            )
-                                        }
-                                    }
-                                },
-                                role = Role.RadioButton,
-                            )
-                            .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
-                        selected = option == userBubbleColor,
-                        onClick = null,
-                    )
-                    Box(
-                        modifier =
-                            Modifier
-                                .padding(start = 8.dp)
-                                .size(18.dp)
-                                .clip(CircleShape)
-                                .background(option.swatchColor()),
-                    )
-                    Text(
-                        text = stringResource(settingsUserBubbleTitleRes(option)),
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(start = 10.dp),
-                    )
-                }
-            }
-
-            Text(
-                text = stringResource(R.string.settings_language_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = stringResource(R.string.settings_language_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            AppLanguagePreference.entries.forEach { option ->
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = option == languagePreference,
-                                onClick = {
-                                    languagePreference = option
-                                    LanguagePreferences.write(context, option)
-                                },
-                                role = Role.RadioButton,
-                            )
-                            .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
-                        selected = option == languagePreference,
-                        onClick = null,
-                    )
-                    Column(modifier = Modifier.padding(start = 8.dp)) {
-                        Text(
-                            text = stringResource(settingsLanguageTitleRes(option)),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text =
-                                if (option == AppLanguagePreference.system) {
-                                    stringResource(
-                                        settingsLanguageSubtitleRes(option),
-                                        LanguagePreferences.currentSystemLocaleDisplayName(context),
-                                    )
-                                } else {
-                                    stringResource(settingsLanguageSubtitleRes(option))
-                                },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-
-            Text(
-                text = stringResource(R.string.settings_theme_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = stringResource(R.string.settings_theme_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            AppThemePreference.entries.forEach { option ->
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = option == themePreference,
-                                onClick = {
-                                    themePreference = option
-                                    ThemePreferences.write(context, option)
-                                },
-                                role = Role.RadioButton,
-                            )
-                            .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
-                        selected = option == themePreference,
-                        onClick = null,
-                    )
-                    Column(modifier = Modifier.padding(start = 8.dp)) {
-                        Text(
-                            text = stringResource(settingsThemeTitleRes(option)),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text = stringResource(settingsThemeSubtitleRes(option)),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-
-            Text(
-                text = stringResource(R.string.settings_section_connection),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            SettingsConnectionStatus(conn = conn)
-            SettingsRelayHealthSection(
-                relayHealthClient = AppContainer.relayHealthClient,
-                localRelayHostOverride = localRelayHostOverride,
-            )
-            OutlinedTextField(
-                value = localRelayHostOverride,
-                onValueChange = {
-                    localRelayHostOverride = it
-                    AppContainer.sessionPersistence.saveLocalRelayHostOverride(it)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.settings_local_relay_host_override_label)) },
-                placeholder = { Text(stringResource(R.string.settings_local_relay_host_override_placeholder)) },
-                singleLine = true,
-            )
-            SettingsNotificationSection(context = context)
-
-            SettingsPetCompanionSection(
-                repository = repository,
-                petStore = AppContainer.petCompanionStore,
-            )
-
-            if (AppContainer.subscriptionService.isConfigured) {
-                SettingsSubscriptionSection(subscriptionService = AppContainer.subscriptionService)
-            }
-
-            TerminalWindowsSetupGuide()
-
-            SettingsUsageRateLimitsSection(repository = repository)
-
-            Text(
-                text = stringResource(R.string.settings_section_about),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            SettingsNavigationRow(
-                title = stringResource(R.string.nav_about_remodex),
-                subtitle = stringResource(R.string.settings_about_remodex_hint),
-                onClick = {
-                    scope.launch {
-                        AppContainer.betaEngagementRepository.recordMissionEvent(
-                            eventType = "about_screen_opened",
-                            screen = "settings",
-                        )
-                    }
-                    onNavigateToAbout()
-                },
-            )
-            SettingsNavigationRow(
-                title = stringResource(R.string.nav_whats_new),
-                subtitle = stringResource(R.string.settings_whats_new_hint),
-                onClick = {
-                    scope.launch {
-                        AppContainer.betaEngagementRepository.recordMissionEvent(
-                            eventType = "settings_whats_new_opened",
-                            screen = "settings",
-                        )
-                    }
-                    onNavigateToWhatsNew()
-                },
-            )
-            if (FeatureFlags.betaEngagementEnabled) {
-                SettingsNavigationRow(
-                    title = stringResource(R.string.nav_tester_hq),
-                    subtitle = stringResource(R.string.settings_tester_hq_hint),
-                    onClick = {
-                        scope.launch {
-                            AppContainer.betaEngagementRepository.recordMissionEvent(
-                                eventType = "settings_tester_hq_entry_opened",
-                                screen = "settings",
-                            )
-                        }
-                        onNavigateToTesterHq()
-                    },
-                )
-            }
-            Text(
-                text = stringResource(R.string.settings_about_version, versionName),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = stringResource(R.string.settings_more_coming),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            if (requestRevision == hostRequestRevision) hostError = error
+            android.util.Log.e("RemodexSettings", "operation=account/status/read stage=$stage attempt=1", error)
+        } finally { if (requestRevision == hostRequestRevision) hostLoading = false }
+    }
+    LaunchedEffect(page, deviceId, ready, conn) {
+        if (page in setOf(SettingsPage.ACCOUNT, SettingsPage.COMPONENTS) && host == null && hostError == null) refreshHost()
+    }
+    LaunchedEffect(authProfiles.restartStatus) {
+        if (authProfiles.restartStatus == "restart_scheduled" || authProfiles.restartStatus == "ready") {
+            hostRequestRevision++ // Late replies from the old account cannot replace the new snapshot.
+            hostLoading = false
+            host = null
+            hostError = null
         }
+        if (authProfiles.restartStatus == "ready") {
+            refreshHost()
+        }
+    }
+    if (usageOpen) com.remodex.mobile.ui.turn.ThreadUsageStatusBottomSheet(true, { usageOpen = false }, activeThread.orEmpty(), repository)
+    Scaffold(modifier = modifier, topBar = {
+        TopAppBar(title = { Text(stringResource(page.title)) }, colors = remodexScreenTopAppBarColors(),
+            navigationIcon = { IconButton(onClick = navigateBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.cd_navigate_back))
+            } })
+    }) { innerPadding ->
+        pageStates.SaveableStateProvider(page.name) {
+            Column(Modifier.fillMaxSize().padding(innerPadding).navigationBarsPadding()
+                .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                when (page) {
+                    SettingsPage.HOME -> {
+                        SettingsGroup(stringResource(R.string.settings_group_preferences)) {
+                            SettingsNavigationRow(stringResource(R.string.settings_section_appearance),
+                                stringResource(R.string.settings_appearance_summary, stringResource(settingsThemeTitleRes(themePreference)), stringResource(settingsLanguageTitleRes(languagePreference))),
+                                { page = SettingsPage.APPEARANCE })
+                            SettingsNavigationRow(stringResource(R.string.settings_section_notifications), stringResource(R.string.settings_notifications_run_completion_title),
+                                { page = SettingsPage.NOTIFICATIONS })
+                            SettingsNavigationRow(stringResource(R.string.settings_section_pet), stringResource(R.string.settings_pet_summary), { page = SettingsPage.PETS })
+                        }
+                        SettingsGroup(stringResource(R.string.settings_group_account_connection)) {
+                            SettingsNavigationRow(stringResource(R.string.settings_accounts_auth), stringResource(R.string.settings_accounts_summary), { page = SettingsPage.ACCOUNT })
+                            SettingsNavigationRow(stringResource(R.string.settings_section_usage), stringResource(R.string.settings_usage_summary), { usageOpen = true })
+                            SettingsNavigationRow(stringResource(R.string.settings_section_connection), stringResource(if (conn is ConnectionState.Connected) R.string.sidebar_bridge_connected else R.string.settings_connection_summary), { page = SettingsPage.CONNECTION })
+                            if (AppContainer.subscriptionService.isConfigured) SettingsNavigationRow(stringResource(R.string.settings_section_subscription), "", { page = SettingsPage.SUBSCRIPTION })
+                        }
+                        SettingsGroup(stringResource(R.string.settings_group_application)) {
+                            SettingsNavigationRow(stringResource(R.string.app_update_title), versionName, { page = SettingsPage.UPDATES })
+                            SettingsNavigationRow(stringResource(R.string.settings_components), stringResource(R.string.settings_components_summary), { page = SettingsPage.COMPONENTS })
+                            SettingsNavigationRow(stringResource(R.string.nav_about_remodex), stringResource(R.string.settings_about_remodex_hint), {
+                                scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("about_screen_opened", "settings") }
+                                onNavigateToAbout()
+                            })
+                            SettingsNavigationRow(stringResource(R.string.nav_whats_new), "", {
+                                scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("settings_whats_new_opened", "settings") }
+                                onNavigateToWhatsNew()
+                            })
+                            if (FeatureFlags.betaEngagementEnabled) SettingsNavigationRow(stringResource(R.string.nav_tester_hq), "", {
+                                scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("settings_tester_hq_entry_opened", "settings") }
+                                onNavigateToTesterHq()
+                            })
+                        }
+                    }
+                    SettingsPage.APPEARANCE -> SettingsGroup {
+                        SettingsPickerRow(stringResource(R.string.settings_theme_title), AppThemePreference.entries, themePreference,
+                            { stringResource(settingsThemeTitleRes(it)) }, { stringResource(settingsThemeSubtitleRes(it)) }) {
+                            themePreference = it; ThemePreferences.write(context, it)
+                        }
+                        SettingsPickerRow(stringResource(R.string.settings_language_title), AppLanguagePreference.entries, languagePreference,
+                            { stringResource(settingsLanguageTitleRes(it)) }) { languagePreference = it; LanguagePreferences.write(context, it) }
+                        SettingsPickerRow(stringResource(R.string.settings_font_title), AppFontStyle.entries, fontStyle,
+                            { if (it == AppFontStyle.system) stringResource(R.string.settings_theme_system_title) else it.title },
+                            { stringResource(when (it) { AppFontStyle.system -> R.string.font_system_subtitle; AppFontStyle.geist -> R.string.font_geist_subtitle; AppFontStyle.jetBrainsMono -> R.string.font_mono_subtitle }) }) {
+                            fontStyle = it; AppFontPreferences.writeFontStyle(context, it)
+                        }
+                        SettingsPickerRow(stringResource(R.string.settings_user_bubble_title), UserBubbleColor.entries, userBubbleColor,
+                            { stringResource(settingsUserBubbleTitleRes(it)) }) { color ->
+                            val changed = color != userBubbleColor
+                            userBubbleColor = color; UserBubblePreferences.write(context, color)
+                            if (changed) scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("user_bubble_color_changed", "settings", refreshAfter = false) }
+                        }
+                    }
+                    SettingsPage.NOTIFICATIONS -> SettingsGroup { SettingsNotificationSection(context) }
+                    SettingsPage.PETS -> SettingsGroup { SettingsPetCompanionSection(repository, AppContainer.petCompanionStore) }
+                    SettingsPage.SUBSCRIPTION -> SettingsGroup { SettingsSubscriptionSection(AppContainer.subscriptionService) }
+                    SettingsPage.CONNECTION -> {
+                        SettingsGroup(stringResource(R.string.settings_current_connection)) {
+                            SettingsConnectionStatus(conn)
+                            OutlinedTextField(value = localRelayHostOverride, onValueChange = {
+                                localRelayHostOverride = it; AppContainer.sessionPersistence.saveLocalRelayHostOverride(it)
+                            }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.settings_local_relay_host_override_label)) },
+                                placeholder = { Text(stringResource(R.string.settings_local_relay_host_override_placeholder)) }, singleLine = true)
+                        }
+                        SettingsGroup { SettingsRelayHealthSection(AppContainer.relayHealthClient, localRelayHostOverride) }
+                    }
+                    SettingsPage.ACCOUNT -> {
+                        SettingsGroup(stringResource(R.string.settings_current_account)) {
+                            HostRefreshStatus(hostLoading, hostError, ready && conn is ConnectionState.Connected) { scope.launch { refreshHost() } }
+                            SettingsValueRow(stringResource(R.string.settings_account_identity), host?.email, host != null)
+                            SettingsValueRow(stringResource(R.string.settings_account_status), host?.let { stringResource(when(it.status) {
+                                "authenticated" -> R.string.settings_auth_valid
+                                "pending_login" -> R.string.settings_auth_pending
+                                "expired" -> R.string.settings_auth_expired
+                                "not_logged_in" -> R.string.settings_auth_missing
+                                else -> R.string.usage_reset_card_unknown
+                            }) }, host != null)
+                            SettingsValueRow(stringResource(R.string.settings_account_plan), host?.plan, host != null)
+                            SettingsValueRow(stringResource(R.string.settings_account_method), host?.authMethod?.let {
+                                when (it) { "chatgpt", "chatgptAuthTokens" -> "ChatGPT"; "apikey", "apiKey" -> "API key"; else -> it }
+                            }, host != null)
+                        }
+                        SettingsGroup(stringResource(R.string.settings_auth_files)) {
+                            SettingsAuthFileContent(host?.authFile, host != null, hostLoading)
+                            authProfiles.currentProfile?.takeIf { authProfiles.supportsTokenRefresh }?.let { current ->
+                                RefreshTokenAction(current, authProfiles, ready && conn is ConnectionState.Connected && !hostLoading) {
+                                    refreshHost()
+                                }
+                            }
+                        }
+                        AuthProfilesSection(authProfiles, ready && conn is ConnectionState.Connected) {
+                            // Host refresh is triggered only by verified runtime readiness above.
+                        }
+                    }
+                    SettingsPage.COMPONENTS -> {
+                        SettingsGroup(stringResource(R.string.settings_phone_component)) {
+                            SettingsValueRow("Remodex", versionName)
+                            SettingsValueRow("Android", Build.VERSION.RELEASE)
+                        }
+                        SettingsGroup(stringResource(R.string.settings_computer_components)) {
+                            HostRefreshStatus(hostLoading, hostError, ready && conn is ConnectionState.Connected) { scope.launch { refreshHost() } }
+                            SettingsValueRow(stringResource(R.string.settings_bridge_version), host?.bridgeVersion, host != null)
+                            SettingsValueRow(stringResource(R.string.settings_host_system), host?.hostPlatform?.let {
+                                when (it) { "linux" -> "Linux"; "macos" -> "macOS"; "windows" -> "Windows"; else -> it }
+                            }, host != null)
+                            SettingsValueRow(stringResource(R.string.settings_host_transport), host?.transport, host != null)
+                        }
+                        SettingsGroup(stringResource(R.string.settings_help_tools)) {
+                            SettingsNavigationRow(stringResource(R.string.terminal_windows_guide_title), stringResource(R.string.settings_terminal_summary), { page = SettingsPage.TERMINAL })
+                        }
+                    }
+                    SettingsPage.TERMINAL -> SettingsGroup { TerminalWindowsSetupGuide() }
+                    SettingsPage.UPDATES -> SettingsGroup { AppUpdateSection() }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsAuthFileContent(info: SettingsAuthFileInfo?, resolved: Boolean, loading: Boolean) {
+    if (info == null) {
+        Text(if (!resolved || loading) "—" else stringResource(R.string.settings_auth_file_bridge_unsupported),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    val status = when (info.status) {
+        "present" -> R.string.settings_auth_file_current
+        "missing" -> R.string.settings_auth_file_missing
+        "error" -> R.string.settings_auth_file_failed
+        "non_file" -> when (info.storage) {
+            "keyring" -> R.string.settings_auth_file_keyring
+            "ephemeral" -> R.string.settings_auth_file_memory
+            else -> R.string.settings_auth_file_auto
+        }
+        else -> when (info.reason) {
+            "external_runtime" -> R.string.settings_auth_file_remote
+            "automatic_storage" -> R.string.settings_auth_file_auto
+            else -> R.string.settings_auth_file_unknown
+        }
+    }
+    Text(stringResource(status), style = MaterialTheme.typography.bodyMedium,
+        color = if (info.status == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+    info.path?.let { SettingsValueRow(stringResource(R.string.settings_auth_file_path), it) }
+    info.resolvedPath?.takeIf { it != info.path }?.let { SettingsValueRow(stringResource(R.string.settings_auth_file_target), it) }
+    if (info.status == "present") {
+        val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]
+        val now = java.time.Instant.now()
+        SettingsValueRow(stringResource(R.string.settings_account_method), when (info.authMode) {
+            "chatgpt", "chatgptAuthTokens" -> "ChatGPT"
+            "apikey", "apiKey" -> "API key"
+            else -> null
+        })
+        SettingsValueRow(stringResource(R.string.settings_auth_file_modified), info.modifiedAt?.let {
+            com.remodex.mobile.ui.turn.formatUsageCalendarTime(it, now, locale = locale)
+        })
+        SettingsValueRow(stringResource(R.string.settings_auth_file_refreshed), info.lastRefresh?.let {
+            com.remodex.mobile.ui.turn.formatUsageCalendarTime(it, now, locale = locale)
+        })
+        SettingsValueRow(stringResource(R.string.settings_auth_file_size), info.sizeBytes?.let {
+            android.text.format.Formatter.formatShortFileSize(LocalContext.current, it)
+        })
+        Text(stringResource(R.string.settings_auth_file_source_note), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    info.errorDetails?.let { error ->
+        var expanded by rememberSaveable { mutableStateOf(false) }
+        TextButton(onClick = { expanded = !expanded }) { Text(stringResource(R.string.questions_error_details)) }
+        if (expanded) androidx.compose.foundation.text.selection.SelectionContainer {
+            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun SettingsGroup(title: String? = null, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        title?.let { Text(it, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        androidx.compose.material3.Surface(Modifier.fillMaxWidth(), shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        }
+    }
+}
+
+@Composable
+private fun <T> SettingsPickerRow(title: String, choices: List<T>, selected: T,
+    label: @Composable (T) -> String, description: @Composable (T) -> String = { "" }, onSelect: (T) -> Unit) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    SettingsNavigationRow(title, label(selected), { open = true })
+    if (open) androidx.compose.material3.AlertDialog(onDismissRequest = { open = false }, title = { Text(title) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            choices.forEach { choice ->
+                Row(Modifier.fillMaxWidth().selectable(choice == selected, onClick = { onSelect(choice); open = false }, role = Role.RadioButton).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(choice == selected, onClick = null)
+                    Column(Modifier.padding(start = 8.dp)) {
+                        Text(label(choice), style = MaterialTheme.typography.bodyLarge)
+                        description(choice).takeIf { it.isNotEmpty() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+            }
+        } }, confirmButton = { TextButton(onClick = { open = false }) { Text(stringResource(R.string.questions_close)) } })
+}
+
+@Composable
+private fun SettingsValueRow(label: String, value: String?, resolved: Boolean = true) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.foundation.text.selection.SelectionContainer(Modifier.weight(1.4f)) {
+            Text(value ?: if (resolved) stringResource(R.string.usage_details_unavailable) else "—", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun HostRefreshStatus(loading: Boolean, error: Exception?, connected: Boolean, onRefresh: () -> Unit) {
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(when { !connected -> R.string.usage_rate_limits_offline; loading -> R.string.usage_refreshing_keep_data; error != null -> R.string.settings_host_read_failed; else -> R.string.settings_host_read_source }),
+            Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(onClick = onRefresh, enabled = connected && !loading) { Text(stringResource(R.string.turn_usage_sheet_refresh_all)) }
+    }
+    if (error != null) {
+        TextButton(onClick = { showDetails = !showDetails }) { Text(stringResource(R.string.questions_error_details)) }
+        if (showDetails) Text(error.message ?: error.javaClass.name, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -451,10 +422,6 @@ private fun SettingsNotificationSection(context: Context) {
         permissionStatus == LocalNotificationSettings.PermissionStatus.Granted ||
             permissionStatus == LocalNotificationSettings.PermissionStatus.NotRequired
 
-    Text(
-        text = stringResource(R.string.settings_section_notifications),
-        style = MaterialTheme.typography.titleMedium,
-    )
     Text(
         text = stringResource(R.string.settings_notifications_hint),
         style = MaterialTheme.typography.bodySmall,
@@ -525,6 +492,7 @@ private fun SettingsNavigationRow(
         modifier =
             Modifier
                 .fillMaxWidth()
+                .heightIn(min = 56.dp)
                 .selectable(
                     selected = false,
                     onClick = onClick,
@@ -535,7 +503,7 @@ private fun SettingsNavigationRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(text = title, style = MaterialTheme.typography.bodyLarge)
-            Text(
+            if (subtitle.isNotBlank()) Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -547,213 +515,6 @@ private fun SettingsNavigationRow(
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-}
-
-@Composable
-private fun SettingsUsageRateLimitsSection(
-    repository: CodexRepository,
-) {
-    val sessionReady by repository.isSessionReady.collectAsStateWithLifecycle()
-    val conn by repository.connectionState.collectAsStateWithLifecycle()
-    val hasResolved by repository.hasResolvedRateLimitsSnapshot.collectAsStateWithLifecycle()
-    val isLoading by repository.isLoadingRateLimits.collectAsStateWithLifecycle()
-    val err by repository.rateLimitsErrorMessage.collectAsStateWithLifecycle()
-    val buckets by repository.rateLimitBuckets.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(sessionReady, conn, hasResolved, err, isLoading) {
-        if (sessionReady &&
-            conn is ConnectionState.Connected &&
-            !hasResolved &&
-            err == null &&
-            !isLoading
-        ) {
-            runCatching { repository.refreshRateLimits() }
-        }
-    }
-
-    val displayRows = remember(buckets) { CodexRateLimitBucket.visibleDisplayRows(buckets) }
-    val refreshCd = stringResource(R.string.cd_usage_rate_limits_refresh)
-    val activeThreadId by repository.activeThreadId.collectAsStateWithLifecycle()
-    val contextUsageMap by repository.contextWindowUsageByThread.collectAsStateWithLifecycle()
-    val contextLoading by repository.contextWindowUsageLoadingThreads.collectAsStateWithLifecycle()
-    val contextErrors by repository.contextWindowUsageErrorByThread.collectAsStateWithLifecycle()
-
-    Text(
-        text = stringResource(R.string.settings_section_usage),
-        style = MaterialTheme.typography.titleMedium,
-    )
-    Text(
-        text = stringResource(R.string.usage_rate_limits_hint),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    val usageSummary =
-        activeThreadId
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { tid -> contextUsageMap[tid] }
-    UsageStatusSummary(
-        contextUsage = usageSummary,
-        rateLimitRows = displayRows,
-        loading = isLoading,
-    )
-
-    Text(
-        text = stringResource(R.string.usage_context_window_title),
-        style = MaterialTheme.typography.titleSmall,
-    )
-    Text(
-        text = stringResource(R.string.usage_context_window_hint),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    when {
-        activeThreadId.isNullOrBlank() -> {
-            Text(
-                text = stringResource(R.string.usage_context_window_no_thread),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        !sessionReady || conn !is ConnectionState.Connected -> {
-            Text(
-                text = stringResource(R.string.usage_rate_limits_offline),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        else -> {
-            val tid = activeThreadId.orEmpty().trim()
-            val usage: ContextWindowUsage? = contextUsageMap[tid]
-            val ctxLoading = contextLoading.contains(tid)
-            val ctxErr = contextErrors[tid]
-            val ctxRefreshCd = stringResource(R.string.cd_usage_context_window_refresh)
-            val ctxLoadingCd = stringResource(R.string.cd_usage_context_window_loading)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    onClick = { scope.launch { runCatching { repository.refreshContextWindowUsage(tid) } } },
-                    enabled = !ctxLoading,
-                    modifier = Modifier.semantics { contentDescription = ctxRefreshCd },
-                ) {
-                    Text(stringResource(R.string.usage_context_window_refresh))
-                }
-                if (ctxLoading) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    CircularProgressIndicator(
-                        modifier =
-                            Modifier
-                                .size(20.dp)
-                                .align(Alignment.CenterVertically)
-                                .semantics { contentDescription = ctxLoadingCd },
-                        strokeWidth = 2.dp,
-                    )
-                }
-            }
-            ctxErr?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            if (!ctxLoading && ctxErr == null && usage == null) {
-                Text(
-                    text = stringResource(R.string.usage_context_window_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            usage?.let { u ->
-                LinearProgressIndicator(
-                    progress = { u.fractionUsed.toFloat().coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text =
-                        stringResource(
-                            R.string.usage_context_window_tokens,
-                            u.tokensUsedFormatted,
-                            u.tokenLimitFormatted,
-                            u.percentUsed,
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-    }
-
-    Text(
-        text = stringResource(R.string.usage_account_limits_title),
-        style = MaterialTheme.typography.titleSmall,
-    )
-
-    if (!sessionReady || conn !is ConnectionState.Connected) {
-        Text(
-            text = stringResource(R.string.usage_rate_limits_offline),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    } else {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(
-                onClick = { scope.launch { runCatching { repository.refreshRateLimits() } } },
-                enabled = !isLoading,
-                modifier = Modifier.semantics { contentDescription = refreshCd },
-            ) {
-                Text(stringResource(R.string.usage_rate_limits_refresh))
-            }
-            if (isLoading) {
-                Spacer(modifier = Modifier.width(8.dp))
-                val loadingCd = stringResource(R.string.cd_usage_rate_limits_loading)
-                CircularProgressIndicator(
-                    modifier =
-                        Modifier
-                            .size(20.dp)
-                            .align(Alignment.CenterVertically)
-                            .semantics { contentDescription = loadingCd },
-                    strokeWidth = 2.dp,
-                )
-            }
-        }
-        err?.let { message ->
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        if (!isLoading && err == null && hasResolved && displayRows.isEmpty()) {
-            Text(
-                text = stringResource(R.string.usage_rate_limits_empty),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            displayRows.forEach { row ->
-                Column(Modifier.fillMaxWidth()) {
-                    Text(
-                        text = row.label,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    LinearProgressIndicator(
-                        progress = { row.window.clampedUsedPercent / 100f },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = stringResource(R.string.usage_rate_limits_percent, row.window.clampedUsedPercent),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -794,10 +555,6 @@ private fun SettingsPetCompanionSection(
         }
     }
 
-    Text(
-        text = stringResource(R.string.settings_section_pet),
-        style = MaterialTheme.typography.titleMedium,
-    )
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -916,10 +673,6 @@ private fun SettingsSubscriptionSection(
 ) {
     val context = LocalContext.current
     var redemptionMessage by remember { mutableStateOf<String?>(null) }
-    Text(
-        text = stringResource(R.string.settings_section_subscription),
-        style = MaterialTheme.typography.titleMedium,
-    )
     TextButton(
         onClick = {
             val intent = subscriptionService.createRedeemIntent()
@@ -1027,13 +780,8 @@ private fun settingsUserBubbleTitleRes(option: UserBubbleColor): Int =
 private fun settingsLanguageTitleRes(option: AppLanguagePreference): Int =
     when (option) {
         AppLanguagePreference.english -> R.string.settings_language_english_title
+        AppLanguagePreference.simplifiedChinese -> R.string.settings_language_chinese_title
         AppLanguagePreference.system -> R.string.settings_language_system_title
-    }
-
-private fun settingsLanguageSubtitleRes(option: AppLanguagePreference): Int =
-    when (option) {
-        AppLanguagePreference.english -> R.string.settings_language_english_subtitle
-        AppLanguagePreference.system -> R.string.settings_language_system_subtitle
     }
 
 private fun openSystemNotificationSettings(context: Context) {

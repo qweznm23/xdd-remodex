@@ -348,7 +348,6 @@ private fun stringDictionary(json: Map<String, JSONValue>?): Map<String, String>
 enum class TurnGitActionKind {
     viewRepositoryDiff,
     syncNow,
-    initialize,
     commit,
     push,
     commitAndPush,
@@ -361,7 +360,6 @@ enum class TurnGitActionKind {
             when (this) {
                 viewRepositoryDiff -> "Repository diff"
                 syncNow -> "Update"
-                initialize -> "Initialize Git"
                 commit -> "Commit"
                 push -> "Push"
                 commitAndPush -> "Commit & Push"

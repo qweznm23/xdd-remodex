@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.core.config.FeatureFlags
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,7 +72,7 @@ internal fun TurnComposerSecondaryBar(
 
     val runtimeTitle =
         stringResource(
-            if (isWorktreeProject) {
+            if (FeatureFlags.gitIntegrationEnabled && isWorktreeProject) {
                 R.string.composer_runtime_worktree
             } else {
                 R.string.composer_runtime_local
@@ -132,7 +133,7 @@ internal fun TurnComposerSecondaryBar(
                 ) {
                     Icon(
                         painter =
-                            if (isWorktreeProject) {
+                            if (FeatureFlags.gitIntegrationEnabled && isWorktreeProject) {
                                 painterResource(LucideR.drawable.lucide_ic_git_branch)
                             } else {
                                 painterResource(LucideR.drawable.lucide_ic_laptop)
@@ -176,28 +177,30 @@ internal fun TurnComposerSecondaryBar(
                     },
                 )
 
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            stringResource(
-                                if (isHandingOffWorktree) {
-                                    R.string.composer_worktree_preparing
-                                } else if (isWorktreeProject) {
-                                    R.string.composer_runtime_menu_handoff_local
-                                } else {
-                                    R.string.composer_runtime_menu_worktree_handoff
-                                },
-                            ),
-                        )
-                    },
-                    onClick = {
-                        runtimeMenuExpanded = false
-                        if (worktreeHandoffEnabled && !isHandingOffWorktree) {
-                            onWorktreeHandoff()
-                        }
-                    },
-                    enabled = worktreeHandoffEnabled && !isHandingOffWorktree,
-                )
+                if (FeatureFlags.gitIntegrationEnabled) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    if (isHandingOffWorktree) {
+                                        R.string.composer_worktree_preparing
+                                    } else if (isWorktreeProject) {
+                                        R.string.composer_runtime_menu_handoff_local
+                                    } else {
+                                        R.string.composer_runtime_menu_worktree_handoff
+                                    },
+                                ),
+                            )
+                        },
+                        onClick = {
+                            runtimeMenuExpanded = false
+                            if (worktreeHandoffEnabled && !isHandingOffWorktree) {
+                                onWorktreeHandoff()
+                            }
+                        },
+                        enabled = worktreeHandoffEnabled && !isHandingOffWorktree,
+                    )
+                }
 
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.composer_runtime_menu_local_disabled)) },
@@ -207,21 +210,23 @@ internal fun TurnComposerSecondaryBar(
             }
         }
 
-        Box(contentAlignment = Alignment.CenterEnd) {
-            TurnGitBranchAccessory(
-                state = gitBranchPaneState,
-                branchPickerEnabled = branchPickerEnabled,
-                isSwitchingBranch = isSwitchingGitBranch,
-                onRefreshBranches = onRefreshGitBranches,
-                onCheckoutBranch = onCheckoutGitBranch,
-                onCreateBranch = onCreateGitBranch,
-                onOpenBranchSelector = onOpenBranchSelector,
-                onBranchPickerOpenChange = onBranchPickerOpenChange,
-                openPickerRequestKey = openPickerRequestKey,
-                onOpenPickerRequestConsumed = onOpenPickerRequestConsumed,
-                compact = true,
-                modifier = Modifier.widthIn(max = 156.dp),
-            )
+        if (FeatureFlags.gitIntegrationEnabled) {
+            Box(contentAlignment = Alignment.CenterEnd) {
+                TurnGitBranchAccessory(
+                    state = gitBranchPaneState,
+                    branchPickerEnabled = branchPickerEnabled,
+                    isSwitchingBranch = isSwitchingGitBranch,
+                    onRefreshBranches = onRefreshGitBranches,
+                    onCheckoutBranch = onCheckoutGitBranch,
+                    onCreateBranch = onCreateGitBranch,
+                    onOpenBranchSelector = onOpenBranchSelector,
+                    onBranchPickerOpenChange = onBranchPickerOpenChange,
+                    openPickerRequestKey = openPickerRequestKey,
+                    onOpenPickerRequestConsumed = onOpenPickerRequestConsumed,
+                    compact = true,
+                    modifier = Modifier.widthIn(max = 156.dp),
+                )
+            }
         }
 
         Spacer(modifier = Modifier.weight(1f))
@@ -264,7 +269,7 @@ internal fun TurnComposerSecondaryBar(
             ) {
                 CodexAccessMode.entries.forEach { mode ->
                     DropdownMenuItem(
-                        text = { Text(mode.menuTitle) },
+                        text = { Text(stringResource(if (mode == CodexAccessMode.onRequest) R.string.access_on_request else R.string.access_full)) },
                         onClick = {
                             accessMenuExpanded = false
                             onSelectAccessMode(mode)

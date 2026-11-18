@@ -209,8 +209,8 @@ private fun RateLimitStripLines(
                     text =
                         stringResource(
                             R.string.turn_usage_strip_limit_line,
-                            row.label,
-                            row.window.clampedUsedPercent,
+                            if (row.label == "Weekly") stringResource(R.string.usage_quota_weekly) else row.label,
+                            row.window.remainingPercent,
                         ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -1,0 +1,9 @@
+<resources>
+    <string name="history_loading">Loading conversation…</string>
+    <string name="history_preparing">Preparing messages…</string>
+    <string name="history_waiting_connection">Waiting for connection to load history</string>
+    <string name="history_load_failed">Could not load conversation</string>
+    <string name="history_retry">Retry</string>
+    <string name="history_error_details">Error details</string>
+    <string name="history_close">Close</string>
+</resources>

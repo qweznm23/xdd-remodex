@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="usage_details_not_read">Not queried yet</string>
+    <string name="usage_details_unavailable">Not provided by server</string>
+    <string name="usage_last_successful_read">Last successful refresh: %1$s</string>
+    <string name="usage_previous_snapshot">Refresh failed; showing the last successful data.</string>
+    <string name="usage_credit_balance_title">Credit balance</string>
+    <string name="usage_credit_balance_value">%1$s: %2$s</string>
+    <string name="usage_credit_unlimited">Unlimited</string>
+    <string name="usage_credit_none">No available credits</string>
+    <string name="usage_reset_cards_title">Quota reset cards</string>
+    <string name="usage_reset_cards_count">Available: %1$d</string>
+    <string name="usage_reset_cards_no_details">The server returned the count without card details.</string>
+    <string name="usage_reset_card_default">Quota reset card</string>
+    <string name="usage_reset_card_available">Available</string>
+    <string name="usage_reset_card_redeeming">Redeeming</string>
+    <string name="usage_reset_card_redeemed">Redeemed</string>
+    <string name="usage_reset_card_unknown">Unknown status</string>
+    <string name="usage_reset_card_no_expiry">Does not expire</string>
+    <string name="usage_reset_card_expiry">Expires: %1$s</string>
+    <string name="usage_reset_cards_partial">Server returned %1$d card details; available total: %2$d.</string>
+    <string name="usage_quota_remaining_used">Remaining %1$d%% · Used %2$d%%</string>
+    <string name="usage_quota_reset_at">Resets: %1$s</string>
+    <string name="usage_quota_weekly">Weekly quota</string>
+    <string name="usage_quota_remaining">%1$d%% remaining</string>
+    <string name="usage_refreshing_keep_data">Refreshing…</string>
+    <string name="usage_refresh_failed_keep_data">Refresh failed · data not updated</string>
+    <string name="usage_balance_cards">Balance &amp; reset cards</string>
+    <string name="usage_quota_short_window">5-hour quota</string>
+    <string name="usage_context_no_data">No context snapshot yet</string>
+    <string name="usage_reset_due">Reset time reached · awaiting quota update</string>
+    <string name="usage_reset_in_days">Resets in %1$dd %2$dh</string>
+    <string name="usage_reset_in_hours">Resets in %1$dh %2$dm</string>
+    <string name="usage_reset_in_minutes">Resets in %1$dm</string>
+</resources>

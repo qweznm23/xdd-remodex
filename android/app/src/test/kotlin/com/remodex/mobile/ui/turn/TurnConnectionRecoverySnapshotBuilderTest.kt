@@ -55,6 +55,7 @@ class TurnConnectionRecoverySnapshotBuilderTest {
             )
         assertEquals(TurnConnectionRecoveryTrailing.Action("Wake"), wake?.trailing)
         assertEquals("Wake first.", wake?.summary)
+        assertNull(wake?.summaryResId)
 
         val scan =
             TurnConnectionRecoverySnapshotBuilder.makeSnapshot(

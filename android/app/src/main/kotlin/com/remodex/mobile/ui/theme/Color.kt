@@ -88,6 +88,10 @@ val RemodexDarkOutlineVariant = Color(0xFF6B7268)
 val RemodexDarkError = Color(0xFFFFB4AB)
 val RemodexDarkOnError = Color(0xFF690005)
 
+/** Text links on conversation surfaces; never use a bubble background as a text color. */
+val RemodexLinkLight = Color(0xFF1558B0)
+val RemodexLinkDark = Color(0xFF8AB4F8)
+
 /** Git-style addition line counts (toolbar + timeline). */
 val RemodexGitAddition = AgentLightColors.AdditionGreen
 

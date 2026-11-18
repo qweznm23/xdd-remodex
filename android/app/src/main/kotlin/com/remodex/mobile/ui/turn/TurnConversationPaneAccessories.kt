@@ -236,7 +236,7 @@ internal fun WorktreeHandoffActionSheet(
             )
             sourceProjectPath?.takeIf { it.isNotBlank() }?.let { path ->
                 Text(
-                    text = "Source: $path",
+                    text = stringResource(R.string.worktree_source, path),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -244,7 +244,7 @@ internal fun WorktreeHandoffActionSheet(
             if (isWorktreeProject) {
                 model.targetPath?.let { path ->
                     Text(
-                        text = "Target: $path",
+                        text = stringResource(R.string.worktree_target, path),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -252,14 +252,14 @@ internal fun WorktreeHandoffActionSheet(
             } else if (hasAssociatedWorktree) {
                 model.targetPath?.let { path ->
                     Text(
-                        text = "Target: $path",
+                        text = stringResource(R.string.worktree_target, path),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             } else if (requiresBaseBranch) {
                 Text(
-                    text = "Create managed worktree from",
+                    text = stringResource(R.string.worktree_create_from),
                     style = MaterialTheme.typography.labelMedium,
                 )
                 if (choices.isEmpty()) {

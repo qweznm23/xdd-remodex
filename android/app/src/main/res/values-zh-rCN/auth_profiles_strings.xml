@@ -1,0 +1,37 @@
+<resources>
+    <string name="auth_profiles_title">备用授权</string>
+    <string name="auth_profiles_hint">仅显示当前 Codex 未选用的账号。查询使用独立进程，不切换当前账号。</string>
+    <string name="auth_profiles_refresh">刷新列表</string>
+    <string name="auth_profiles_empty">没有其他已保存的账号</string>
+    <string name="auth_profiles_unavailable">这台电脑尚未配置兼容的授权管理工具。</string>
+    <string name="auth_profiles_number">%1$s 号授权</string>
+    <string name="auth_profiles_expiry">访问令牌到期：%1$s</string>
+    <string name="auth_profiles_issued">访问令牌签发：%1$s</string>
+    <string name="auth_profiles_refreshed">最近授权刷新：%1$s</string>
+    <string name="auth_profiles_modified">文件更新：%1$s</string>
+    <string name="auth_profiles_refresh_token_note">时间来自文件中的访问令牌。刷新令牌不提供到期时间；访问令牌过期后，查询时仍可能自动刷新。</string>
+    <string name="auth_profiles_token_details">令牌时间与文件</string>
+    <string name="auth_profiles_collapse">收起详情</string>
+    <string name="auth_profiles_query">查询额度与卡券</string>
+    <string name="auth_profiles_querying">查询中…</string>
+    <string name="auth_profiles_queried">查询时间：%1$s</string>
+    <string name="auth_profiles_switch">切换</string>
+    <string name="auth_profiles_switch_title">切换到 %1$s 号授权？</string>
+    <string name="auth_profiles_switch_body">服务端会保存较新的当前凭据并切换账号。Codex 会在 10 秒后重启，正在执行的任务可能中断，Remodex 会重新连接。</string>
+    <string name="auth_profiles_switch_confirm">切换账号</string>
+    <string name="auth_profiles_cancel">取消</string>
+    <string name="auth_profiles_switch_ready">已确认 Codex 正在使用选中的账号</string>
+    <string name="auth_profiles_restart_failed">尚未确认新账号可用。可刷新状态继续检查，错误详情保留了失败原因。</string>
+    <string name="auth_profiles_failed">操作未完成，已保留上次结果。可展开详情查看原因。</string>
+    <string name="auth_progress_title">授权切换</string>
+    <string name="auth_progress_target">切换到 %1$s 号授权</string>
+    <string name="auth_progress_elapsed">已等待 %1$d 秒</string>
+    <string name="auth_progress_submit">正在提交切换请求</string>
+    <string name="auth_progress_selected">已选中授权文件</string>
+    <string name="auth_progress_scheduled">等待电脑重启，预计 %1$d 秒后开始</string>
+    <string name="auth_progress_waiting">等待电脑返回重启结果</string>
+    <string name="auth_progress_reconnect">正在重新连接电脑</string>
+    <string name="auth_progress_restored">已重新连接电脑</string>
+    <string name="auth_progress_verify">正在确认 Codex 使用的账号</string>
+    <string name="auth_progress_confirmed">已确认 Codex 正在使用 %1$s 号授权</string>
+</resources>

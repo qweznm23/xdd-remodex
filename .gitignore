@@ -1,70 +1,41 @@
-# Dependencies
+# Private local files and generated output
+.local/
 node_modules/
-
-# macOS
+**/build/
+**/.gradle/
+**/.kotlin/
+__pycache__/
+*.py[cod]
+*.apk
+*.aab
+*.log
 .DS_Store
-**/.DS_Store
-
-# Xcode user data
-*.xcuserdatad/
-**/xcuserdata/
-*.xcworkspace/xcuserdata/
-
-# Xcode build
-DerivedData/
-build/
-*.ipa
-
-# Environment / secrets
+.idea/
+.vscode/
+.cursor/
+.scratch/
 .env
 .env.*
+*.env
+*.env.*
+!ops/*.env.example
 .remodex-local/
+.cocoindex_code/
+auth.json
+auth-profiles/
 *.pem
 *.p12
 *.key
 *.cer
+*.jks
+*.keystore
+key.properties
+keystore.properties
+local.properties
 android/supabase/.temp/
-.cocoindex_code/
-upload-keystore.jks
-CodexMobile/BuildSupport/PrivateOverrides.xcconfig
 phodex-bridge/src/private-defaults.json
-security_best_practices_report.md
-
-# Build artifacts
 *.swp
 *.swo
-*~
-*.rej
 *.class
 tmp/
 output/
-
-# Minified JS bundles (not part of this project)
-/main.js
-/links-*.js
-/scheme-*.js
-/initial-route-atom-*.js
-/use-navigate-to-local-conversation-*.js
-
-# Temp files
-$TMP_PLACEHOLDER
-
-# Claude project config (local only)
-.claude/
-
-# VS Code
-.vscode/
-
-# Tauri logs
-remodex-host/src-tauri/target/
-remodex-host/src-tauri/*.log
-remodex-host/src-tauri/**/*.log
-
-# useless files
-deeplinks-D8FzxbSB.js
-desktop-tauri-roadmap.md
-IOS_UPSTREAM_DELTA_7C82966.md
-IOS_UPSTREAM_DELTA_C3A1C14.md
-main-Bw7nouYH.js
-piano.md
-prd.md

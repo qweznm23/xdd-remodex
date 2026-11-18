@@ -4,7 +4,6 @@ import com.remodex.mobile.core.persistence.RelaySessionSnapshot
 import com.remodex.mobile.core.persistence.SessionPersistence
 import com.remodex.mobile.core.model.CodexPairingQRPayload
 import com.remodex.mobile.core.security.SecureStore
-import com.remodex.mobile.core.transport.isLocalRelayHost
 import com.remodex.mobile.core.transport.validateRelayUrl
 import com.remodex.mobile.data.CodexRepository
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +50,8 @@ suspend fun reconnectUsingSavedRelaySnapshot(
     relayHostOverride: String = "",
 ) {
     if (snap.relayUrl.isNullOrBlank() || snap.relaySessionId.isNullOrBlank()) return
-    val (url, token) = buildWebSocketConnectParams(snap, relayHostOverride)
+    val current = repository.resolveReconnectSnapshot(snap, relayHostOverride)
+    val (url, token) = buildWebSocketConnectParams(current, relayHostOverride)
     repository.connect(serverUrl = url, token = token, role = null)
 }
 
@@ -94,7 +94,6 @@ fun applyRelayHostOverride(
             else -> trimmed
         }
     val parsed = forParse.toHttpUrlOrNull() ?: return relayUrl
-    if (parsed.isHttps.not() && !isLocalRelayHost(host)) return relayUrl
     val httpish = parsed.newBuilder().host(host).build().toString()
     return when {
         wss -> httpish.replaceFirst("https://", "wss://", ignoreCase = true)

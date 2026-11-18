@@ -11,9 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +49,11 @@ fun SidebarThreadRow(
     onRenameRequest: (() -> Unit)? = null,
     onDeleteLocalRequest: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    onActionsRequest: (() -> Unit)? = null,
+    isUnread: Boolean = false,
+    needsAnswer: Boolean = false,
+    hasQuestions: Boolean = false,
+    onAnswerRequest: (() -> Unit)? = null,
 ) {
     val colors = rememberSidebarColorPalette()
     val rowShape = RoundedCornerShape(12.dp)
@@ -72,12 +76,16 @@ fun SidebarThreadRow(
                     .background(if (selected) colors.selectedRow else Color.Transparent)
                     .combinedClickable(
                         onClick = onSelect,
-                        onLongClick = { onRenameRequest?.invoke() },
+                        onLongClick = { if (onActionsRequest != null) onActionsRequest() else onRenameRequest?.invoke() },
                     )
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Reserve the status slot so starting/stopping a turn never shifts the title.
+            Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                SidebarThreadRunBadge(isRunning = isRunning)
+            }
             Text(
                 text = thread.displayTitle,
                 style =
@@ -101,6 +109,7 @@ fun SidebarThreadRow(
                         color = metadataTokens.first().color,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 60.dp),
                     )
                 }
                 val rel = SidebarRelativeTimeFormatter.compactLabel(thread)
@@ -112,24 +121,22 @@ fun SidebarThreadRow(
                         maxLines = 1,
                     )
                 }
-                when {
-                    isRunning -> {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(8.dp),
-                            strokeWidth = 1.5.dp,
-                            color = colors.accent,
-                            trackColor = colors.accent.copy(alpha = 0.2f),
-                        )
-                    }
-                    selected -> {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(colors.accent),
-                        )
-                    }
+                if (isUnread) {
+                    Text(
+                        text = stringResource(R.string.sidebar_unread_badge),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = colors.unread,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .background(colors.unreadBackground, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                    )
+                }
+                if (needsAnswer || hasQuestions) {
+                    com.remodex.mobile.ui.turn.QuestionReplyIndicator(onAnswerRequest ?: onSelect)
                 }
             }
         }
@@ -139,7 +146,7 @@ fun SidebarThreadRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.mutedText,
                 maxLines = 1,
-                modifier = Modifier.padding(start = 16.dp, top = 2.dp),
+                modifier = Modifier.padding(start = 44.dp, top = 2.dp),
             )
         }
     }
@@ -154,6 +161,11 @@ fun ActiveChatRow(
     onRenameRequest: (() -> Unit)?,
     onDeleteLocalRequest: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    onActionsRequest: (() -> Unit)? = null,
+    isUnread: Boolean = false,
+    needsAnswer: Boolean = false,
+    hasQuestions: Boolean = false,
+    onAnswerRequest: (() -> Unit)? = null,
 ) {
     SidebarThreadRow(
         thread = thread,
@@ -164,6 +176,11 @@ fun ActiveChatRow(
         onRenameRequest = onRenameRequest,
         onDeleteLocalRequest = onDeleteLocalRequest,
         modifier = modifier,
+        onActionsRequest = onActionsRequest,
+        isUnread = isUnread,
+        needsAnswer = needsAnswer,
+        hasQuestions = hasQuestions,
+        onAnswerRequest = onAnswerRequest,
     )
 }
 
@@ -175,6 +192,11 @@ fun ChatRow(
     onRenameRequest: (() -> Unit)?,
     onDeleteLocalRequest: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    onActionsRequest: (() -> Unit)? = null,
+    isUnread: Boolean = false,
+    needsAnswer: Boolean = false,
+    hasQuestions: Boolean = false,
+    onAnswerRequest: (() -> Unit)? = null,
 ) {
     SidebarThreadRow(
         thread = thread,
@@ -185,6 +207,11 @@ fun ChatRow(
         onRenameRequest = onRenameRequest,
         onDeleteLocalRequest = onDeleteLocalRequest,
         modifier = modifier,
+        onActionsRequest = onActionsRequest,
+        isUnread = isUnread,
+        needsAnswer = needsAnswer,
+        hasQuestions = hasQuestions,
+        onAnswerRequest = onAnswerRequest,
     )
 }
 

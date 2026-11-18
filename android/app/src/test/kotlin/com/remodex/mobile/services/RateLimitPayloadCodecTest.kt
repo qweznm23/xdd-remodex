@@ -121,4 +121,37 @@ class RateLimitPayloadCodecTest {
         assertEquals("unnamed-300-none", first.limitId)
         assertEquals(first.limitId, second.limitId)
     }
+    @Test fun `rolling quota preserves bucket id so reset can decrease used percentage`() {
+        val payload = mapOf("rateLimits" to JSONValue.Obj(mapOf("limitId" to JSONValue.Str("codex"),
+            "primary" to JSONValue.Obj(mapOf("usedPercent" to JSONValue.NumLong(2), "windowDurationMins" to JSONValue.NumLong(300))))))
+        val decoded = RateLimitPayloadCodec.decodeRateLimitBuckets(payload)
+        assertEquals("codex", decoded.single().limitId)
+        val previous = listOf(CodexRateLimitBucket("codex", primary = CodexRateLimitWindow(99, 300)))
+        val merged = RateLimitPayloadCodec.mergeRateLimitBuckets(previous, decoded)
+        assertEquals(1, merged.size)
+        assertEquals(98, merged.single().primary!!.remainingPercent)
+    }
+
+    @Test fun `reset timestamps accept seconds milliseconds numeric strings and ISO`() {
+        val instant = java.time.Instant.parse("2026-11-10T08:30:45Z")
+        for (value in listOf(JSONValue.NumLong(instant.epochSecond), JSONValue.NumLong(instant.toEpochMilli()),
+            JSONValue.Str(instant.epochSecond.toString()), JSONValue.Str(instant.toString()))) {
+            val payload = mapOf("primary" to JSONValue.Obj(mapOf("usedPercent" to JSONValue.NumLong(71), "resetsAt" to value)))
+            assertEquals(instant, RateLimitPayloadCodec.decodeRateLimitBuckets(payload).single().primary!!.resetsAt)
+        }
+    }
+
+    @Test fun `missing percentage cannot become full remaining quota and malformed time retains cause`() {
+        val missing = kotlin.test.assertFailsWith<com.remodex.mobile.core.error.CodexServiceError.InvalidResponse> {
+            RateLimitPayloadCodec.decodeRateLimitBuckets(mapOf("primary" to JSONValue.Obj(emptyMap())))
+        }
+        kotlin.test.assertTrue(missing.message!!.contains("usedPercent"))
+        val invalid = kotlin.test.assertFailsWith<com.remodex.mobile.core.error.CodexServiceError.InvalidResponse> {
+            RateLimitPayloadCodec.decodeRateLimitBuckets(mapOf("primary" to JSONValue.Obj(mapOf("usedPercent" to JSONValue.NumLong(1),
+                "resetsAt" to JSONValue.Str("not-a-date")))))
+        }
+        kotlin.test.assertNotNull(invalid.cause)
+        kotlin.test.assertTrue(invalid.message!!.contains("resetsAt"))
+    }
+
 }

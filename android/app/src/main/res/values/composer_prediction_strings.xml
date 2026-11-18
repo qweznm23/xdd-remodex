@@ -1,0 +1,7 @@
+<resources>
+    <string name="prediction_heading">Suggested reply</string>
+    <string name="prediction_action">Suggestion</string>
+    <string name="prediction_fill">Fill message box</string>
+    <string name="prediction_expand">Read full suggestion</string>
+    <string name="prediction_collapse">Collapse suggestion</string>
+</resources>

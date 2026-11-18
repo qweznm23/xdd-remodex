@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="attachment_retry_upload">Retry upload</string>
+    <string name="message_retry_send">Retry sending</string>
+    <string name="image_preview_gestures">Pinch to zoom · Drag to pan · Double tap to zoom</string>
+    <string name="image_preview_reset">%1$d%% · Reset</string>
+</resources>

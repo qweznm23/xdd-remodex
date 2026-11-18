@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+services=(remodex-test-relay.service remodex-test-download.service remodex-test-bridge.service)
+case "${1:-status}" in
+  status) systemctl show "${services[@]}" --property=Id,ActiveState,SubState,MainPID,UnitFileState ;;
+  restart) systemctl restart "${services[@]}" ;;
+  restart-bridge) systemctl restart remodex-test-bridge.service ;;
+  *) echo 'Usage: scripts/remodexctl [status|restart|restart-bridge]' >&2; exit 2 ;;
+esac

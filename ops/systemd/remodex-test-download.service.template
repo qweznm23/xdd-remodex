@@ -1,0 +1,19 @@
+[Unit]
+Description=Remodex Android updates
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+EnvironmentFile=@PROJECT_ROOT@/.local/config/runtime.env
+WorkingDirectory=@PROJECT_ROOT@/.local/artifacts/downloads
+ExecStart=/usr/bin/python3 @PROJECT_ROOT@/tools/app-update-server.py --port ${UPDATE_PORT} --bind ${UPDATE_BIND} --directory @PROJECT_ROOT@/.local/artifacts/downloads
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

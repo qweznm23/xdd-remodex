@@ -9,6 +9,39 @@ import org.junit.Test
 import java.time.Instant
 
 class SidebarThreadGroupingTest {
+    @Test
+    fun projectOrderStaysFixedWhileUpdatedConversationMovesWithinProject() {
+        val alpha = thread("a", cwd = "/projects/alpha", updatedAt = Instant.ofEpochSecond(10))
+        val betaOld = thread("b-old", cwd = "/projects/beta", updatedAt = Instant.ofEpochSecond(20))
+        val betaNew = thread("b-new", cwd = "/projects/beta", updatedAt = Instant.ofEpochSecond(30))
+        val before = SidebarThreadGrouping.makeGroups(listOf(betaNew, betaOld, alpha))
+        val after = SidebarThreadGrouping.makeGroups(listOf(
+            betaOld.copy(updatedAt = Instant.ofEpochSecond(100)), alpha, betaNew,
+        ))
+
+        assertEquals(listOf("alpha", "beta"), before.map { it.label })
+        assertEquals(before.map { it.id }, after.map { it.id })
+        assertEquals(listOf("b-new", "b-old"), before.last().threads.map { it.id })
+        assertEquals(listOf("b-old", "b-new"), after.last().threads.map { it.id })
+        // Reopening/re-fetching with a different wire order uses the same project order.
+        assertEquals(after.map { it.id }, SidebarThreadGrouping.makeGroups(
+            after.flatMap { it.threads }.reversed(),
+        ).map { it.id })
+    }
+
+    @Test
+    fun sameNameAndCaseVariantProjectsUsePathAsDeterministicTieBreaker() {
+        val threads = listOf(
+            thread("z", cwd = "/z/app"),
+            thread("b", cwd = "/b/App"),
+            thread("a", cwd = "/a/app"),
+        )
+        val expected = listOf("/a/app", "/b/App", "/z/app")
+        assertEquals(expected, SidebarThreadGrouping.makeGroups(threads).map { it.projectPath })
+        assertEquals(expected, SidebarThreadGrouping.makeGroups(threads.reversed()).map { it.projectPath })
+        assertEquals(expected.take(2), SidebarThreadGrouping.makeGroups(threads.drop(1)).map { it.projectPath })
+    }
+
     private fun thread(
         id: String,
         cwd: String? = null,

@@ -189,13 +189,13 @@ internal fun CodexService.saveMacScopedLocalState(macDeviceId: String?) {
     store.saveRuntimeSelection(
         device,
         RuntimeSelectionSnapshot(
-            selectedModelId = _selectedModelId.value,
-            selectedReasoningEffort = _selectedReasoningEffort.value,
+            selectedModelId = threadRuntimeSelection.defaults.modelId,
+            selectedReasoningEffort = threadRuntimeSelection.defaults.reasoningEffort,
             selectedAccessMode = _selectedAccessMode.value.name,
             selectedServiceTier = _selectedServiceTier.value?.name,
         ),
     )
-    messagePersistence.save(messageTimelineStore.messagesByThread.value, device)
+    timelinePersistenceWriter.saveNow(messageTimelineStore.messagesByThread.value, device)
 }
 
 internal fun CodexService.loadMacScopedLocalState(macDeviceId: String?) {
@@ -220,8 +220,7 @@ internal fun CodexService.loadMacScopedDefaultsState(macDeviceId: String?) {
     isApplyingMacScopedState = true
     try {
         val runtime = store.loadRuntimeSelection(device)
-        _selectedModelId.value = runtime.selectedModelId
-        _selectedReasoningEffort.value = runtime.selectedReasoningEffort
+        threadRuntimeSelection.reset(ThreadModelSelection(runtime.selectedModelId, runtime.selectedReasoningEffort))
         runtime.selectedAccessMode?.let { raw ->
             runCatching { CodexAccessMode.valueOf(raw) }.getOrNull()?.let { _selectedAccessMode.value = it }
         }
@@ -230,6 +229,7 @@ internal fun CodexService.loadMacScopedDefaultsState(macDeviceId: String?) {
         }
         _threads.value = store.loadCachedThreads(device)
         _activeThreadId.value = store.loadLastActiveThreadId(device)
+        syncActiveThreadRuntimeSelection()
     } finally {
         isApplyingMacScopedState = false
     }
@@ -238,8 +238,11 @@ internal fun CodexService.loadMacScopedDefaultsState(macDeviceId: String?) {
 internal suspend fun CodexService.clearInMemoryMacScopedState() {
     isApplyingMacScopedState = true
     try {
+        threadRuntimeSelection.reset(ThreadModelSelection(null, null))
+        _availableModels.value = emptyList()
         _threads.value = emptyList()
         _activeThreadId.value = null
+        syncActiveThreadRuntimeSelection()
         persistedThreadRenameById.clear()
         associatedManagedWorktreePathByThreadId.clear()
         synchronized(runningTurnStateLock) {

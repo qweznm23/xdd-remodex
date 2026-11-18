@@ -15,77 +15,121 @@ import java.time.Instant
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.launch
 
 /**
  * Mirrors [CodexService+History.swift](../../../../../../../../CodexMobile/CodexMobile/Services/CodexService+History.swift).
  */
-private const val INITIAL_HISTORY_TURN_LIMIT = 160
-private const val OLDER_HISTORY_TURN_LIMIT = 160
-
 internal suspend fun CodexService.syncThreadHistoryInternal(
     threadId: String,
     force: Boolean,
+    replaceInFlight: Boolean = false,
 ) {
     if (!sessionReady) return
     val tid = threadId.trim().ifEmpty { return }
     if (!force && hydratedThreadIds.contains(tid)) return
-    if (!loadingHistory.add(tid)) return
-    try {
-        val response =
-            try {
-                sendThreadReadPage(
-                    threadId = tid,
-                    cursor = null,
-                    limit = INITIAL_HISTORY_TURN_LIMIT,
-                    allowLegacyFallback = true,
-                )
-            } catch (e: CodexServiceError.RpcFailure) {
-                if (e.rpcError.isExplicitServerThreadMissing()) {
-                    handleMissingThread(tid)
-                    return
-                }
-                if (isThreadReadNotMaterialized(e)) {
-                    markThreadHistoryPage(
-                        tid,
-                        olderCursor = null,
-                        exhaustedOlderCursor = JSONValue.Null,
-                        hasAuthoritativeStart = true,
-                        initialLoaded = true,
-                    )
-                    hydratedThreadIds.add(tid)
-                    return
-                }
-                if (e.rpcError.code == -32600 || e.rpcError.code == -32602) {
-                    hydratedThreadIds.add(tid)
-                    return
-                }
-                throw e
-            }
-        val resultObj = response.result as? JSONValue.Obj ?: return
-        val threadEl = resultObj.map["thread"] as? JSONValue.Obj ?: return
-        val decodedThread =
-            runCatching {
-                CodexThread.fromJsonObject(jsonObjectFromRpc(threadEl))
-            }.getOrNull()
-        if (decodedThread != null) {
-            val merged = applyPersistedThreadRename(applyAuthoritativeProjectPathToServerThread(decodedThread))
-            publishThreads(upsertThreadRow(_threads.value, merged))
-        }
-        val messages = ThreadHistoryDecoder.decodeFromThreadRead(tid, threadEl.map)
-        if (messages.isNotEmpty()) {
-            messageTimelineStore.mergeThreadHistory(tid, messages)
-        }
-        rehydrateRunningTurnFromThreadRead(tid, threadEl.map)
-        ContextWindowUsageCodec.decodeFromThreadReadThreadObject(threadEl.map)?.let { usage ->
-            applyLiveContextWindowUsage(tid, usage)
-        }
-        updatePaginationFromThreadRead(tid, resultObj.map, threadEl.map, initialLoad = true)
-        hydratedThreadIds.add(tid)
-    } catch (_: Exception) {
-        // Non-fatal background hydration.
-    } finally {
-        loadingHistory.remove(tid)
+    val generation = connectionGeneration
+    val ticket = loadingHistory.begin(tid, replaceInFlight) ?: return
+    val previousTail = messagesByThread.value[tid].orEmpty().lastOrNull {
+        !it.itemId.isNullOrBlank() && !it.turnId.isNullOrBlank() &&
+            it.deliveryState == com.remodex.mobile.core.model.CodexMessageDeliveryState.confirmed
+    }?.let { it.turnId!! to it.itemId!! }
+    fun requireCurrentRequest() {
+        requireHistoryConnection(generation)
+        loadingHistory.requireCurrent(tid, ticket)
     }
+    val sidebarRequest = codexSidebar.begin(resolvedMacScopedPersistenceDeviceId())
+    var activityRevision: String? = null
+    var stage = "thread/read metadata"
+    _olderHistoryErrorByThread.value = _olderHistoryErrorByThread.value - tid
+    try {
+        val metadata = fetchThreadMetadata(tid) { method, params ->
+            sendRequestImpl(method, params).also { response ->
+                requireCurrentRequest()
+                val receipt = com.remodex.mobile.core.model.CodexThreadReadState.decode(response.result?.objectValue?.get("readState"))
+                activityRevision = receipt?.revision
+                codexSidebar.receipt(resolvedMacScopedPersistenceDeviceId(), tid, receipt, sidebarRequest)
+            }
+        }
+        requireCurrentRequest()
+        val decoded = CodexThread.fromJsonObject(jsonObjectFromRpc(metadata))
+        publishThreads(upsertThreadRow(_threads.value, applyPersistedThreadRename(applyAuthoritativeProjectPathToServerThread(decoded))))
+        stage = "thread/items/list initial"
+        val page = fetchRecentThreadHistory(tid) { method, params ->
+            requireCurrentRequest()
+            sendRequestImpl(method, params).also { requireCurrentRequest() }
+        }
+        stage = "initial history decode/merge"
+        val threadObject = page.threadObject(metadata.map)
+        val messages = ThreadHistoryDecoder.decodeFromThreadRead(tid, threadObject)
+        requireCurrentRequest()
+        if (messages.isNotEmpty()) messageTimelineStore.mergeThreadHistory(
+            tid, messages, isItemPage = page.itemPage, requireCurrentRequest = ::requireCurrentRequest,
+        )
+        requireCurrentRequest()
+        if (!page.itemPage) rehydrateRunningTurnFromThreadRead(tid, threadObject)
+        ContextWindowUsageCodec.decodeFromThreadReadThreadObject(threadObject)?.let { applyLiveContextWindowUsage(tid, it) }
+        markThreadHistoryPage(tid, page, messages.firstOrNull()?.turnId, messages.firstOrNull()?.id, initialLoad = true, activityRevision = activityRevision)
+        hydratedThreadIds.add(tid)
+        if (page.itemPage && previousTail != null && previousTail !in page.itemKeys && page.nextCursor != null) {
+            // First page is already visible. Fill a reconnect gap in the background
+            // until the native window meets cached history; never block the first paint.
+            val revision = _threadHistoryPaginationByThread.value[tid]?.initialLoadRevision
+            scope.launch {
+                var anchor = page.itemKeys.firstNotNullOfOrNull { (turn, item) ->
+                    messagesByThread.value[tid]?.firstOrNull { it.turnId == turn && it.itemId == item }?.id
+                }
+                fun requireCurrentGap() {
+                    requireHistoryConnection(generation)
+                    if (activeThreadId.value != tid || _threadHistoryPaginationByThread.value[tid]?.initialLoadRevision != revision) {
+                        throw kotlinx.coroutines.CancellationException("Recent history gap request superseded")
+                    }
+                }
+                try {
+                    // Gap catch-up uses its own cursor, never the user's oldest loaded boundary.
+                    walkRecentHistoryGap(page.nextCursor, previousTail, requireCurrent = ::requireCurrentGap,
+                        fetch = { cursor -> fetchThreadItemPage(tid, cursor) { method, params -> sendRequestImpl(method, params) } },
+                        merge = { gapPage ->
+                            val rows = ThreadHistoryDecoder.decodeFromThreadRead(tid, gapPage.threadObject(emptyMap()))
+                            if (rows.isNotEmpty()) messageTimelineStore.mergeThreadHistory(
+                                tid, rows, isItemPage = true, isOlderPage = true, olderPageBeforeMessageId = anchor,
+                                requireCurrentRequest = ::requireCurrentGap,
+                            )
+                            anchor = gapPage.itemKeys.firstNotNullOfOrNull { (turn, item) ->
+                                messagesByThread.value[tid]?.firstOrNull { it.turnId == turn && it.itemId == item }?.id
+                            } ?: anchor
+                        },
+                    )
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    try { requireCurrentGap() }
+                    catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        cancelled.initCause(failure)
+                        throw cancelled
+                    }
+                    recordThreadHistoryFailure(tid, "thread/items/list recent-gap", failure)
+                }
+            }
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (!sessionReady || connectionGeneration != generation || !loadingHistory.isCurrent(tid, ticket)) {
+            throw kotlinx.coroutines.CancellationException("Replaced history request failed at $stage").apply { initCause(e) }
+        }
+        if (e is CodexServiceError.RpcFailure && e.rpcError.isExplicitServerThreadMissing()) {
+            handleMissingThread(tid)
+        }
+        recordThreadHistoryFailure(tid, stage, e)
+        throw e
+    } finally {
+        codexSidebar.finish(sidebarRequest)
+        loadingHistory.finish(tid, ticket)
+    }
+}
+
+private fun CodexService.requireHistoryConnection(generation: Long) {
+    if (!sessionReady || connectionGeneration != generation) throw kotlinx.coroutines.CancellationException("History request belongs to a replaced connection")
 }
 
 internal fun CodexService.rehydrateRunningTurnFromThreadRead(
@@ -107,148 +151,97 @@ internal fun CodexService.rehydrateRunningTurnFromThreadRead(
 internal suspend fun CodexService.loadOlderThreadHistoryInternal(threadId: String) {
     if (!sessionReady) return
     val tid = threadId.trim().ifEmpty { return }
-    val pageState = _threadHistoryPaginationByThread.value[tid] ?: return
+    val generation = connectionGeneration
+    val pageState = _threadHistoryPaginationByThread.value[tid]
+    if (pageState?.initialTurnsLoaded != true) {
+        syncThreadHistoryInternal(tid, force = true)
+        return
+    }
     val cursor = pageState.olderCursor ?: return
     if (cursor == JSONValue.Null || pageState.hasAuthoritativeLocalHistoryStart) return
     if (tid in _loadingOlderHistoryThreadIds.value) return
-
     _loadingOlderHistoryThreadIds.value = _loadingOlderHistoryThreadIds.value + tid
     _olderHistoryErrorByThread.value = _olderHistoryErrorByThread.value - tid
+    fun requireCurrentOlderPage() {
+        requireHistoryConnection(generation)
+        if (_threadHistoryPaginationByThread.value[tid] !== pageState) {
+            throw kotlinx.coroutines.CancellationException("Older history page superseded by refresh")
+        }
+    }
+    var stage = if (pageState.usesItemPagination) "thread/items/list older" else "thread/turns/list older"
     try {
-        val response =
-            sendThreadReadPage(
-                threadId = tid,
-                cursor = cursor,
-                limit = OLDER_HISTORY_TURN_LIMIT,
-                allowLegacyFallback = false,
-            )
-        val resultObj = response.result as? JSONValue.Obj ?: return
-        val threadEl = resultObj.map["thread"] as? JSONValue.Obj ?: return
-        val messages = ThreadHistoryDecoder.decodeFromThreadRead(tid, threadEl.map)
+        val page = if (pageState.usesItemPagination) fetchThreadItemPage(tid, cursor) { method, params -> sendRequestImpl(method, params) }
+            else fetchThreadHistoryPage(tid, cursor) { method, params -> sendRequestImpl(method, params) }
+        requireCurrentOlderPage()
+        stage = "older history decode/merge"
+        val messages = ThreadHistoryDecoder.decodeFromThreadRead(tid, page.threadObject(emptyMap()))
         if (messages.isNotEmpty()) {
-            messageTimelineStore.mergeThreadHistory(tid, messages)
+            messageTimelineStore.mergeThreadHistory(tid, messages, olderPageBeforeTurnId = pageState.olderPageAnchorTurnId,
+                isOlderPage = true, isItemPage = page.itemPage, olderPageBeforeMessageId = pageState.olderPageAnchorMessageId,
+                requireCurrentRequest = ::requireCurrentOlderPage)
         }
-        updatePaginationFromThreadRead(tid, resultObj.map, threadEl.map, initialLoad = false)
+        requireCurrentOlderPage()
+        markThreadHistoryPage(tid, page, messages.firstOrNull()?.turnId, messages.firstOrNull()?.id, initialLoad = false)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
-        _olderHistoryErrorByThread.value =
-            _olderHistoryErrorByThread.value + (tid to (e.message?.trim()?.takeIf { it.isNotEmpty() } ?: "Unable to load older history."))
+        if (!sessionReady || connectionGeneration != generation || _threadHistoryPaginationByThread.value[tid] !== pageState) {
+            throw kotlinx.coroutines.CancellationException("Replaced older history request failed at $stage").apply { initCause(e) }
+        }
+        recordThreadHistoryFailure(tid, stage, e)
+        throw e
     } finally {
-        _loadingOlderHistoryThreadIds.value = _loadingOlderHistoryThreadIds.value - tid
+        if (connectionGeneration == generation) _loadingOlderHistoryThreadIds.value = _loadingOlderHistoryThreadIds.value - tid
     }
-}
-
-private suspend fun CodexService.sendThreadReadPage(
-    threadId: String,
-    cursor: JSONValue?,
-    limit: Int,
-    allowLegacyFallback: Boolean,
-): com.remodex.mobile.core.model.RPCMessage {
-    val fields =
-        buildMap {
-            put("threadId", JSONValue.Str(threadId))
-            put("includeTurns", JSONValue.Bool(true))
-            put("limit", JSONValue.NumLong(limit.toLong()))
-            put("turnLimit", JSONValue.NumLong(limit.toLong()))
-            put("pageSize", JSONValue.NumLong(limit.toLong()))
-            if (cursor != null && cursor != JSONValue.Null) {
-                put("cursor", cursor)
-                put("turnCursor", cursor)
-                put("beforeCursor", cursor)
-            }
-        }
-    return try {
-        sendRequestImpl("thread/read", JSONValue.Obj(fields))
-    } catch (e: CodexServiceError.RpcFailure) {
-        if (allowLegacyFallback && (e.rpcError.code == -32600 || e.rpcError.code == -32602)) {
-            sendRequestImpl(
-                "thread/read",
-                JSONValue.Obj(
-                    mapOf(
-                        "threadId" to JSONValue.Str(threadId),
-                        "includeTurns" to JSONValue.Bool(true),
-                    ),
-                ),
-            )
-        } else {
-            throw e
-        }
-    }
-}
-
-private fun CodexService.updatePaginationFromThreadRead(
-    threadId: String,
-    resultObject: Map<String, JSONValue>,
-    threadObject: Map<String, JSONValue>,
-    initialLoad: Boolean,
-) {
-    val cursor =
-        firstCursorValue(resultObject)
-            ?: firstCursorValue(threadObject)
-    val hasMore =
-        firstBooleanValue(resultObject, "hasMore", "has_more", "hasOlder", "has_older", "hasPreviousPage")
-            ?: firstBooleanValue(threadObject, "hasMore", "has_more", "hasOlder", "has_older", "hasPreviousPage")
-    val exhausted = cursor == null || cursor == JSONValue.Null || hasMore == false
-    markThreadHistoryPage(
-        threadId = threadId,
-        olderCursor = cursor,
-        exhaustedOlderCursor = if (exhausted) cursor ?: JSONValue.Null else null,
-        hasAuthoritativeStart = exhausted,
-        initialLoaded = initialLoad || _threadHistoryPaginationByThread.value[threadId]?.initialTurnsLoaded == true,
-    )
 }
 
 private fun CodexService.markThreadHistoryPage(
     threadId: String,
-    olderCursor: JSONValue?,
-    exhaustedOlderCursor: JSONValue?,
-    hasAuthoritativeStart: Boolean,
-    initialLoaded: Boolean,
+    page: ThreadHistoryPage,
+    oldestLoadedTurnId: String?,
+    oldestMessageId: String?,
+    initialLoad: Boolean,
+    activityRevision: String? = null,
 ) {
     val previous = _threadHistoryPaginationByThread.value[threadId] ?: ThreadHistoryPaginationState()
-    _threadHistoryPaginationByThread.value =
-        _threadHistoryPaginationByThread.value +
-            (threadId to
-                previous.copy(
-                    olderCursor = olderCursor,
-                    exhaustedOlderCursor = exhaustedOlderCursor ?: previous.exhaustedOlderCursor,
-                    hasAuthoritativeLocalHistoryStart = hasAuthoritativeStart,
-                    initialTurnsLoaded = initialLoaded,
-                ))
+    val stableAnchor = page.itemKeys.firstNotNullOfOrNull { (turn, item) ->
+        messagesByThread.value[threadId]?.firstOrNull { it.turnId == turn && it.itemId == item }?.id
+    } ?: oldestMessageId?.let { candidate -> messagesByThread.value[threadId]?.firstOrNull { it.id == candidate }?.id }
+    _threadHistoryPaginationByThread.value = _threadHistoryPaginationByThread.value + (threadId to historyPaginationAfterPage(
+        previous, page, oldestLoadedTurnId, stableAnchor, initialLoad,
+        revision = if (initialLoad) historyLoadRevision.incrementAndGet() else previous.initialLoadRevision,
+        activityRevision = activityRevision,
+    ))
 }
 
-private fun firstCursorValue(map: Map<String, JSONValue>): JSONValue? =
-    listOf(
-        "olderCursor",
-        "older_cursor",
-        "previousCursor",
-        "previous_cursor",
-        "prevCursor",
-        "prev_cursor",
-        "nextCursor",
-        "next_cursor",
-        "cursor",
-    ).firstNotNullOfOrNull { key -> map[key]?.takeIf { it != JSONValue.Null } }
-
-private fun firstBooleanValue(
-    map: Map<String, JSONValue>,
-    vararg keys: String,
-): Boolean? = keys.firstNotNullOfOrNull { key -> map[key]?.boolValue }
-
-private fun isThreadReadNotMaterialized(e: CodexServiceError.RpcFailure): Boolean {
-    val message = e.rpcError.message.lowercase()
-    return message.contains("not materialized") || message.contains("not yet materialized")
+private fun CodexService.recordThreadHistoryFailure(threadId: String, stage: String, error: Exception) {
+    val code = (error as? CodexServiceError.RpcFailure)?.rpcError?.code
+    android.util.Log.e("RemodexHistory", "history failed thread=$threadId stage=$stage attempt=1 rpcCode=$code", error)
+    _olderHistoryErrorByThread.value = _olderHistoryErrorByThread.value +
+        (threadId to "$stage: ${error.message ?: error.javaClass.name}")
 }
 
-internal suspend fun CodexService.refreshInFlightTurnStateInternal(threadId: String): Boolean {
+internal suspend fun CodexService.refreshInFlightTurnStateInternal(threadId: String, propagateFailure: Boolean = false): Boolean {
     if (!sessionReady) return false
     val tid = threadId.trim().ifEmpty { return false }
+    val generation = connectionGeneration
+    val predictionCheck = if (_activeThreadId.value == tid) predictionStore.beginCheck(tid) else null
     val snapshot =
         try {
-            fetchThreadTurnInterruptSnapshotImpl(tid)
-        } catch (_: Exception) {
+            fetchThreadTurnInterruptSnapshotImpl(tid).also { requireHistoryConnection(generation) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            predictionCheck?.let { predictionStore.abandonCheck(tid, it) }
+            throw e
+        } catch (e: Exception) {
+            predictionCheck?.let { predictionStore.abandonCheck(tid, it) }
+            if (propagateFailure) throw e
+            recordThreadHistoryFailure(tid, "thread/read + latest turn status", e)
             return false
         }
 
+    if (predictionCheck != null) {
+        predictionStore.checked(tid, predictionCheck, snapshot.latestSuccessfulTurnId)?.let { requestComposerPrediction(it) }
+    }
     return when (val action = ThreadTurnRecovery.actionFor(snapshot)) {
         is ThreadTurnRecoveryAction.Running -> {
             noteTurnStarted(tid, action.turnId)
@@ -265,16 +258,29 @@ internal suspend fun CodexService.refreshInFlightTurnStateInternal(threadId: Str
     }
 }
 
-internal suspend fun CodexService.catchUpThreadAfterSelectionOrReconnect(threadId: String) {
-    val tid = threadId.trim().ifEmpty { return }
+internal suspend fun CodexService.catchUpThreadAfterSelectionOrReconnect(threadId: String): Boolean {
+    val tid = threadId.trim().ifEmpty { return false }
     val refreshed = refreshInFlightTurnStateInternal(tid)
-    val isRunning =
-        _runningTurnIdByThread.value.containsKey(tid) ||
-            _protectedRunningFallbackThreadIds.value.contains(tid)
+    val isRunning = _runningTurnIdByThread.value.containsKey(tid) || _protectedRunningFallbackThreadIds.value.contains(tid)
     if (refreshed && isRunning) {
-        runCatching { ensureThreadResumedInternal(tid, force = true) }
-    } else {
-        runCatching { syncThreadHistoryInternal(tid, force = false) }
+        try {
+            ensureThreadResumedInternal(tid, force = true)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            recordThreadHistoryFailure(tid, "thread/resume live mirroring", e)
+            return false
+        }
+    }
+    return try {
+        // Resuming only restores metadata/live subscriptions; every history load still uses a bounded page.
+        syncThreadHistoryInternal(tid, force = isRunning)
+        true
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // syncThreadHistoryInternal recorded the original exception and leaves hydration/cursor state retryable.
+        false
     }
 }
 
@@ -329,4 +335,30 @@ internal fun sortThreadsForBridge(value: List<CodexThread>): List<CodexThread> {
         val r = rhs.updatedAt ?: rhs.createdAt ?: past
         r.compareTo(l)
     }
+}
+
+internal suspend fun CodexService.refreshConversationInternal(threadId: String) {
+    val tid = threadId.trim()
+    if (tid.isEmpty()) throw CodexServiceError.InvalidInput("Missing conversation ID")
+    if (!sessionReady) throw CodexServiceError.Disconnected
+    val generation = connectionGeneration
+    refreshConversationStages(
+        loadHistory = { syncThreadHistoryInternal(tid, force = true, replaceInFlight = true) },
+        resumeSubscription = {
+            requireHistoryConnection(generation)
+            ensureThreadResumedInternal(tid, force = true)
+            requireHistoryConnection(generation)
+        },
+        refreshTurnState = {
+            requireHistoryConnection(generation)
+            refreshInFlightTurnStateInternal(tid, propagateFailure = true)
+            requireHistoryConnection(generation)
+        },
+        onFailure = { stage, error ->
+            // History already records its own RPC/decode failure; deadline is owned here.
+            if (stage != "history" || error is java.util.concurrent.TimeoutException) {
+                recordThreadHistoryFailure(tid, "manual-refresh/$stage", error)
+            }
+        },
+    )
 }

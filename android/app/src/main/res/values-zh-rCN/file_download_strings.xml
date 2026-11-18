@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="file_download_action">下载文件</string>
+    <string name="file_download_size">文件大小：%1$.2f MiB</string>
+    <string name="file_download_progress">已下载 %1$.2f / %2$.2f MiB</string>
+    <string name="file_download_keep_open">请保持此窗口打开，直到下载完成。关闭窗口会取消下载。</string>
+    <string name="file_download_saved">已保存到“下载/Remodex”目录。</string>
+    <string name="file_download_saved_selected">已保存到所选位置。</string>
+    <string name="file_download_open">打开文件</string>
+    <string name="file_download_no_preview">此文件不支持预览，可以下载原文件。</string>
+    <string name="file_download_cancelled">下载已取消，未完成的文件已清理。</string>
+    <string name="file_preview_next_page">下一页</string>
+    <string name="file_preview_previous_page">上一页</string>
+</resources>

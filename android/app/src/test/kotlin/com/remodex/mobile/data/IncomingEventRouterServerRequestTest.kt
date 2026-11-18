@@ -301,7 +301,8 @@ class IncomingEventRouterServerRequestTest {
             val row = timeline.messagesByThread.value["thr-structured"]?.singleOrNull()
             assertNotNull(row)
             assertEquals(CodexMessageKind.userInputPrompt, row.kind)
-            assertEquals(request.id, row.id)
+            assertEquals(ConversationQuestionCodec.markerId(request), row.id)
+            assertEquals(ConversationQuestionCodec.fromPending(request), row.structuredUserInputRequest)
             assertEquals("Choose speed", row.text)
 
             respond(mapOf("mode" to listOf("fast")))

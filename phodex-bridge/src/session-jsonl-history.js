@@ -4,6 +4,24 @@
 const fs = require("fs");
 const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
 
+// session_meta is the first JSONL record. Directory lookup must never read image
+// blobs or command history merely to recover this small header.
+function readSessionJsonlMetadataFromFile(filePath) {
+  const fd = fs.openSync(filePath, "r");
+  let failure;
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const count = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    return parseSessionJsonlMetadata(buffer.subarray(0, count).toString("utf8"));
+  } catch (error) { failure = error; throw error; }
+  finally {
+    try { fs.closeSync(fd); } catch (error) {
+      if (failure) (failure.suppressed ||= []).push(error);
+      else throw error;
+    }
+  }
+}
+
 function readThreadTurnsListPageFromSessionJsonl(filePath, {
   threadId = "",
   limit = 5,
@@ -322,6 +340,14 @@ function normalizeReadableToolItemForHistory(payload, lineNumber, { cwd = "" } =
   );
   const id = callId || normalizeString(payload.id) || `tool-call-line-${lineNumber}`;
   const status = normalizeString(payload.status) || "completed";
+
+  if (toolName.split(".").at(-1) === "request_user_input_async" && Array.isArray(argumentsObject.questions)) {
+    // Match native app-server agentMessage.questions; preserve the original call ID and indices.
+    return {
+      ...payload, id, type: "agentMessage", text: "", phase: "commentary",
+      questions: argumentsObject.questions,
+    };
+  }
 
   if (isCommandToolName(toolName)) {
     return {
@@ -720,6 +746,7 @@ function normalizeString(value) {
 }
 
 module.exports = {
+  readSessionJsonlMetadataFromFile,
   parseSessionJsonlMetadata,
   parseSessionJsonlTurns,
   readThreadTurnsListPageFromSessionJsonl,

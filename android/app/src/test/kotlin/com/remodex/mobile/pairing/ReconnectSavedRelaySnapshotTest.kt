@@ -24,11 +24,113 @@ import com.remodex.mobile.services.EmptyTrustedDeviceCodexRepository
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.runTest
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ReconnectSavedRelaySnapshotTest {
+    @Test fun bridgeRestartRecoversNewRoomWithoutAnotherForegroundEvent() = runTest {
+        val old = RelaySessionSnapshot(relayUrl = "ws://relay.example/relay", relaySessionId = "old")
+        val repo = ReconnectTrackingRepository()
+        val times = mutableListOf<Long>()
+        retryTemporaryBridgeAbsence {
+            times += testScheduler.currentTime
+            repo.resolveFailure = if (testScheduler.currentTime < 5_000L)
+                com.remodex.mobile.core.model.CodexTrustedSessionResolveError.MacOffline("restarting") else null
+            repo.resolvedSnapshot = old.copy(relaySessionId = "new")
+            reconnectUsingSavedRelaySnapshot(repo, old)
+        }
+        assertEquals(listOf(0L, 1000L, 3000L, 7000L), times)
+        assertEquals("ws://relay.example/relay/new", repo.lastConnectUrl)
+    }
+
+    @Test fun temporaryRelayCloseDuringConnectRetriesButTrustRejectionStopsImmediately() = runTest {
+        val denied = com.remodex.mobile.core.model.CodexTrustedSessionResolveError.RePairRequired("wrong identity")
+        val closed = com.remodex.mobile.core.transport.RelaySocketClosed(4004, "temporarily unavailable")
+        var calls = 0
+        val error = assertFailsWith<com.remodex.mobile.core.model.CodexTrustedSessionResolveError.RePairRequired> {
+            retryTemporaryBridgeAbsence { if (calls++ == 0) throw closed else throw denied }
+        }
+        assertSame(denied, error)
+        assertSame(closed, error.suppressed.single())
+        assertEquals(2, calls)
+    }
+
+    @Test fun manualTakeoverCancelsBackoffBeforeAnotherConnection() = runTest {
+        var calls = 0
+        val job = launch {
+            retryTemporaryBridgeAbsence {
+                calls++
+                throw com.remodex.mobile.core.transport.RelaySocketClosed(4002, "old room")
+            }
+        }
+        testScheduler.runCurrent()
+        job.cancel()
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, calls)
+    }
+
+    @Test fun prolongedAbsenceStopsWithOriginalCloseCodeAndAttempts() = runTest {
+        var calls = 0
+        val error = assertFailsWith<com.remodex.mobile.core.transport.RelaySocketClosed> {
+            retryTemporaryBridgeAbsence {
+                calls++
+                throw com.remodex.mobile.core.transport.RelaySocketClosed(4002, "unavailable")
+            }
+        }
+        assertEquals(7, calls)
+        assertEquals(4002, error.code)
+        assertEquals(6, error.suppressed.size)
+    }
+
+    @Test
+    fun reconnect_resolvesNewSessionAfterBridgeRestartBeforeConnecting() = runTest {
+        val old = RelaySessionSnapshot(relayUrl = "ws://relay.example/relay", relaySessionId = "old")
+        val repo = ReconnectTrackingRepository().apply { resolvedSnapshot = old.copy(relaySessionId = "new") }
+        reconnectUsingSavedRelaySnapshot(repo, old, "183.221.20.26")
+        assertEquals("ws://183.221.20.26/relay/new", repo.lastConnectUrl)
+        assertEquals("new", repo.lastConnectToken)
+        assertEquals("183.221.20.26", repo.resolveHostOverride)
+    }
+
+    @Test
+    fun reconnect_failedResolutionPreservesCauseAndDoesNotUseStaleSession() = runTest {
+        val failure = java.io.IOException("resolve failed", IllegalStateException("original cause"))
+        failure.addSuppressed(IllegalArgumentException("secondary"))
+        val repo = ReconnectTrackingRepository().apply { resolveFailure = failure }
+        val error = assertFailsWith<java.io.IOException> {
+            reconnectUsingSavedRelaySnapshot(repo, RelaySessionSnapshot(relayUrl = "ws://relay.example/relay", relaySessionId = "old"))
+        }
+        assertSame(failure, error)
+        assertEquals("original cause", error.cause?.message)
+        assertEquals("secondary", error.suppressed.single().message)
+        assertNull(repo.lastConnectUrl)
+    }
+
+    @Test
+    fun reconnect_cancellationDoesNotConnectToStaleSession() = runTest {
+        val cancelled = CancellationException("cancelled resolve")
+        val repo = ReconnectTrackingRepository().apply { resolveFailure = cancelled }
+        assertSame(cancelled, assertFailsWith<CancellationException> {
+            reconnectUsingSavedRelaySnapshot(repo, RelaySessionSnapshot(relayUrl = "ws://relay.example/relay", relaySessionId = "old"))
+        })
+        assertNull(repo.lastConnectUrl)
+    }
+
+    @Test
+    fun publicHostOverride_isUsedForSavedCleartextPairing() {
+        val snap = RelaySessionSnapshot(relayUrl = "ws://192.168.110.96:10004/relay", relaySessionId = "test-session")
+        val (url, token) = buildWebSocketConnectParams(snap, "183.221.20.26")
+        assertEquals("ws://183.221.20.26:10004/relay/test-session", url)
+        assertEquals("test-session", token)
+        assertEquals("ws://relay.example.com:10004/relay", applyRelayHostOverride(snap.relayUrl!!, "relay.example.com"))
+    }
+
     @Test
     fun reconnect_noOpWhenSnapshotIncomplete() =
         runTest {
@@ -58,6 +160,14 @@ class ReconnectSavedRelaySnapshotTest {
 }
 
 private class ReconnectTrackingRepository : CodexRepository, EmptyTrustedDeviceCodexRepository {
+    var resolvedSnapshot: RelaySessionSnapshot? = null
+    var resolveFailure: Exception? = null
+    var resolveHostOverride: String? = null
+    override suspend fun resolveReconnectSnapshot(snapshot: RelaySessionSnapshot, relayHostOverride: String): RelaySessionSnapshot {
+        resolveHostOverride = relayHostOverride
+        resolveFailure?.let { throw it }
+        return resolvedSnapshot ?: snapshot
+    }
     var disconnectCalls = 0
     var lastConnectUrl: String? = null
     var lastConnectToken: String? = null

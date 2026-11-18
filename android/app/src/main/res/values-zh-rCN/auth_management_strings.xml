@@ -1,0 +1,36 @@
+<resources>
+    <string name="auth_manage_section_title">授权文件管理</string>
+    <string name="auth_manage_title">授权维护</string>
+    <string name="auth_manage_import">导入 / 替换</string>
+    <string name="auth_manage_file">管理授权文件</string>
+    <string name="auth_manage_check">检查文件与有效期</string>
+    <string name="auth_manage_export">导出到指定位置</string>
+    <string name="auth_manage_schedule">北京时间每天 04:00 · 闲置账号每天最多自动尝试一次</string>
+    <string name="auth_manage_last_check">服务端最近检查：%1$s</string>
+    <string name="auth_manage_last_run">最近每日维护：%1$s</string>
+    <string name="auth_manage_next_check">下次定时检查：%1$s</string>
+    <string name="auth_manage_stale">显示的是较早的检查记录，请刷新列表获取最新状态。</string>
+    <string name="auth_manage_active_note">服务端每分钟检查并回写较新的当前凭据。到期前 15 分钟内可通过 Codex 补刷新，每天最多尝试一次。查看此页不会强制轮换 Token。</string>
+    <string name="auth_manage_active_healthy">当前访问令牌仍在标注的有效期内。</string>
+    <string name="auth_manage_active_refreshed">当前凭据已补刷新，并同步到对应编号库。</string>
+    <string name="auth_manage_active_conflict">库内存在较新或无法比较的凭据，已保留两份。</string>
+    <string name="auth_manage_active_attempted">今天已尝试补刷新，不再自动重复；需要时可手动刷新。</string>
+    <string name="auth_manage_active_failed">当前凭据维护未完成，可展开查看原因。</string>
+    <string name="auth_manage_active_unknown">尚未确认当前凭据的维护状态。</string>
+    <string name="auth_manage_current_file">当前授权文件</string>
+    <string name="auth_manage_auto_failed">%1$s 号自动刷新未完成 · 查看原因</string>
+    <string name="auth_manage_checked">文件结构检查通过；此检查不代表服务端已接受凭据。</string>
+    <string name="auth_manage_imported">授权已导入，当前使用的账号未切换。</string>
+    <string name="auth_manage_exported">授权已保存到你选择的位置。</string>
+    <string name="auth_manage_token_expired">访问令牌已超过标注的有效期，但不能据此判断刷新令牌是否还能使用。</string>
+    <string name="auth_manage_token_in_time">访问令牌仍在标注的有效期内。</string>
+    <string name="auth_manage_token_unknown">未能确定访问令牌的到期时间。</string>
+    <string name="auth_manage_importing">正在上传并导入授权…</string>
+    <string name="auth_manage_exporting">正在保存授权…</string>
+    <string name="auth_manage_checking">正在检查文件与有效期…</string>
+    <string name="auth_manage_import_note">先选择编号，再选择 auth.json（最大 64 KiB）。替换会在服务端保留旧文件备份；这里不能替换正在使用的账号。</string>
+    <string name="auth_manage_slot_active">%1$s 号 · 使用中</string>
+    <string name="auth_manage_slot_replace">%1$s 号 · 替换已有授权</string>
+    <string name="auth_manage_slot_new">%1$s 号 · 空位</string>
+    <string name="auth_manage_choose_file">选择文件并导入</string>
+</resources>

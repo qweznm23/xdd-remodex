@@ -41,6 +41,22 @@ class QrPairingValidatorTest {
     }
 
     @Test
+    fun publicCleartextPayload_succeedsButExpiredOrInvalidKeyStillFails() {
+        val now = 1_700_000_000_000L
+        val json =
+            """
+            {"v":$CODEX_PAIRING_QR_VERSION,"relay":"ws://183.221.20.26:10004/relay","sessionId":"sess",
+            "macDeviceId":"mac","macIdentityPublicKey":"$validMacIdentityPublicKey","expiresAt":${now + 300_000L}}
+            """.trimIndent()
+        val result = assertIs<QrPairingValidationResult.Success>(validatePairingQrCode(json, nowEpochMillis = now))
+        assertEquals("ws://183.221.20.26:10004/relay", result.payload.relay)
+        assertIs<QrPairingValidationResult.ScanError>(validatePairingQrCode(json, nowEpochMillis = now + 600_000L))
+        assertIs<QrPairingValidationResult.ScanError>(
+            validatePairingQrCode(json.replace(validMacIdentityPublicKey, "not-a-key"), nowEpochMillis = now),
+        )
+    }
+
+    @Test
     fun shortPairingCode_returnsLookupRequest() {
         val r = validatePairingQrCode("ab23-cd34ef")
         val shortCode = assertIs<QrPairingValidationResult.ShortCode>(r)

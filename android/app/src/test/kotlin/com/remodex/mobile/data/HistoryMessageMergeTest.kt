@@ -11,6 +11,39 @@ import kotlin.test.assertEquals
 
 class HistoryMessageMergeTest {
     @Test
+    fun normalizeRepairsCachedAnswerAndTrailingBracketWithoutMergingOtherItems() {
+        val full = CodexMessage(id = "full", threadId = "thread", role = CodexMessageRole.assistant,
+            text = "已修复。 [下载 APK](http://example.test/app.apk)", turnId = "turn", itemId = "item", createdAt = Instant.EPOCH)
+        val tail = full.copy(id = "tail", text = ")")
+        val other = tail.copy(id = "other", itemId = "other-item")
+        val restored = MessageTimelineStore(mapOf("thread" to listOf(full, tail, other)))
+            .messagesByThread.value.getValue("thread")
+        assertEquals(listOf(full, other), restored)
+        assertEquals(listOf(full), HistoryMessageMerge.mergeItemPage(listOf(full, tail), listOf(full)))
+    }
+
+    @Test
+    fun ambiguousCachedFragmentsWaitForOfficialHistoryBeforeCoalescing() {
+        val prefix = CodexMessage(id = "prefix", threadId = "thread", role = CodexMessageRole.assistant,
+            text = "完整回复(", turnId = "turn", itemId = "item", createdAt = Instant.EPOCH)
+        val suffix = prefix.copy(id = "suffix", text = ")")
+        assertEquals(listOf(prefix, suffix), HistoryMessageMerge.normalize(listOf(prefix, suffix)))
+        val full = prefix.copy(text = "完整回复()")
+        assertEquals(listOf(full), HistoryMessageMerge.mergeItemPage(listOf(prefix, suffix), listOf(full)))
+    }
+
+    @Test fun recentHistoryRestoresMissingTurnsInServerOrderWithoutDroppingLiveRows() {
+        fun row(turn: String) = message(id = turn, role = CodexMessageRole.assistant, kind = CodexMessageKind.chat,
+            text = "message $turn", turnId = turn, itemId = turn, isStreaming = false, createdAt = Instant.EPOCH)
+        val recovered = listOf(row("fix10"), row("reconnect-question"), row("latest"))
+        val existing = listOf(row("older-cache"), row("latest"), row("live-follow-up"))
+        val merged = HistoryMessageMerge.mergeRecentPage(existing, recovered)
+        assertEquals(listOf("older-cache", "fix10", "reconnect-question", "latest", "live-follow-up"), merged.map { it.turnId })
+        val misplaced = listOf(row("latest"), row("fix10"), row("reconnect-question"))
+        assertEquals(recovered.map { it.turnId }, HistoryMessageMerge.mergeRecentPage(misplaced, recovered).map { it.turnId })
+    }
+
+    @Test
     fun merge_preservesExistingRowOrderWhenHistoryArrivesLate() {
         val existing =
             listOf(

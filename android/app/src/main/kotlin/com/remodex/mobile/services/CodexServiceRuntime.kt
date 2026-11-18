@@ -58,16 +58,22 @@ suspend fun CodexService.refreshModelsForRepository() =
 
 suspend fun CodexService.setSelectedModelIdForRepository(modelId: String?) =
     withContext(Dispatchers.IO) {
-        _selectedModelId.value = modelId?.trim()?.takeIf { it.isNotEmpty() }
-        normalizeRuntimeSelectionsAfterModelsUpdate()
-        persistRuntimeSelection()
+        synchronized(threadRuntimeSelection) {
+            val threadId = _activeThreadId.value
+            val current = runtimeSelectionForThread(threadId)
+            threadRuntimeSelection.select(threadId, current.copy(modelId = modelId?.trim()?.takeIf { it.isNotEmpty() }))
+            normalizeRuntimeSelectionsAfterModelsUpdate()
+        }
     }
 
 suspend fun CodexService.setSelectedReasoningEffortForRepository(reasoningEffort: String?) =
     withContext(Dispatchers.IO) {
-        _selectedReasoningEffort.value = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
-        normalizeRuntimeSelectionsAfterModelsUpdate()
-        persistRuntimeSelection()
+        synchronized(threadRuntimeSelection) {
+            val threadId = _activeThreadId.value
+            val current = runtimeSelectionForThread(threadId)
+            threadRuntimeSelection.select(threadId, current.copy(reasoningEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }))
+            normalizeRuntimeSelectionsAfterModelsUpdate()
+        }
     }
 
 suspend fun CodexService.setSelectedAccessModeForRepository(accessMode: CodexAccessMode) =
@@ -100,62 +106,31 @@ suspend fun CodexService.setThreadCollaborationModeForRepository(
     )
 }
 
-internal fun CodexService.selectedModelOption(): CodexModelOption? {
-    val models = _availableModels.value
-    val selected = _selectedModelId.value?.trim()?.takeIf { it.isNotEmpty() }
-    return when {
-        models.isEmpty() -> null
-        selected != null -> models.firstOrNull { it.id == selected || it.model == selected }
-        else -> null
-    } ?: models.firstOrNull { it.isDefault } ?: models.firstOrNull()
-}
+internal fun CodexService.runtimeSelectionForThread(threadId: String?): ThreadModelSelection =
+    threadRuntimeSelection.resolve(threadId, _threads.value, _availableModels.value)
 
 internal fun CodexService.runtimeModelIdentifierForTurn(threadId: String): String? =
-    selectedModelOption()?.model?.trim()?.takeIf { it.isNotEmpty() }
-        ?: _threads.value.firstOrNull { it.id == threadId }?.model?.trim()?.takeIf { it.isNotEmpty() }
+    runtimeSelectionForThread(threadId).modelId
 
-internal fun CodexService.selectedReasoningEffortForSelectedModel(): String? {
-    val model = selectedModelOption() ?: return null
-    val supported = model.supportedReasoningEfforts.map { it.reasoningEffort }.filter { it.isNotBlank() }
-    if (supported.isEmpty()) return null
+internal fun CodexService.selectedReasoningEffortForThread(threadId: String): String? =
+    runtimeSelectionForThread(threadId).reasoningEffort
 
-    val selected = _selectedReasoningEffort.value?.trim()?.takeIf { it.isNotEmpty() }
-    if (selected != null && supported.contains(selected)) return selected
-
-    val defaultEffort = model.defaultReasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
-    if (defaultEffort != null && supported.contains(defaultEffort)) return defaultEffort
-
-    return if (supported.contains("medium")) "medium" else supported.firstOrNull()
+internal fun CodexService.syncActiveThreadRuntimeSelection() = synchronized(threadRuntimeSelection) {
+    val selection = runtimeSelectionForThread(_activeThreadId.value)
+    _selectedModelId.value = selection.modelId
+    _selectedReasoningEffort.value = selection.reasoningEffort
 }
 
 internal fun CodexService.normalizeRuntimeSelectionsAfterModelsUpdate() {
-    val models = _availableModels.value
-    if (models.isEmpty()) {
-        persistRuntimeSelection()
-        return
-    }
-
-    val selected = _selectedModelId.value?.trim()?.takeIf { it.isNotEmpty() }
-    val resolvedModel =
-        selected?.let { id -> models.firstOrNull { it.id == id || it.model == id } }
-            ?: models.firstOrNull { it.isDefault }
-            ?: models.firstOrNull()
-    _selectedModelId.value = resolvedModel?.id?.takeIf { it.isNotBlank() }
-
-    val supported = resolvedModel?.supportedReasoningEfforts?.map { it.reasoningEffort } ?: emptyList()
-    val selectedReasoning = _selectedReasoningEffort.value?.trim()?.takeIf { it.isNotEmpty() }
-    if (selectedReasoning != null && !supported.contains(selectedReasoning)) {
-        _selectedReasoningEffort.value = null
-    }
-
+    syncActiveThreadRuntimeSelection()
     persistRuntimeSelection()
 }
 
 internal fun CodexService.persistRuntimeSelection() {
     persistRuntimeSelectionSnapshot(
         RuntimeSelectionSnapshot(
-            selectedModelId = _selectedModelId.value,
-            selectedReasoningEffort = _selectedReasoningEffort.value,
+            selectedModelId = threadRuntimeSelection.defaults.modelId,
+            selectedReasoningEffort = threadRuntimeSelection.defaults.reasoningEffort,
             selectedAccessMode = _selectedAccessMode.value.name,
             selectedServiceTier = _selectedServiceTier.value?.name,
         ),

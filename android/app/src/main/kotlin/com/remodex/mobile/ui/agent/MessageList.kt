@@ -38,14 +38,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.painterResource
@@ -53,7 +51,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.valentinilk.shimmer.shimmer
 import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.AIChangeSet
@@ -74,10 +71,11 @@ private val MessageListBottomFadeLength = 96.dp
  * Scrollable conversation timeline. SwiftUI: `ScrollView` + `LazyVStack` pattern.
  */
 @Composable
-fun MessageList(
-    messages: List<CodexMessage>,
+internal fun MessageList(
+    presentation: TimelinePresentation,
     listState: LazyListState,
     modifier: Modifier = Modifier,
+    showEmptyContent: Boolean = true,
     hiddenEarlierCount: Int = 0,
     canLoadOlderRemoteHistory: Boolean = false,
     isLoadingOlderHistory: Boolean = false,
@@ -145,6 +143,7 @@ fun MessageList(
     applyingUndoChangeSetIds: Set<String> = emptySet(),
     onUndoAssistantChanges: ((AIChangeSet) -> Unit)? = null,
 ) {
+    val messages = presentation.messages
     val lastAssistantIndex = messages.indexOfLast { it.role == CodexMessageRole.assistant }
     val lastAssistantMessage = messages.getOrNull(lastAssistantIndex)
     val showTrailingActions =
@@ -155,26 +154,9 @@ fun MessageList(
         )
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    // Slow, precise drag remains native. Fast user drag is progressively damped
-    // so long chat threads are easier to control without blocking scroll.
-    val scrollPacingConnection = rememberChatScrollPacingNestedScrollConnection()
-    // The cap only applies to inertial motion after finger release, preventing
-    // large flings from losing position in long chat threads.
-    val flingBehavior = rememberCappedChatFlingBehavior()
-    val timelineItems =
-        remember(messages, isAssistantTurnActive, activeTurnId) {
-            messages.toTimelineListItems(
-                collapseLatestTurn = !isAssistantTurnActive,
-                activeTurnId = activeTurnId,
-            )
-        }
-    val transientStatusText =
-        remember(messages, isAssistantTurnActive, activeTurnId) {
-            messages.deriveTransientActivityStatus(
-                isThreadRunning = isAssistantTurnActive,
-                activeTurnId = activeTurnId,
-            )
-        }
+    val timelineItems = presentation.items
+    val transientStatusText = presentation.statusText
+    val fadeColor = MaterialTheme.colorScheme.background
     val lastAssistantDisplayIndex =
         remember(timelineItems) {
             timelineItems.indexOfLast { item ->
@@ -200,19 +182,20 @@ fun MessageList(
     val undoActionLabel = stringResource(R.string.turn_message_action_undo_changes)
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (messages.isEmpty()) {
+        if (messages.isEmpty() && olderHistoryError.isNullOrBlank() && !canLoadOlderRemoteHistory) {
             Box(modifier = Modifier.fillMaxSize()) {
-                emptyContent()
+                if (showEmptyContent) emptyContent()
             }
         } else {
             LazyColumn(
                 state = listState,
-                flingBehavior = flingBehavior,
+                // Chat should stop at its boundary without Android's edge stretch/rebound.
+                overscrollEffect = null,
                 modifier =
                     Modifier
                         .fillMaxSize()
-                        .nestedScroll(scrollPacingConnection)
                         .verticalContentFadeMask(
+                            background = fadeColor,
                             fadeStart = MessageListTopFadeStart,
                             fadeLength = MessageListTopFadeLength,
                             bottomFadeStart = MessageListBottomFadeStart,
@@ -221,7 +204,7 @@ fun MessageList(
                 verticalArrangement = Arrangement.spacedBy(verticalItemSpacing),
                 contentPadding = contentPadding,
             ) {
-                if ((hiddenEarlierCount > 0 || canLoadOlderRemoteHistory) && onLoadEarlierMessages != null) {
+                if ((hiddenEarlierCount > 0 || canLoadOlderRemoteHistory || !olderHistoryError.isNullOrBlank()) && onLoadEarlierMessages != null) {
                     item(key = "load-earlier-messages") {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -356,10 +339,10 @@ fun MessageList(
                         }
                     }
                 }
-                transientStatusText?.let { statusText ->
+                if (presentation.hasActivityRow) {
                     item(key = "transient-activity-status") {
                         TransientActivityStatusRow(
-                            statusText = statusText,
+                            statusText = transientStatusText,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -369,53 +352,28 @@ fun MessageList(
     }
 }
 
+/** Edge gradients paint over the background; the conversation needs no offscreen texture. */
 private fun Modifier.verticalContentFadeMask(
+    background: Color,
     fadeStart: Dp,
     fadeLength: Dp,
     bottomFadeStart: Dp,
     bottomFadeLength: Dp,
-): Modifier =
-    this
-        .graphicsLayer {
-            compositingStrategy = CompositingStrategy.Offscreen
-        }
-        .drawWithContent {
-            drawContent()
-            if (size.height <= 0f) return@drawWithContent
-            val height = size.height
-            if (height <= 1f) return@drawWithContent
-            val fadeStartPx = fadeStart.toPx().coerceIn(0f, height - 1f)
-            val fadeEndPx =
-                (fadeStartPx + fadeLength.toPx().coerceAtLeast(1f))
-                    .coerceAtMost(height)
-            val fadeStartStop = (fadeStartPx / size.height).coerceIn(0f, 1f)
-            val fadeEndStop = (fadeEndPx / size.height).coerceIn(0f, 1f)
-            val bottomFadeEndPx =
-                (height - bottomFadeStart.toPx().coerceAtLeast(0f))
-                    .coerceIn(0f, height)
-            val bottomFadeStartPx =
-                (bottomFadeEndPx - bottomFadeLength.toPx().coerceAtLeast(1f))
-                    .coerceIn(0f, bottomFadeEndPx)
-            val bottomFadeStartStop = (bottomFadeStartPx / size.height).coerceIn(0f, 1f)
-            val bottomFadeEndStop = (bottomFadeEndPx / size.height).coerceIn(0f, 1f)
-            drawRect(
-                brush =
-                    Brush.verticalGradient(
-                        colorStops =
-                            arrayOf(
-                                0f to Color.Transparent,
-                                fadeStartStop to Color.Transparent,
-                                fadeEndStop to Color.Black,
-                                bottomFadeStartStop to Color.Black,
-                                bottomFadeEndStop to Color.Transparent,
-                                1f to Color.Transparent,
-                            ),
-                        startY = 0f,
-                        endY = size.height,
-                    ),
-                blendMode = BlendMode.DstIn,
-            )
-        }
+): Modifier = drawWithCache {
+    val topStart = fadeStart.toPx().coerceIn(0f, size.height)
+    val topEnd = (topStart + fadeLength.toPx()).coerceAtMost(size.height)
+    val bottomEnd = (size.height - bottomFadeStart.toPx()).coerceAtLeast(0f)
+    val bottomStart = (bottomEnd - bottomFadeLength.toPx()).coerceAtLeast(0f)
+    val top = Brush.verticalGradient(listOf(background, background.copy(alpha = 0f)), topStart, topEnd)
+    val bottom = Brush.verticalGradient(listOf(background.copy(alpha = 0f), background), bottomStart, bottomEnd)
+    onDrawWithContent {
+        drawContent()
+        if (topEnd > topStart) drawRect(top, size = Size(size.width, topEnd))
+        if (bottomEnd > bottomStart) drawRect(
+            bottom, topLeft = Offset(0f, bottomStart), size = Size(size.width, size.height - bottomStart),
+        )
+    }
+}
 
 @Composable
 private fun TimelineListItemContent(
@@ -427,8 +385,12 @@ private fun TimelineListItemContent(
     when (item) {
         is TimelineListItem.Single ->
             messageContent(item.message)
-        is TimelineListItem.MessageChunk ->
-            messageContent(item.toRenderMessage())
+        is TimelineListItem.MessageChunk -> {
+            val candidate = item.toRenderMessage()
+            // Earlier chunks keep their message instance while only the last chunk grows.
+            val rendered = remember(candidate) { candidate }
+            messageContent(rendered)
+        }
         is TimelineListItem.AssistantWorkGroup ->
             AssistantWorkGroupRow(
                 group = item,
@@ -466,10 +428,11 @@ internal fun shouldShowAssistantTrailingActions(
         !isAssistantTurnActive &&
         !lastAssistantMessage.isStreaming
 
-private fun TimelineListItem.MessageChunk.toRenderMessage(): CodexMessage =
+internal fun TimelineListItem.MessageChunk.toRenderMessage(): CodexMessage =
     message.copy(
         id = stableKey,
         text = chunkText,
+        structuredUserInputRequest = message.structuredUserInputRequest.takeIf { isLastChunk },
         isStreaming = message.isStreaming && isLastChunk,
         attachments =
             if (isFirstChunk) {
@@ -494,7 +457,6 @@ private fun AssistantWorkGroupRow(
 ) {
     var expanded by rememberSaveable(group.stableKey) { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
-    val detailItems = remember(group.messages) { group.messages.toActivityDetailTimelineListItems() }
     Column(modifier = modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
         Row(
             modifier =
@@ -518,6 +480,7 @@ private fun AssistantWorkGroupRow(
         }
         HorizontalDivider(color = colors.outline.copy(alpha = 0.14f))
         if (expanded) {
+            val detailItems = remember(group.messages) { group.messages.toActivityDetailTimelineListItems() }
             Column(
                 modifier =
                     Modifier
@@ -540,7 +503,7 @@ private fun AssistantWorkGroupRow(
 
 @Composable
 private fun TransientActivityStatusRow(
-    statusText: String,
+    statusText: String?,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -552,12 +515,13 @@ private fun TransientActivityStatusRow(
                     color = colors.surfaceVariant.copy(alpha = 0.16f),
                     shape = RoundedCornerShape(8.dp),
                 )
-                .padding(horizontal = 10.dp, vertical = 7.dp)
-                .shimmer(),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
+        TimelineActivityDots(color = colors.onSurfaceVariant)
+        if (statusText != null) Text(
             text = statusText,
+            modifier = Modifier.padding(start = 8.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.onSurfaceVariant.copy(alpha = 0.64f),
         )

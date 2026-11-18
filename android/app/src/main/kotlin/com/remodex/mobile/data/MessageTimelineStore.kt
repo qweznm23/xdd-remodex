@@ -44,11 +44,27 @@ internal class MessageTimelineStore(
     private val _messagesByThread = MutableStateFlow<Map<String, List<CodexMessage>>>(emptyMap())
     val messagesByThread: StateFlow<Map<String, List<CodexMessage>>> = _messagesByThread.asStateFlow()
 
+    private val _conversationQuestionsByThread = MutableStateFlow<Map<String, List<com.remodex.mobile.core.model.CodexStructuredUserInputRequest>>>(emptyMap())
+    val conversationQuestionsByThread = _conversationQuestionsByThread.asStateFlow()
+    private val _questionThreadIds = MutableStateFlow<Set<String>>(emptySet())
+    val questionThreadIds = _questionThreadIds.asStateFlow()
+    private fun hasOpenAsyncQuestion(messages: List<CodexMessage>) = messages.any {
+        it.structuredUserInputRequest?.isAnswerableAsync == true
+    }
+    private fun publishQuestionMessages(map: Map<String, List<CodexMessage>>, threadId: String) {
+        val questions = map[threadId].orEmpty().mapNotNull { it.structuredUserInputRequest }
+        _conversationQuestionsByThread.value = if (questions.isEmpty()) _conversationQuestionsByThread.value - threadId else _conversationQuestionsByThread.value + (threadId to questions)
+        _questionThreadIds.value = if (hasOpenAsyncQuestion(map[threadId].orEmpty())) _questionThreadIds.value + threadId else _questionThreadIds.value - threadId
+        publishMessages(map)
+    }
+
     init {
         val normalizedInitialMessages =
             initialMessages.mapValues { (_, messages) ->
                 HistoryMessageMerge.normalize(messages)
             }
+        _conversationQuestionsByThread.value = normalizedInitialMessages.mapValues { (_, rows) -> rows.mapNotNull { it.structuredUserInputRequest } }.filterValues { it.isNotEmpty() }
+        _questionThreadIds.value = normalizedInitialMessages.filterValues(::hasOpenAsyncQuestion).keys
         CodexMessageOrderCounter.seedFrom(normalizedInitialMessages)
         rebuildSubagentIdentityDirectory(normalizedInitialMessages.values.flatten())
         _messagesByThread.value = normalizedInitialMessages.mapValues { (_, messages) ->
@@ -83,12 +99,27 @@ internal class MessageTimelineStore(
                 messagesByThread.mapValues { (_, messages) ->
                     HistoryMessageMerge.normalize(messages)
                 }
+            _conversationQuestionsByThread.value = normalized.mapValues { (_, rows) -> rows.mapNotNull { it.structuredUserInputRequest } }.filterValues { it.isNotEmpty() }
+            _questionThreadIds.value = normalized.filterValues(::hasOpenAsyncQuestion).keys
             rebuildSubagentIdentityDirectory(normalized.values.flatten())
             publishMessages(
                 normalized.mapValues { (_, messages) ->
                     messages.map(::resolveSubagentMessageIdentities)
                 },
             )
+        }
+    }
+
+    suspend fun invalidateLiveQuestions() {
+        mutex.withLock {
+            if (_conversationQuestionsByThread.value.values.none { questions -> questions.any { it.isLive } }) return@withLock
+            val map = _messagesByThread.value.mapValues { (_, rows) -> rows.map { message ->
+                val request = message.structuredUserInputRequest
+                if (request?.isLive == true) message.copy(structuredUserInputRequest = request.copy(isLive = false)) else message
+            } }
+            _conversationQuestionsByThread.value = map.mapValues { (_, rows) -> rows.mapNotNull { it.structuredUserInputRequest } }.filterValues { it.isNotEmpty() }
+            _questionThreadIds.value = emptySet()
+            publishMessages(map)
         }
     }
 
@@ -99,16 +130,27 @@ internal class MessageTimelineStore(
     suspend fun mergeThreadHistory(
         threadId: String,
         incoming: List<CodexMessage>,
+        olderPageBeforeTurnId: String? = null,
+        isOlderPage: Boolean = false,
+        isItemPage: Boolean = false,
+        olderPageBeforeMessageId: String? = null,
+        requireCurrentRequest: () -> Unit = {},
     ) {
         if (incoming.isEmpty()) return
         mutex.withLock {
+            requireCurrentRequest()
             val map = _messagesByThread.value.toMutableMap()
             val existing = map[threadId].orEmpty()
             rebuildSubagentIdentityDirectory(existing + incoming)
             map[threadId] =
-                HistoryMessageMerge.merge(existing, incoming)
-                    .map(::resolveSubagentMessageIdentities)
-            publishMessages(map)
+                (if (isItemPage) {
+                    HistoryMessageMerge.mergeItemPage(existing, incoming, isOlderPage, olderPageBeforeMessageId)
+                } else if (isOlderPage) {
+                    HistoryMessageMerge.mergeOlderPage(existing, incoming, olderPageBeforeTurnId)
+                } else {
+                    HistoryMessageMerge.mergeRecentPage(existing, incoming)
+                }).map(::resolveSubagentMessageIdentities).let(ConversationQuestionCodec::reconcile)
+            publishQuestionMessages(map, threadId)
         }
     }
 
@@ -119,6 +161,8 @@ internal class MessageTimelineStore(
         mutex.withLock {
             val map = _messagesByThread.value.toMutableMap()
             if (map.remove(tid) == null) return@withLock
+            _questionThreadIds.value = _questionThreadIds.value - tid
+            _conversationQuestionsByThread.value = _conversationQuestionsByThread.value - tid
             publishMessages(map)
         }
     }
@@ -438,6 +482,7 @@ internal class MessageTimelineStore(
         explanation: String? = null,
         steps: List<CodexPlanStep>? = null,
         isStreaming: Boolean,
+        structuredUserInputRequest: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null,
     ) {
         mutex.withLock {
             val map = _messagesByThread.value.toMutableMap()
@@ -476,6 +521,7 @@ internal class MessageTimelineStore(
                         isStreaming = isStreaming,
                         turnId = turnId ?: current.turnId,
                         itemId = itemId ?: current.itemId,
+                        structuredUserInputRequest = structuredUserInputRequest ?: current.structuredUserInputRequest,
                         planState =
                             if (nextState.explanation != null || nextState.steps.isNotEmpty()) {
                                 nextState
@@ -499,6 +545,7 @@ internal class MessageTimelineStore(
                         createdAt = Instant.now(),
                         turnId = turnId,
                         itemId = itemId,
+                        structuredUserInputRequest = structuredUserInputRequest,
                         isStreaming = isStreaming,
                         planState =
                             if (nextState.explanation != null || nextState.steps.isNotEmpty()) {
@@ -511,7 +558,7 @@ internal class MessageTimelineStore(
             }
 
             map[threadId] = list
-            publishMessages(map)
+            if (structuredUserInputRequest != null) publishQuestionMessages(map, threadId) else publishMessages(map)
         }
     }
 
@@ -590,7 +637,7 @@ internal class MessageTimelineStore(
                 list.indexOfLast { m ->
                     m.role == CodexMessageRole.assistant &&
                         m.kind == CodexMessageKind.chat &&
-                        m.isStreaming &&
+                        (m.isStreaming || (resolvedItemId != null && m.itemId == resolvedItemId)) &&
                         matchesAssistantDeltaCandidate(
                             candidate = m,
                             turnId = resolvedTurnId,
@@ -607,11 +654,13 @@ internal class MessageTimelineStore(
                 }
             if (targetIdx >= 0) {
                 val m = list[targetIdx]
+                // A completion snapshot already includes all deltas, even if a delta arrives late.
+                if (m.isAssistantMessageComplete) return@withLock
                 list[targetIdx] =
                     m.copy(
                         text = m.text + delta,
                         assistantPhase = assistantPhase ?: m.assistantPhase,
-                        isStreaming = true,
+                        isStreaming = m.isStreaming,
                         turnId = resolvedTurnId ?: m.turnId,
                         itemId = resolvedItemId ?: m.itemId,
                     )
@@ -728,9 +777,10 @@ internal class MessageTimelineStore(
         text: String,
         attachments: List<CodexImageAttachment> = emptyList(),
         assistantPhase: String? = null,
+        structuredUserInputRequest: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null,
     ) {
         val finalText = text.trim()
-        if (finalText.isEmpty() && attachments.isEmpty()) return
+        if (finalText.isEmpty() && attachments.isEmpty() && structuredUserInputRequest == null) return
         mutex.withLock {
             val resolvedTurnId = turnId?.trim()?.takeIf { it.isNotEmpty() }
             val resolvedItemId = itemId?.trim()?.takeIf { it.isNotEmpty() }
@@ -740,8 +790,8 @@ internal class MessageTimelineStore(
             val map = _messagesByThread.value.toMutableMap()
             val list = map[threadId].orEmpty().toMutableList()
             if (absorbAssistantSubagentSummary(list, resolvedTurnId, finalText)) {
-                map[threadId] = list
-                publishMessages(map)
+                map[threadId] = if (structuredUserInputRequest != null) ConversationQuestionCodec.reconcile(list) else list
+                if (structuredUserInputRequest != null) publishQuestionMessages(map, threadId) else publishMessages(map)
                 return@withLock
             }
             val idx =
@@ -761,9 +811,11 @@ internal class MessageTimelineStore(
                         text = if (m.text.isEmpty()) finalText else mergeSnapshot(m.text, finalText),
                         assistantPhase = assistantPhase ?: m.assistantPhase,
                         isStreaming = false,
+                        isAssistantMessageComplete = true,
                         turnId = resolvedTurnId ?: m.turnId,
                         itemId = resolvedItemId ?: m.itemId,
                         attachments = if (attachments.isNotEmpty()) attachments else m.attachments,
+                        structuredUserInputRequest = structuredUserInputRequest?.let { ConversationQuestionCodec.mergeRequest(m.structuredUserInputRequest, it) } ?: m.structuredUserInputRequest,
                     )
             } else {
                 val duplicateIdx =
@@ -784,9 +836,17 @@ internal class MessageTimelineStore(
                             text = if (candidate.text.isEmpty()) finalText else mergeSnapshot(candidate.text, finalText),
                             assistantPhase = assistantPhase ?: candidate.assistantPhase,
                             isStreaming = false,
+                            isAssistantMessageComplete = true,
                             turnId = resolvedTurnId ?: candidate.turnId,
-                            itemId = resolvedItemId ?: candidate.itemId,
+                            // Rollout mirrors carry synthetic IDs. Keep an existing native ID so
+                            // its late deltas still resolve to this completed item.
+                            itemId = if (resolvedItemId?.startsWith("rollout-agent-message:") == true) {
+                                candidate.itemId ?: resolvedItemId
+                            } else {
+                                resolvedItemId ?: candidate.itemId
+                            },
                             attachments = if (attachments.isNotEmpty()) attachments else candidate.attachments,
+                            structuredUserInputRequest = structuredUserInputRequest?.let { ConversationQuestionCodec.mergeRequest(candidate.structuredUserInputRequest, it) } ?: candidate.structuredUserInputRequest,
                         )
                 } else {
                     list.add(
@@ -800,13 +860,15 @@ internal class MessageTimelineStore(
                             turnId = resolvedTurnId,
                             itemId = resolvedItemId,
                             isStreaming = false,
+                            isAssistantMessageComplete = true,
                             attachments = attachments,
+                            structuredUserInputRequest = structuredUserInputRequest,
                         ),
                     )
                 }
             }
-            map[threadId] = list
-            publishMessages(map)
+            map[threadId] = if (structuredUserInputRequest != null) ConversationQuestionCodec.reconcile(list) else list
+            if (structuredUserInputRequest != null) publishQuestionMessages(map, threadId) else publishMessages(map)
         }
     }
 
@@ -916,15 +978,15 @@ internal class MessageTimelineStore(
     }
 
     /**
-     * Item-scoped marker when the shell shows the structured input dialog (J.7b). Non-interactive;
-     * [messageId] matches [PendingStructuredInputRequest.id] so it can be removed after response.
-     * Uses [CodexMessageKind.userInputPrompt]; not persisted ([CodexMessagePersistence] filter).
+     * Question card scoped by turn/item identity. With a structured request it survives history
+     * restoration; only a matching live responder enables RPC answers after reconnect.
      */
     suspend fun appendStructuredInputPromptMarker(
         threadId: String,
         turnId: String?,
         messageId: String,
         bodyText: String,
+        request: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null,
     ) {
         val t = bodyText.trim()
         if (t.isEmpty()) return
@@ -932,13 +994,20 @@ internal class MessageTimelineStore(
             val map = _messagesByThread.value.toMutableMap()
             val list = map[threadId].orEmpty().toMutableList()
             val id = messageId.trim().ifEmpty { UUID.randomUUID().toString() }
-            if (list.any { it.id == id }) return@withLock
+            val existing = list.indexOfFirst { it.id == id }
+            if (existing >= 0) {
+                if (request != null) list[existing] = list[existing].copy(structuredUserInputRequest = request)
+                map[threadId] = list
+                if (request != null) publishQuestionMessages(map, threadId) else publishMessages(map)
+                return@withLock
+            }
             list.add(
                 CodexMessage(
                     id = id,
                     threadId = threadId,
                     role = CodexMessageRole.system,
                     kind = CodexMessageKind.userInputPrompt,
+                    structuredUserInputRequest = request,
                     text = t,
                     createdAt = Instant.now(),
                     turnId = turnId,
@@ -946,7 +1015,7 @@ internal class MessageTimelineStore(
                 ),
             )
             map[threadId] = list
-            publishMessages(map)
+            if (request != null) publishQuestionMessages(map, threadId) else publishMessages(map)
         }
     }
 
@@ -1024,8 +1093,8 @@ internal class MessageTimelineStore(
                         turnId = turnId ?: m.turnId,
                     )
             }
-            map[threadId] = list
-            publishMessages(map)
+            map[threadId] = ConversationQuestionCodec.reconcile(list)
+            publishQuestionMessages(map, threadId)
         }
     }
 
@@ -1035,12 +1104,14 @@ internal class MessageTimelineStore(
         text: String,
         attachments: List<CodexImageAttachment> = emptyList(),
         createdAt: Instant? = null,
+        requireCurrentRequest: () -> Unit = {},
     ) {
         val t = text.trim()
         val normalizedText = normalizedMessageText(t)
         if (t.isEmpty() && attachments.isEmpty()) return
         val messageCreatedAt = createdAt ?: Instant.now()
         mutex.withLock {
+            requireCurrentRequest()
             val map = _messagesByThread.value.toMutableMap()
             val list = map[threadId].orEmpty().toMutableList()
             val existingIdx =
@@ -1090,8 +1161,21 @@ internal class MessageTimelineStore(
                     reassignOrderIndexesInCurrentOrder(list)
                 }
             }
-            map[threadId] = list
-            publishMessages(map)
+            map[threadId] = ConversationQuestionCodec.reconcile(list)
+            publishQuestionMessages(map, threadId)
+        }
+    }
+
+    suspend fun recordStructuredInputAnswer(threadId: String, requestId: String, answers: Map<String, List<String>>, expectedRequest: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null, requireCurrentRequest: () -> Unit = {}) {
+        mutex.withLock {
+            requireCurrentRequest()
+            val map = _messagesByThread.value.toMutableMap()
+            map[threadId] = map[threadId].orEmpty().map { message ->
+                val request = message.structuredUserInputRequest
+                if (request?.requestID?.stringValue != requestId || expectedRequest != null && (request.identity != expectedRequest.identity || request.questions != expectedRequest.questions)) message
+                else message.copy(structuredUserInputRequest = request.copy(answers = answers, submitted = true))
+            }
+            publishQuestionMessages(map, threadId)
         }
     }
 

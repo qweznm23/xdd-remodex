@@ -20,6 +20,7 @@ data class CodexThread(
     val preview: String? = null,
     val createdAt: Instant? = null,
     val updatedAt: Instant? = null,
+    val recencyAt: Instant? = null,
     val cwd: String? = null,
     val metadata: Map<String, JSONValue>? = null,
     val forkedFromThreadId: String? = null,
@@ -29,8 +30,11 @@ data class CodexThread(
     val agentRole: String? = null,
     val model: String? = null,
     val modelProvider: String? = null,
+    val reasoningEffort: String? = null,
     val collaborationMode: CodexCollaborationModeKind = CodexCollaborationModeKind.default,
     val syncState: CodexThreadSyncState = CodexThreadSyncState.live,
+    val runtimeStatus: ThreadRuntimeStatus? = null,
+    val waitingOnUserInput: Boolean = false,
 ) {
     companion object {
         /** User-visible fallback when there is no name, title, or preview (parity [CodexThread.swift] `defaultDisplayTitle`). */
@@ -138,6 +142,7 @@ data class CodexThread(
                 preview = preview,
                 createdAt = createdAt,
                 updatedAt = updatedAt,
+                recencyAt = obj.decodeDate("recencyAt", "recency_at"),
                 cwd = normalizeProjectPath(cwd),
                 metadata = metadata,
                 forkedFromThreadId = normalizeIdentifier(forked),
@@ -147,8 +152,11 @@ data class CodexThread(
                 agentRole = normalizeIdentifier(agentRoleVal),
                 model = normalizeIdentifier(modelVal),
                 modelProvider = normalizeIdentifier(modelProv),
+                reasoningEffort = decodeThreadIdentity(obj, metadata, listOf("reasoningEffort", "reasoning_effort", "effort")),
                 collaborationMode = collaborationMode,
                 syncState = sync,
+                runtimeStatus = ThreadRuntimeStatus.decode(obj["status"]?.let(JSONValue::fromJsonElement)),
+                waitingOnUserInput = obj["status"]?.let(JSONValue::fromJsonElement)?.objectValue?.get("activeFlags")?.arrayValue?.any { it.stringValue == "waitingOnUserInput" } == true,
             )
         }
 
@@ -328,6 +336,7 @@ data class CodexThread(
             agentRole = agentRole ?: existing.agentRole,
             model = model ?: existing.model,
             modelProvider = modelProvider ?: existing.modelProvider,
+            reasoningEffort = reasoningEffort ?: existing.reasoningEffort,
             collaborationMode =
                 if (collaborationMode == CodexCollaborationModeKind.default) {
                     existing.collaborationMode

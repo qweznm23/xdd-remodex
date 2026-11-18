@@ -1,0 +1,9 @@
+<resources>
+    <string name="history_loading">正在加载会话…</string>
+    <string name="history_preparing">正在显示消息…</string>
+    <string name="history_waiting_connection">等待连接，连接后加载历史</string>
+    <string name="history_load_failed">会话加载失败</string>
+    <string name="history_retry">重试</string>
+    <string name="history_error_details">错误详情</string>
+    <string name="history_close">关闭</string>
+</resources>

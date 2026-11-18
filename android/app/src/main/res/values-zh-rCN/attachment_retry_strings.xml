@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="attachment_retry_upload">重新上传</string>
+    <string name="message_retry_send">重试发送</string>
+    <string name="image_preview_gestures">双指缩放 · 放大后拖动 · 双击缩放</string>
+    <string name="image_preview_reset">%1$d%% · 还原</string>
+</resources>

@@ -82,6 +82,7 @@ internal object TurnDirectiveRenderCache {
 }
 
 internal fun clearTimelineRenderCaches() {
+    timelineMarkdownCache.clear()
     TurnMarkdownRenderCache.clear()
     TurnDirectiveRenderCache.clear()
     com.remodex.mobile.data.TurnTimelineRichContentCache.clear()

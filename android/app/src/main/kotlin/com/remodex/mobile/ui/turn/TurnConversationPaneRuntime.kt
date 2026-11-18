@@ -52,10 +52,12 @@ internal fun buildRuntimeControlsState(
     normalTierLabel: String,
     reasoningEffortTitles: ReasoningEffortTitleStrings,
 ): TurnComposerRuntimeControlsState {
-    val selectedModel =
-        selectedModelId?.let { id -> models.firstOrNull { it.id == id || it.model == id } }
-            ?: models.firstOrNull { it.isDefault }
-            ?: models.firstOrNull()
+    val selectedId = selectedModelId?.trim()?.takeIf { it.isNotEmpty() }
+    val selectedModel = if (selectedId != null) {
+        models.firstOrNull { it.id == selectedId || it.model == selectedId }
+    } else {
+        models.firstOrNull { it.isDefault } ?: models.firstOrNull()
+    }
     val modelOptions =
         models.map {
             TurnComposerRuntimeOption(
@@ -73,7 +75,8 @@ internal fun buildRuntimeControlsState(
                         label = it.displayName.ifBlank { it.model.ifBlank { it.id } },
                         detail = it.description.takeIf { desc -> desc.isNotBlank() },
                     )
-                } ?: TurnComposerRuntimeOption(
+                } ?: selectedId?.let { TurnComposerRuntimeOption(id = it, label = it) }
+                ?: TurnComposerRuntimeOption(
                     id = TURN_COMPOSER_RUNTIME_AUTO_ID,
                     label = if (isLoadingModels) loadingLabel else modelFallbackLabel,
                     enabled = false,
@@ -100,6 +103,9 @@ internal fun buildRuntimeControlsState(
         TurnComposerRuntimeSelectorState(
             selected =
                 reasoningOptions.firstOrNull { it.id == effectiveReasoning }
+                    ?: selectedReasoningEffort?.let {
+                        TurnComposerRuntimeOption(it, reasoningEffortMenuLabel(it, reasoningEffortTitles, "").first)
+                    }
                     ?: TurnComposerRuntimeOption(TURN_COMPOSER_RUNTIME_AUTO_ID, autoLabel, enabled = false),
             options =
                 listOf(TurnComposerRuntimeOption(TURN_COMPOSER_RUNTIME_AUTO_ID, autoLabel)) + reasoningOptions,

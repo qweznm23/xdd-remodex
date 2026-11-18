@@ -123,17 +123,28 @@ internal fun CodexService.applyResolvedTrustedSession(
         CodexTrustedMacRegistry(registry.records + (resolved.macDeviceId to updated)),
     )
     sessionPersistence.saveRelaySnapshot(
-        sessionPersistence.loadRelaySnapshot().copy(
-            relaySessionId = resolved.sessionId,
-            relayUrl = relayURL,
-            relayMacDeviceId = resolved.macDeviceId,
-            relayMacIdentityPublicKey = resolved.macIdentityPublicKey,
-            lastTrustedMacDeviceId = resolved.macDeviceId,
-        ),
+        resolvedTrustedRelaySnapshot(sessionPersistence.loadRelaySnapshot(), resolved, relayURL),
     )
     _relayMacDeviceId.value = resolved.macDeviceId
     refreshTrustedDevices()
 }
+
+internal fun resolvedTrustedRelaySnapshot(
+    previous: RelaySessionSnapshot,
+    resolved: CodexTrustedSessionResolveResponse,
+    relayURL: String,
+): RelaySessionSnapshot = previous.copy(
+    relaySessionId = resolved.sessionId,
+    relayUrl = relayURL,
+    relayMacDeviceId = resolved.macDeviceId,
+    relayMacIdentityPublicKey = resolved.macIdentityPublicKey,
+    lastTrustedMacDeviceId = resolved.macDeviceId,
+    // Sequence numbers belong to one bridge run. An old cursor would discard new replies.
+    relayLastAppliedBridgeOutboundSeq =
+        if (previous.relaySessionId == resolved.sessionId && previous.relayMacDeviceId == resolved.macDeviceId) {
+            previous.relayLastAppliedBridgeOutboundSeq
+        } else "0",
+)
 
 internal fun CodexService.clearSavedRelaySession() {
     sessionPersistence.clearRelaySession()

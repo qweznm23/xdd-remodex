@@ -269,13 +269,13 @@ private fun SubagentAgentDetails(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         agent.prompt?.let {
-            SubagentDetailLine(label = "Prompt", value = it, colors = colors)
+            SubagentDetailLine(label = stringResource(R.string.agent_detail_prompt), value = it, colors = colors)
         }
         agent.message?.let {
-            SubagentDetailLine(label = "Latest", value = it, colors = colors)
+            SubagentDetailLine(label = stringResource(R.string.agent_detail_latest), value = it, colors = colors)
         }
-        SubagentDetailLine(label = "Status", value = statusText, colors = colors)
-        SubagentDetailLine(label = "Thread", value = agent.threadId, colors = colors)
+        SubagentDetailLine(label = stringResource(R.string.turn_command_sheet_label_status), value = statusText, colors = colors)
+        SubagentDetailLine(label = stringResource(R.string.agent_detail_thread), value = agent.threadId, colors = colors)
     }
 }
 

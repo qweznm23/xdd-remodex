@@ -133,6 +133,7 @@ fun SidebarDrawerContent(
         ) {
             SidebarScreen(
                 repository = repository,
+                dotAnimationsEnabled = drawerState.isOpen && !drawerState.isAnimationRunning,
                 activeChatMetadata = activeChatMetadata,
                 onOpenArchivedChats = {
                     drawerScope.launch {
@@ -178,7 +179,10 @@ fun SidebarDrawerContent(
                         )
                     }
                 },
-                onThreadSelected = closeDrawer,
+                onThreadSelected = {
+                    closeDrawer()
+                    navController.popBackStack(AppRoutes.Home, inclusive = false)
+                },
                 modifier =
                     Modifier
                         .weight(1f)

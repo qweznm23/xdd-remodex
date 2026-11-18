@@ -8,9 +8,13 @@ import java.time.Instant
  * Parity with [SidebarThreadGrouping.swift](../../../../../../../../CodexMobile/CodexMobile/Views/Sidebar/SidebarThreadGrouping.swift).
  */
 enum class SidebarThreadGroupKind {
+    Pinned,
+    Recent,
     Project,
     Chats,
-    Archived,
+    Archived;
+
+    val canCollapse: Boolean get() = this == Pinned || this == Recent || this == Project
 }
 
 data class SidebarThreadGroup(
@@ -28,10 +32,29 @@ data class SidebarThreadGroup(
 object SidebarThreadGrouping {
     private const val CHATS_GROUP_ID = "__chats__"
 
-    fun makeGroups(threads: List<CodexThread>): List<SidebarThreadGroup> {
+    fun makeGroups(
+        threads: List<CodexThread>,
+        pinnedThreadIds: List<String> = emptyList(),
+        recentThreadIds: List<String> = emptyList(),
+        includeEmptyShortcuts: Boolean = false,
+    ): List<SidebarThreadGroup> {
+        val byId = threads.filter { it.syncState == CodexThreadSyncState.live }.associateBy { it.id }
+        val pinned = pinnedThreadIds.distinct().mapNotNull { byId[it] }
+        val pinnedIds = pinned.mapTo(hashSetOf()) { it.id }
+        val remaining = threads.filterNot { it.id in pinnedIds }
+        val pinnedGroup = pinned.takeIf { it.isNotEmpty() || includeEmptyShortcuts }?.let {
+            SidebarThreadGroup(id = "__pinned__", label = "Pinned", kind = SidebarThreadGroupKind.Pinned,
+                sortDate = Instant.EPOCH, projectPath = null, threads = it)
+        }
+        // Recent is a shortcut list: visiting a chat must not remove or reorder its project section.
+        val recent = recentThreadIds.distinct().filterNot { it in pinnedIds }.mapNotNull { byId[it] }.take(30)
+        val recentGroup = recent.takeIf { it.isNotEmpty() || includeEmptyShortcuts }?.let {
+            SidebarThreadGroup(id = "__recent__", label = "Recently used", kind = SidebarThreadGroupKind.Recent,
+                sortDate = Instant.EPOCH, projectPath = null, threads = it)
+        }
         val archivedThreads = threads.filter { it.syncState == CodexThreadSyncState.archivedLocal }
-        val projectGroups = makeProjectGroups(threads = threads)
-        val chatsGroup = makeChatsGroup(threads = threads)
+        val projectGroups = makeProjectGroups(threads = remaining)
+        val chatsGroup = makeChatsGroup(threads = remaining)
         val sortedArchived = sortThreadsByRecentActivity(archivedThreads)
         val archivedGroup =
             sortedArchived.firstOrNull()?.let { first ->
@@ -44,7 +67,7 @@ object SidebarThreadGrouping {
                     threads = sortedArchived,
                 )
             }
-        return projectGroups + listOfNotNull(chatsGroup, archivedGroup)
+        return listOfNotNull(pinnedGroup, recentGroup) + projectGroups + listOfNotNull(chatsGroup, archivedGroup)
     }
 
     fun applyGroupLimit(
@@ -124,11 +147,9 @@ object SidebarThreadGrouping {
         return liveByProject
             .map { (key, list) -> makeProjectGroup(key, list) }
             .sortedWith { lhs, rhs ->
-                when {
-                    lhs.sortDate != rhs.sortDate -> rhs.sortDate.compareTo(lhs.sortDate)
-                    lhs.label != rhs.label -> lhs.label.compareTo(rhs.label, ignoreCase = true)
-                    else -> lhs.id.compareTo(rhs.id)
-                }
+                // Conversation activity may reorder children, never their project sections.
+                val byName = lhs.label.compareTo(rhs.label, ignoreCase = true)
+                if (byName != 0) byName else lhs.id.compareTo(rhs.id)
             }
     }
 

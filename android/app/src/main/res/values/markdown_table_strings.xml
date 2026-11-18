@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="markdown_table_scroll_hint">Swipe horizontally to view the table</string>
+</resources>

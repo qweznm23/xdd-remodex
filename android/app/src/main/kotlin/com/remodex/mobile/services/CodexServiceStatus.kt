@@ -6,6 +6,7 @@ import com.remodex.mobile.core.model.JSONValue
 import com.remodex.mobile.core.model.RPCMessage
 import com.remodex.mobile.core.model.UsageStatusRefreshPolicy
 import com.remodex.mobile.core.transport.ConnectionState
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -39,9 +40,16 @@ internal fun CodexService.applyRateLimitsPayload(
 
 internal fun CodexService.handleRateLimitsUpdatedParams(params: Map<String, JSONValue>?) {
     if (params == null) return
-    applyRateLimitsPayload(params, mergeWithExisting = true)
-    _hasResolvedRateLimitsSnapshot.value = true
-    _rateLimitsErrorMessage.value = null
+    synchronized(rateLimitRefreshGuard) {
+        try {
+            applyRateLimitsPayload(params, mergeWithExisting = true)
+            rateLimitRefreshGuard.pushed()
+            _hasResolvedRateLimitsSnapshot.value = true
+            // Rolling quota updates do not prove that the last full read (including cards) succeeded.
+        } catch (failure: Exception) {
+            android.util.Log.e("RemodexUsage", "operation=account/rateLimits/updated stage=decode attempt=1", failure)
+        }
+    }
 }
 
 internal suspend fun CodexService.refreshRateLimitsForRepository() =
@@ -51,11 +59,11 @@ internal suspend fun CodexService.refreshRateLimitsForRepository() =
 
 internal suspend fun CodexService.refreshUsageStatusForRepository(threadId: String?) =
     withContext(Dispatchers.IO) {
+        refreshRateLimitsInternal()
         val tid = threadId?.trim().orEmpty()
         if (tid.isNotEmpty()) {
             refreshContextWindowUsageInternal(tid)
         }
-        refreshRateLimitsInternal()
     }
 
 internal fun CodexService.shouldAutoRefreshUsageStatusForRepository(threadId: String?): Boolean =
@@ -68,40 +76,64 @@ internal fun CodexService.shouldAutoRefreshUsageStatusForRepository(threadId: St
     )
 
 internal suspend fun CodexService.refreshRateLimitsInternal() {
-    if (!sessionReady) {
-        return
+    val ticket = synchronized(rateLimitRefreshGuard) {
+        if (!sessionReady) return
+        val request = rateLimitRefreshGuard.begin(connectionGeneration) ?: return
+        _isLoadingRateLimits.value = true
+        request
     }
-    _isLoadingRateLimits.value = true
+    var stage = "request"
+    var attempts = 0
     try {
-        val response = fetchRateLimitsWithCompatRetry()
-        val resultObject = response.result?.objectValue
-        if (resultObject == null) {
-            throw CodexServiceError.InvalidResponse("account/rateLimits/read response missing payload")
+        val response = fetchRateLimitsWithCompatRetry { params ->
+            attempts++
+            sendRequestImpl("account/rateLimits/read", params)
         }
-        applyRateLimitsPayload(resultObject, mergeWithExisting = false)
-        _hasResolvedRateLimitsSnapshot.value = true
-        _rateLimitsErrorMessage.value = null
-    } catch (e: Exception) {
-        _hasResolvedRateLimitsSnapshot.value = false
-        _rateLimitBuckets.value = emptyList()
-        val message = e.message?.trim().orEmpty()
-        _rateLimitsErrorMessage.value =
-            if (message.isEmpty()) {
-                appContext.getString(R.string.usage_rate_limits_load_failed)
-            } else {
-                message
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        stage = "decode"
+        val resultObject = response.result?.objectValue
+            ?: throw CodexServiceError.InvalidResponse("account/rateLimits/read response missing payload")
+        // Decode all parts before publishing any part; malformed cards must not create a false success time.
+        val details = AccountUsageDetailsCodec.decode(resultObject)
+        val buckets = RateLimitPayloadCodec.decodeRateLimitBuckets(resultObject)
+        synchronized(rateLimitRefreshGuard) {
+            if (!sessionReady || !rateLimitRefreshGuard.isCurrent(ticket, connectionGeneration)) return
+            if (!rateLimitRefreshGuard.hasNewerPush(ticket)) _rateLimitBuckets.value = buckets.sortedBy { it.sortDurationMins }
+            _accountUsageDetails.value = details.copy(lastSuccessfulReadAt = java.time.Instant.now())
+            _hasResolvedRateLimitsSnapshot.value = true
+            _rateLimitsErrorMessage.value = null
+        }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        val code = (failure as? CodexServiceError.RpcFailure)?.rpcError?.code
+        android.util.Log.e("RemodexUsage", "operation=account/rateLimits/read stage=$stage attempts=$attempts rpcCode=$code", failure)
+        synchronized(rateLimitRefreshGuard) {
+            if (sessionReady && rateLimitRefreshGuard.isCurrent(ticket, connectionGeneration)) {
+                // Keep the previous successful data/time, explicitly accompanied by the refresh failure.
+                _rateLimitsErrorMessage.value = failure.message?.takeIf { it.isNotBlank() }
+                    ?: appContext.getString(R.string.usage_rate_limits_load_failed)
             }
+        }
     } finally {
-        _isLoadingRateLimits.value = false
+        synchronized(rateLimitRefreshGuard) {
+            if (rateLimitRefreshGuard.isCurrent(ticket, connectionGeneration)) _isLoadingRateLimits.value = false
+            rateLimitRefreshGuard.finish(ticket)
+        }
     }
 }
 
-private suspend fun CodexService.fetchRateLimitsWithCompatRetry(): RPCMessage {
+internal suspend fun fetchRateLimitsWithCompatRetry(request: suspend (JSONValue) -> RPCMessage): RPCMessage {
     return try {
-        sendRequestImpl("account/rateLimits/read", JSONValue.Null)
-    } catch (e: Exception) {
-        if (!shouldRetryRateLimitsWithEmptyParams(e)) throw e
-        sendRequestImpl("account/rateLimits/read", JSONValue.Obj(emptyMap()))
+        request(JSONValue.Obj(mapOf("excludeResetCreditDetails" to JSONValue.Bool(false))))
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (first: Exception) {
+        if (!shouldRetryRateLimitsWithEmptyParams(first)) throw first
+        try { request(JSONValue.Obj(emptyMap())) }
+        catch (failure: Exception) {
+            if (failure !== first) failure.addSuppressed(first)
+            throw failure
+        }
     }
 }
 

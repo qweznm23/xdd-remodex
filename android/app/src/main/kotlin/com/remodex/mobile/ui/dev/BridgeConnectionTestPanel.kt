@@ -1,9 +1,5 @@
 ﻿package com.remodex.mobile.ui.dev
 
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,10 +20,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remodex.mobile.AppContainer
 import com.remodex.mobile.core.model.RPCMessage
@@ -69,21 +63,6 @@ fun BridgeConnectionTestPanel(
     var showQrScanner by remember { mutableStateOf(false) }
     var rpcMethod by remember { mutableStateOf("") }
     var rpcParamsJson by remember { mutableStateOf("{}") }
-
-    val context = LocalContext.current
-    fun hasCameraPermission(): Boolean =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-            PackageManager.PERMISSION_GRANTED
-
-    val cameraPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                showQrScanner = true
-                log = "Camera permission granted."
-            } else {
-                log = "Camera permission denied. Enable it in Settings â†’ Apps â†’ Remodex â†’ Permissions."
-            }
-        }
 
     val json =
         remember {
@@ -172,24 +151,8 @@ fun BridgeConnectionTestPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(
-                text =
-                    if (hasCameraPermission()) {
-                        "Camera: allowed â€” you can scan the bridge pairing QR."
-                    } else {
-                        "Camera: not granted â€” tap â€œScan pairing QRâ€ to allow the camera."
-                    },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             Button(
-                onClick = {
-                    if (hasCameraPermission()) {
-                        showQrScanner = true
-                    } else {
-                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                    }
-                },
+                onClick = { showQrScanner = true },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Scan pairing QR")
@@ -430,7 +393,7 @@ fun BridgeConnectionTestPanel(
         }
     }
 
-    if (showQrScanner && hasCameraPermission()) {
+    if (showQrScanner) {
         Dialog(onDismissRequest = { showQrScanner = false }) {
             Card(
                 modifier = Modifier.fillMaxWidth(),

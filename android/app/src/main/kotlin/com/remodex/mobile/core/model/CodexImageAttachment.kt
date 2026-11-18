@@ -9,4 +9,5 @@ data class CodexImageAttachment(
     val thumbnailBase64JPEG: String,
     val payloadDataURL: String? = null,
     val sourceURL: String? = null,
+    val mimeType: String? = null,
 )

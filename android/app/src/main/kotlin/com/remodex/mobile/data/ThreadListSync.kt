@@ -2,6 +2,8 @@ package com.remodex.mobile.data
 
 import com.remodex.mobile.core.model.CodexThread
 import com.remodex.mobile.core.model.CodexThreadSyncState
+import com.remodex.mobile.core.model.CodexSidebarState
+import com.remodex.mobile.core.model.CodexThreadReadState
 import com.remodex.mobile.core.model.JSONValue
 import java.time.Instant
 import kotlinx.serialization.json.JsonObject
@@ -23,37 +25,65 @@ internal object ThreadListSync {
             "unknown",
         )
 
+    data class Snapshot(val threads: List<CodexThread>, val sidebar: CodexSidebarState)
+    // Codex's built-in section has a stable identity even when its visible name changes.
+    const val PINNED_SECTION_ID = "01984de2-8f74-7c91-a3b2-5c5e937cf318"
+
     suspend fun fetchMerged(repository: CodexRepository): List<CodexThread> {
-        val active = fetchPages(repository, archived = false)
-        val archived =
-            runCatching { fetchPages(repository, archived = true) }.getOrDefault(emptyList())
-        return sortThreads(mergeActiveAndArchived(active, archived))
+        val receipts = mutableMapOf<String, CodexThreadReadState>()
+        return sortThreads(mergeActiveAndArchived(fetchPages(repository, false, receipts), fetchPages(repository, true, receipts)))
     }
 
-    private suspend fun fetchPages(
-        repository: CodexRepository,
-        archived: Boolean,
+    suspend fun fetchSnapshot(repository: CodexRepository): Snapshot {
+        val receipts = mutableMapOf<String, CodexThreadReadState>()
+        val active = fetchPages(repository, false, receipts)
+        val archived = fetchPages(repository, true, receipts)
+        var sectionCursor: JSONValue? = null
+        val seen = mutableSetOf<JSONValue>()
+        var pinnedSection: String? = null
+        do {
+            val row = repository.sendRequest("threadSection/list", JSONValue.Obj(mapOf(
+                "limit" to JSONValue.NumLong(100), "cursor" to (sectionCursor ?: JSONValue.Null),
+            ))).result?.objectValue ?: error("threadSection/list missing result")
+            val sections = row["data"]?.arrayValue ?: error("threadSection/list missing data")
+            if (sections.any { it.objectValue?.get("id")?.stringValue == PINNED_SECTION_ID }) pinnedSection = PINNED_SECTION_ID
+            sectionCursor = row["nextCursor"]?.takeUnless { it == JSONValue.Null }
+            if (sectionCursor != null) check(seen.add(sectionCursor!!)) { "threadSection/list repeated cursor" }
+        } while (sectionCursor != null)
+        val pinned = if (pinnedSection == null) emptyList() else fetchPages(repository, false, receipts, pinnedSection)
+        val threads = sortThreads(mergeActiveAndArchived((active + pinned).distinctBy { it.id }, archived))
+        return Snapshot(threads, CodexSidebarState(
+            initialized = true, threads = receipts,
+            recentThreadIds = active.filter { it.recencyAt != null }.sortedByDescending { it.recencyAt }.map { it.id }.take(30),
+            pinnedThreadIds = pinned.map { it.id }, pinnedSectionId = pinnedSection,
+        ))
+    }
+
+    private suspend fun fetchPages(repository: CodexRepository, archived: Boolean,
+        receipts: MutableMap<String, CodexThreadReadState>, section: String? = null,
     ): List<CodexThread> {
         val out = ArrayList<CodexThread>()
-        var cursor: JSONValue? = JSONValue.Null
-        var guard = 0
+        var cursor: JSONValue? = null
+        val seen = mutableSetOf<JSONValue>()
         do {
-            val fields =
-                mutableMapOf(
-                    "sourceKinds" to JSONValue.Arr(SOURCE_KINDS.map { JSONValue.Str(it) }),
-                    "cursor" to (cursor ?: JSONValue.Null),
-                    "limit" to JSONValue.NumLong(PAGE_LIMIT.toLong()),
-                )
-            if (archived) {
-                fields["archived"] = JSONValue.Bool(true)
-            }
-            val response = repository.sendRequest("thread/list", JSONValue.Obj(fields))
-            val result = response.result ?: throw IllegalStateException("thread/list missing result")
+            val fields = mutableMapOf(
+                "sourceKinds" to JSONValue.Arr(SOURCE_KINDS.map { JSONValue.Str(it) }),
+                "useStateDbOnly" to JSONValue.Bool(true),
+                "cursor" to (cursor ?: JSONValue.Null), "limit" to JSONValue.NumLong(PAGE_LIMIT.toLong()),
+                "sortKey" to JSONValue.Str(if (section == null) "recency_at" else "section_position"),
+                "sortDirection" to JSONValue.Str(if (section == null) "desc" else "asc"),
+            )
+            if (archived) fields["archived"] = JSONValue.Bool(true)
+            if (section != null) fields["sectionId"] = JSONValue.Str(section)
+            val result = repository.sendRequest("thread/list", JSONValue.Obj(fields)).result ?: error("thread/list missing result")
             val (threads, next) = parseThreadListPage(result)
+            result.objectValue?.get("readStates")?.objectValue?.forEach { (id, value) ->
+                CodexThreadReadState.decode(value)?.let { receipts[id] = it }
+            }
             out += threads
-            cursor = next.takeIf { it != JSONValue.Null }
-            guard++
-        } while (cursor != null && guard < 25)
+            cursor = next.takeUnless { it == JSONValue.Null }
+            if (cursor != null) check(seen.add(cursor!!)) { "thread/list repeated cursor" }
+        } while (cursor != null)
         return out
     }
 
@@ -92,21 +122,28 @@ internal object ThreadListSync {
     ): List<CodexThread> {
         val byId = LinkedHashMap<String, CodexThread>()
         for (t in active) {
-            byId[t.id] = t.copy(syncState = CodexThreadSyncState.live)
+            val existing = byId[t.id]
+            if (existing == null || activityDate(t) > activityDate(existing)) {
+                byId[t.id] = t.copy(syncState = CodexThreadSyncState.live)
+            }
         }
+        val activeIds = byId.keys.toSet()
         for (t in archived) {
-            if (!byId.containsKey(t.id)) {
+            val existing = byId[t.id]
+            if (t.id !in activeIds && (existing == null || activityDate(t) > activityDate(existing))) {
                 byId[t.id] = t.copy(syncState = CodexThreadSyncState.archivedLocal)
             }
         }
         return byId.values.toList()
     }
 
+    private fun activityDate(thread: CodexThread): Instant = thread.updatedAt ?: thread.createdAt ?: Instant.EPOCH
+
     private fun sortThreads(value: List<CodexThread>): List<CodexThread> {
         val past = Instant.EPOCH
         return value.sortedWith { lhs, rhs ->
-            val l = lhs.updatedAt ?: lhs.createdAt ?: past
-            val r = rhs.updatedAt ?: rhs.createdAt ?: past
+            val l = lhs.recencyAt ?: lhs.updatedAt ?: lhs.createdAt ?: past
+            val r = rhs.recencyAt ?: rhs.updatedAt ?: rhs.createdAt ?: past
             r.compareTo(l)
         }
     }

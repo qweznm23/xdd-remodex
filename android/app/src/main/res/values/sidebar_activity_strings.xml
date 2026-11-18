@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sidebar_unread">Unread updates</string>
+    <string name="sidebar_unread_badge">Unread</string>
+    <string name="sidebar_recent_group">Recently used</string>
+    <string name="sidebar_pinned_empty">Long press a conversation to pin it here</string>
+    <string name="sidebar_recent_empty">Recent conversations from Codex appear here</string>
+    <string name="sidebar_activity_failed">Could not save or load read status and recent chats: %1$s</string>
+</resources>

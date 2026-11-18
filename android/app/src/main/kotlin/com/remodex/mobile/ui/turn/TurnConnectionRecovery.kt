@@ -16,6 +16,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.remodex.mobile.R
 import com.remodex.mobile.core.transport.ConnectionState
 import com.remodex.mobile.ui.home.RootReconnectAttempt
 import com.remodex.mobile.ui.home.RootReconnectRecoveryAction
@@ -35,6 +37,7 @@ internal data class TurnConnectionRecoverySnapshot(
     val summary: String,
     val status: TurnConnectionRecoveryStatus,
     val trailing: TurnConnectionRecoveryTrailing,
+    val summaryResId: Int? = null,
 ) {
     val isActionable: Boolean get() = trailing is TurnConnectionRecoveryTrailing.Action
 }
@@ -51,6 +54,7 @@ internal object TurnConnectionRecoverySnapshotBuilder {
         if (reconnectUiState.attempt == RootReconnectAttempt.WakeDisplay) {
             return TurnConnectionRecoverySnapshot(
                 summary = trimmedError ?: "Trying to wake the computer display.",
+                summaryResId = if (trimmedError == null) R.string.connection_waking_hint else null,
                 status = TurnConnectionRecoveryStatus.Reconnecting,
                 trailing = TurnConnectionRecoveryTrailing.Progress,
             )
@@ -59,6 +63,7 @@ internal object TurnConnectionRecoverySnapshotBuilder {
         if (connectionState is ConnectionState.Connecting || reconnectUiState.isAttempting) {
             return TurnConnectionRecoverySnapshot(
                 summary = "Trying to reconnect to your computer.",
+                summaryResId = R.string.connection_reconnecting_hint,
                 status = TurnConnectionRecoveryStatus.Reconnecting,
                 trailing = TurnConnectionRecoveryTrailing.Progress,
             )
@@ -67,6 +72,7 @@ internal object TurnConnectionRecoverySnapshotBuilder {
         if (reconnectUiState.recoveryAction == RootReconnectRecoveryAction.ScanNewQr) {
             return TurnConnectionRecoverySnapshot(
                 summary = trimmedError ?: "Scan a new QR code to reconnect this chat.",
+                summaryResId = if (trimmedError == null) R.string.connection_scan_hint else null,
                 status = TurnConnectionRecoveryStatus.Interrupted,
                 trailing = TurnConnectionRecoveryTrailing.Action("Scan QR"),
             )
@@ -75,6 +81,7 @@ internal object TurnConnectionRecoverySnapshotBuilder {
         if (reconnectUiState.wakeDisplayAvailable) {
             return TurnConnectionRecoverySnapshot(
                 summary = trimmedError ?: "Wake the computer screen to keep this chat in sync.",
+                summaryResId = if (trimmedError == null) R.string.connection_wake_hint else null,
                 status = TurnConnectionRecoveryStatus.Interrupted,
                 trailing = TurnConnectionRecoveryTrailing.Action("Wake"),
             )
@@ -82,6 +89,7 @@ internal object TurnConnectionRecoverySnapshotBuilder {
 
         return TurnConnectionRecoverySnapshot(
             summary = trimmedError ?: "Reconnect to your computer to keep this chat in sync.",
+                summaryResId = if (trimmedError == null) R.string.connection_retry_hint else null,
             status = TurnConnectionRecoveryStatus.Interrupted,
             trailing = TurnConnectionRecoveryTrailing.Action("Reconnect"),
         )
@@ -115,12 +123,12 @@ internal fun TurnConnectionRecoveryCard(
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = "Connection - ${snapshot.status.label}",
+                    text = stringResource(if (snapshot.status == TurnConnectionRecoveryStatus.Reconnecting) R.string.connection_reconnecting else R.string.connection_interrupted),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = snapshot.summary,
+                    text = snapshot.summaryResId?.let { stringResource(it) } ?: snapshot.summary,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -129,7 +137,12 @@ internal fun TurnConnectionRecoveryCard(
             when (val trailing = snapshot.trailing) {
                 is TurnConnectionRecoveryTrailing.Action -> {
                     Text(
-                        text = trailing.label,
+                        text = when (trailing.label) {
+                            "Wake" -> stringResource(R.string.connection_wake_action)
+                            "Scan QR" -> stringResource(R.string.my_devices_scan_qr)
+                            "Reconnect" -> stringResource(R.string.nav_reconnect)
+                            else -> trailing.label
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )

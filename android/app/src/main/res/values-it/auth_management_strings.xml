@@ -1,0 +1,36 @@
+<resources>
+    <string name="auth_manage_section_title">File di autorizzazione</string>
+    <string name="auth_manage_title">Manutenzione autorizzazioni</string>
+    <string name="auth_manage_import">Importa / sostituisci</string>
+    <string name="auth_manage_file">Gestisci file di autorizzazione</string>
+    <string name="auth_manage_check">Controlla file e scadenza</string>
+    <string name="auth_manage_export">Esporta nella posizione scelta</string>
+    <string name="auth_manage_schedule">Ogni giorno alle 04:00, ora di Pechino · un tentativo automatico per account inattivo</string>
+    <string name="auth_manage_last_check">Ultimo controllo del server: %1$s</string>
+    <string name="auth_manage_last_run">Ultima manutenzione giornaliera: %1$s</string>
+    <string name="auth_manage_next_check">Prossimo controllo pianificato: %1$s</string>
+    <string name="auth_manage_stale">Questo controllo non è recente. Aggiorna la lista per conoscere lo stato attuale.</string>
+    <string name="auth_manage_active_note">Il server controlla le credenziali correnti ogni minuto e salva le versioni più recenti. Nei 15 minuti prima della scadenza può chiedere a Codex un rinnovo, al massimo una volta al giorno. Aprire questa pagina non forza il rinnovo.</string>
+    <string name="auth_manage_active_healthy">Il token di accesso corrente è nel periodo di validità dichiarato.</string>
+    <string name="auth_manage_active_refreshed">Credenziali correnti rinnovate e sincronizzate con gli archivi corrispondenti.</string>
+    <string name="auth_manage_active_conflict">Una versione salvata è più recente o non confrontabile. Entrambe sono state conservate.</string>
+    <string name="auth_manage_active_attempted">Rinnovo già tentato oggi; nessun altro tentativo automatico.</string>
+    <string name="auth_manage_active_failed">Manutenzione delle credenziali correnti non completata. Consulta i dettagli.</string>
+    <string name="auth_manage_active_unknown">Stato della manutenzione delle credenziali correnti non ancora confermato.</string>
+    <string name="auth_manage_current_file">File di autorizzazione corrente</string>
+    <string name="auth_manage_auto_failed">Rinnovo automatico non riuscito per %1$s · dettagli</string>
+    <string name="auth_manage_checked">Struttura del file verificata. Questo controllo non conferma la validità sul server.</string>
+    <string name="auth_manage_imported">Autorizzazione importata. Account corrente invariato.</string>
+    <string name="auth_manage_exported">Autorizzazione salvata nella posizione scelta.</string>
+    <string name="auth_manage_token_expired">La scadenza dichiarata del token di accesso è trascorsa. Il token di rinnovo potrebbe essere ancora utilizzabile.</string>
+    <string name="auth_manage_token_in_time">Il token di accesso è nel periodo di validità dichiarato.</string>
+    <string name="auth_manage_token_unknown">Scadenza del token di accesso sconosciuta.</string>
+    <string name="auth_manage_importing">Caricamento e importazione…</string>
+    <string name="auth_manage_exporting">Salvataggio autorizzazione…</string>
+    <string name="auth_manage_checking">Controllo file e scadenza…</string>
+    <string name="auth_manage_import_note">Scegli una posizione numerata, poi auth.json (massimo 64 KiB). La sostituzione conserva il file precedente sul server. Qui non puoi sostituire un account in uso.</string>
+    <string name="auth_manage_slot_active">%1$s · In uso</string>
+    <string name="auth_manage_slot_replace">%1$s · Sostituisci autorizzazione salvata</string>
+    <string name="auth_manage_slot_new">%1$s · Posizione vuota</string>
+    <string name="auth_manage_choose_file">Scegli file e importa</string>
+</resources>

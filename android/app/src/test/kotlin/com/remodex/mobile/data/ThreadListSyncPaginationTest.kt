@@ -37,6 +37,8 @@ class ThreadListSyncPaginationTest {
                 override suspend fun sendRequest(method: String, params: JSONValue?): RPCMessage {
                     assertEquals("thread/list", method)
                     val map = (params as JSONValue.Obj).map
+                    assertEquals("recency_at", map["sortKey"]?.stringValue)
+                    assertEquals("desc", map["sortDirection"]?.stringValue)
                     val archived = map["archived"]?.boolValue == true
                     val cursor = map["cursor"]
                     requested += archived to cursor

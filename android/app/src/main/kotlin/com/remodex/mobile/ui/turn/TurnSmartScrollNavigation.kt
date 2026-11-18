@@ -54,7 +54,13 @@ internal fun buildChatAnchors(
     messages: List<CodexMessage>,
     listItemOffset: Int,
 ): List<ChatAnchor> =
-    messages.toTimelineListItems().mapIndexedNotNull { itemIndex, item ->
+    buildChatAnchorsFromItems(messages.toTimelineListItems(), listItemOffset)
+
+internal fun buildChatAnchorsFromItems(
+    items: List<TimelineListItem>,
+    listItemOffset: Int,
+): List<ChatAnchor> =
+    items.mapIndexedNotNull { itemIndex, item ->
         val lazyListIndex = itemIndex + listItemOffset
         when (item) {
             is TimelineListItem.Single ->

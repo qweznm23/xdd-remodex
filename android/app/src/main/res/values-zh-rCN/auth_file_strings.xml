@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_auth_file_bridge_unsupported">当前桥接版本尚未提供授权文件信息。</string>
+    <string name="settings_auth_file_current">Codex 当前配置的 auth.json</string>
+    <string name="settings_auth_file_missing">配置路径下未找到 auth.json</string>
+    <string name="settings_auth_file_failed">授权文件读取失败，请刷新重试</string>
+    <string name="settings_auth_file_keyring">当前配置使用系统凭据库，不是授权文件</string>
+    <string name="settings_auth_file_memory">当前配置使用内存授权，不保存文件</string>
+    <string name="settings_auth_file_auto">当前使用自动凭据存储，无法确认实际文件来源</string>
+    <string name="settings_auth_file_remote">Codex 位于外部连接，无法在本机核实授权文件</string>
+    <string name="settings_auth_file_unknown">Codex 未提供可确认的授权文件来源</string>
+    <string name="settings_auth_file_path">文件路径</string>
+    <string name="settings_auth_file_target">实际文件</string>
+    <string name="settings_auth_file_modified">文件更新</string>
+    <string name="settings_auth_file_refreshed">授权最近刷新</string>
+    <string name="settings_auth_file_size">文件大小</string>
+    <string name="settings_auth_file_source_note">路径来自当前 Codex 配置。登录状态以上方实时账户信息为准。</string>
+</resources>

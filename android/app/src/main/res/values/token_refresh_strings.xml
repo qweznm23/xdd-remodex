@@ -1,0 +1,5 @@
+<resources>
+    <string name="auth_token_refresh">Refresh Token</string>
+    <string name="auth_token_refreshing">Refreshing token…</string>
+    <string name="auth_token_updated">Token refreshed</string>
+</resources>

@@ -1,0 +1,37 @@
+<resources>
+    <string name="auth_profiles_switch_ready">Codex is using the selected account</string>
+    <string name="auth_profiles_title">Other authorizations</string>
+    <string name="auth_profiles_hint">Only accounts not selected by Codex are listed. Queries use an isolated process.</string>
+    <string name="auth_profiles_refresh">Refresh list</string>
+    <string name="auth_profiles_empty">No other saved accounts</string>
+    <string name="auth_profiles_unavailable">This host has no compatible authorization manager.</string>
+    <string name="auth_profiles_number">Authorization %1$s</string>
+    <string name="auth_profiles_expiry">Access token expires: %1$s</string>
+    <string name="auth_profiles_issued">Access token issued: %1$s</string>
+    <string name="auth_profiles_refreshed">Last credential refresh: %1$s</string>
+    <string name="auth_profiles_modified">File updated: %1$s</string>
+    <string name="auth_profiles_refresh_token_note">Dates come from the saved access token. Refresh tokens do not declare an expiry; an expired access token may refresh during a query.</string>
+    <string name="auth_profiles_token_details">Token dates and file</string>
+    <string name="auth_profiles_collapse">Hide details</string>
+    <string name="auth_profiles_query">Query usage</string>
+    <string name="auth_profiles_querying">Querying…</string>
+    <string name="auth_profiles_queried">Last query: %1$s</string>
+    <string name="auth_profiles_switch">Switch</string>
+    <string name="auth_profiles_switch_title">Switch to authorization %1$s?</string>
+    <string name="auth_profiles_switch_body">The server saves newer current credentials and selects this account. Codex restarts in 10 seconds; active tasks may be interrupted and Remodex will reconnect.</string>
+    <string name="auth_profiles_switch_confirm">Switch account</string>
+    <string name="auth_profiles_cancel">Cancel</string>
+    <string name="auth_profiles_restart_failed">The host could not verify the restart. Check maintenance/last-restart.json on the computer.</string>
+    <string name="auth_profiles_failed">Operation failed. Previous results are retained; open details for the cause.</string>
+    <string name="auth_progress_title">Switch account</string>
+    <string name="auth_progress_target">Switch to profile %1$s</string>
+    <string name="auth_progress_elapsed">%1$d s elapsed</string>
+    <string name="auth_progress_submit">Submitting switch request</string>
+    <string name="auth_progress_selected">Authorization file selected</string>
+    <string name="auth_progress_scheduled">Restart scheduled in about %1$d s</string>
+    <string name="auth_progress_waiting">Waiting for the computer to report its restart</string>
+    <string name="auth_progress_reconnect">Reconnecting to the computer</string>
+    <string name="auth_progress_restored">Reconnected to the computer</string>
+    <string name="auth_progress_verify">Verifying the account in Codex</string>
+    <string name="auth_progress_confirmed">Codex confirmed profile %1$s</string>
+</resources>

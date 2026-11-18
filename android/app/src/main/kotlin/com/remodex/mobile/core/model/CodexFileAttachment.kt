@@ -4,7 +4,7 @@ import java.util.UUID
 
 /**
  * Local non-image attachment prepared by the composer.
- * Android currently serializes these into the user text payload for turn/start.
+ * Completed uploads are referenced by their computer path in the turn/start text payload.
  */
 data class CodexFileAttachment(
     val id: String = UUID.randomUUID().toString(),
@@ -13,5 +13,6 @@ data class CodexFileAttachment(
     val sizeBytes: Int,
     val textContent: String?,
     val sourceUri: String? = null,
+    val remotePath: String? = null,
 )
 

@@ -82,6 +82,7 @@ class CodexMessagePersistence(
         return emptyMap()
     }
 
+    @Synchronized
     fun save(
         value: Map<String, List<CodexMessage>>,
         macDeviceId: String? = null,
@@ -91,6 +92,7 @@ class CodexMessagePersistence(
         saveTailCache(sanitized, macDeviceId)
     }
 
+    @Synchronized
     fun migrateLegacyMonolithToPerThreadIfNeeded() {
         val marker = storeDir().resolve(migrationMarkerName)
         if (marker.exists()) return
@@ -170,14 +172,8 @@ class CodexMessagePersistence(
         for ((threadId, messages) in value) {
             val tid = threadId.trim()
             if (tid.isEmpty()) continue
-            val plaintext =
-                runCatching { json.encodeToString(listSerializer, messages) }
-                    .getOrNull()
-                    ?.toByteArray(Charsets.UTF_8)
-                    ?: continue
-            val encrypted =
-                runCatching { MessageHistoryAesGcm.encrypt(plaintext, messageHistoryKey()) }.getOrNull()
-                    ?: continue
+            val plaintext = json.encodeToString(listSerializer, messages).toByteArray(Charsets.UTF_8)
+            val encrypted = MessageHistoryAesGcm.encrypt(plaintext, messageHistoryKey())
             threadFile(tid, macDeviceId).writeBytes(encrypted)
             index[hashedThreadId(tid)] = tid
         }
@@ -199,15 +195,9 @@ class CodexMessagePersistence(
         macDeviceId: String? = null,
     ) {
         val tails = value.mapValues { (_, messages) -> messages.takeLast(DEFAULT_TAIL_CACHE_LIMIT) }
-        val plaintext =
-            runCatching { json.encodeToString(mapSerializer, tails) }
-                .getOrNull()
-                ?.toByteArray(Charsets.UTF_8)
-                ?: return
+        val plaintext = json.encodeToString(mapSerializer, tails).toByteArray(Charsets.UTF_8)
         val key = messageHistoryKey()
-        val encrypted =
-            runCatching { MessageHistoryAesGcm.encrypt(plaintext, key) }.getOrNull()
-                ?: return
+        val encrypted = MessageHistoryAesGcm.encrypt(plaintext, key)
         val file = storeDir(macDeviceId).resolve(tailCacheName)
         file.parentFile?.mkdirs()
         file.writeBytes(encrypted)
@@ -257,14 +247,8 @@ class CodexMessagePersistence(
         macDeviceId: String?,
     ) {
         val serializer = MapSerializer(String.serializer(), String.serializer())
-        val plaintext =
-            runCatching { json.encodeToString(serializer, index) }
-                .getOrNull()
-                ?.toByteArray(Charsets.UTF_8)
-                ?: return
-        val encrypted =
-            runCatching { MessageHistoryAesGcm.encrypt(plaintext, messageHistoryKey()) }.getOrNull()
-                ?: return
+        val plaintext = json.encodeToString(serializer, index).toByteArray(Charsets.UTF_8)
+        val encrypted = MessageHistoryAesGcm.encrypt(plaintext, messageHistoryKey())
         storeDir(macDeviceId).resolve(threadIndexName).writeBytes(encrypted)
     }
 
@@ -290,7 +274,7 @@ class CodexMessagePersistence(
     private fun sanitizedForPersistence(value: Map<String, List<CodexMessage>>): Map<String, List<CodexMessage>> =
         value.mapValues { (_, messages) ->
             messages.filter {
-                it.kind != CodexMessageKind.userInputPrompt &&
+                (it.kind != CodexMessageKind.userInputPrompt || it.structuredUserInputRequest != null) &&
                     it.kind != CodexMessageKind.pendingApproval
             }
         }

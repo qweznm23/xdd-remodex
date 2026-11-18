@@ -10,6 +10,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RootReconnectModelsTest {
+    @Test fun explicitReconnectCanReplaceStaleReadyStateButStillRequiresPairing() {
+        assertTrue(shouldAttemptSavedPairingReconnect(RootPhase.Main, true, true, ConnectionState.Connected, forceReconnect = true))
+        assertTrue(shouldAttemptSavedPairingReconnect(RootPhase.Main, true, false, ConnectionState.Connecting, forceReconnect = true))
+        assertFalse(shouldAttemptSavedPairingReconnect(RootPhase.PairingScan, true, true, ConnectionState.Connected, forceReconnect = true))
+        assertFalse(shouldAttemptSavedPairingReconnect(RootPhase.Main, false, false, ConnectionState.Offline, forceReconnect = true))
+    }
+
     @Test
     fun shouldAttemptSavedPairingReconnect_allowsMainOfflineWithSavedPairing() {
         assertTrue(
@@ -48,6 +55,16 @@ class RootReconnectModelsTest {
                 connectionState = ConnectionState.Connected,
             ),
         )
+    }
+
+    @Test
+    fun establishedBridgeDropSchedulesRecoveryEvenWhenForegroundJobIsFinishing() {
+        for (code in listOf(4002, 4004)) {
+            val drop = ConnectionState.Error("unavailable", code)
+            assertTrue(shouldScheduleAutoReconnectAfterDrop(RootPhase.Main, true, false, drop, true))
+            assertFalse(shouldScheduleAutoReconnectAfterDrop(RootPhase.PairingScan, true, false, drop, true))
+        }
+        assertFalse(shouldScheduleAutoReconnectAfterDrop(RootPhase.Main, true, false, ConnectionState.Error("replaced", 4003), true))
     }
 
     @Test

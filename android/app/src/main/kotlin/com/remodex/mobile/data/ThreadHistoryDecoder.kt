@@ -23,6 +23,7 @@ internal data class DecodedCompletedItem(
     val planState: CodexPlanState? = null,
     val subagentAction: CodexSubagentAction? = null,
     val assistantPhase: String? = null,
+    val structuredUserInputRequest: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null,
 )
 
 /**
@@ -68,6 +69,7 @@ internal object ThreadHistoryDecoder {
                             ts,
                             attachments,
                             assistantPhase = IncomingNotificationParsers.extractAssistantPhase(null, itemObject),
+                            structuredUserInputRequest = ConversationQuestionCodec.decode(itemObject),
                         )
                     "message" -> {
                         val roleRaw = itemObject["role"]?.stringValue?.lowercase().orEmpty()
@@ -83,6 +85,7 @@ internal object ThreadHistoryDecoder {
                             itemId,
                             ts,
                             attachments,
+                            structuredUserInputRequest = if (role == CodexMessageRole.assistant) ConversationQuestionCodec.decode(itemObject) else null,
                             assistantPhase =
                                 if (role == CodexMessageRole.assistant) {
                                     IncomingNotificationParsers.extractAssistantPhase(null, itemObject)
@@ -199,7 +202,7 @@ internal object ThreadHistoryDecoder {
                 }
             }
         }
-        return foldSubagentAssistantSummaries(out)
+        return ConversationQuestionCodec.reconcile(foldSubagentAssistantSummaries(out))
     }
 
     /** `item/completed` payload (parity iOS `handleStructuredItemLifecycle` testi principali). */
@@ -221,6 +224,7 @@ internal object ThreadHistoryDecoder {
                     sanitizeTextForKind(CodexMessageKind.chat, decodeItemText(itemObject)),
                     decodeImageAttachments(itemObject),
                     assistantPhase = IncomingNotificationParsers.extractAssistantPhase(null, itemObject),
+                    structuredUserInputRequest = ConversationQuestionCodec.decode(itemObject, live = true),
                 )
             "message" -> {
                 val roleRaw = itemObject["role"]?.stringValue?.lowercase().orEmpty()
@@ -231,6 +235,7 @@ internal object ThreadHistoryDecoder {
                     CodexMessageKind.chat,
                     sanitizeTextForKind(CodexMessageKind.chat, decodeItemText(itemObject)),
                     decodeImageAttachments(itemObject),
+                    structuredUserInputRequest = if (role == CodexMessageRole.assistant) ConversationQuestionCodec.decode(itemObject, live = true) else null,
                     assistantPhase =
                         if (role == CodexMessageRole.assistant) {
                             IncomingNotificationParsers.extractAssistantPhase(null, itemObject)
@@ -325,9 +330,10 @@ internal object ThreadHistoryDecoder {
         planState: CodexPlanState? = null,
         subagentAction: CodexSubagentAction? = null,
         assistantPhase: String? = null,
+        structuredUserInputRequest: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null,
     ) {
         val t = sanitizeTextForKind(kind, text)
-        if (t.isEmpty() && attachments.isEmpty() && kind != CodexMessageKind.plan && subagentAction == null) return
+        if (t.isEmpty() && attachments.isEmpty() && kind != CodexMessageKind.plan && subagentAction == null && structuredUserInputRequest == null) return
         out.add(
             CodexMessage(
                 threadId = threadId,
@@ -342,6 +348,7 @@ internal object ThreadHistoryDecoder {
                 attachments = attachments,
                 planState = planState,
                 subagentAction = subagentAction,
+                structuredUserInputRequest = structuredUserInputRequest,
             ),
         )
     }
@@ -782,12 +789,17 @@ internal object ThreadHistoryDecoder {
         for (value in contentItems) {
             val objectValue = value.objectValue ?: continue
             val normalizedType = normalizedItemType(objectValue["type"]?.stringValue ?: "")
-            if (normalizedType != "image" && normalizedType != "localimage") continue
+            if (normalizedType !in setOf("image", "localimage", "video", "localvideo")) continue
             val sourceUrl =
                 objectValue["url"]?.stringValue
                     ?: objectValue["image_url"]?.stringValue
+                    ?: objectValue["video_url"]?.stringValue
                     ?: objectValue["path"]?.stringValue
-            TurnAttachmentCodec.attachmentFromHistorySource(sourceUrl)?.let { attachments.add(it) }
+            TurnAttachmentCodec.attachmentFromHistorySource(sourceUrl)?.let {
+                val mime = firstString(objectValue,listOf("mimeType","mime_type","media_type"))
+                    ?: if (normalizedType in setOf("video","localvideo")) "video/*" else null
+                attachments.add(it.copy(mimeType = mime))
+            }
         }
         return attachments
     }
@@ -804,7 +816,8 @@ internal object ThreadHistoryDecoder {
             } else {
                 decodeImageAttachments(itemObject)
             }
-        return attachments
+        val mime = firstString(itemObject,listOf("mimeType","mime_type","media_type"))
+        return if (mime == null) attachments else attachments.map { it.copy(mimeType = mime) }
     }
 
     private fun decodeFileChangePreview(itemObject: Map<String, JSONValue>): String {

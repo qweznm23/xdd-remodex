@@ -316,6 +316,7 @@ class MacScopedSessionStore(
                     thread.model.orEmpty(),
                     thread.modelProvider.orEmpty(),
                     thread.collaborationMode.name,
+                    thread.reasoningEffort.orEmpty(),
                 ).joinToString("\t") { urlEncode(it) }
             }
 
@@ -344,6 +345,7 @@ class MacScopedSessionStore(
                     agentRole = CodexThread.normalizeIdentifier(parts.getOrNull(12)),
                     model = CodexThread.normalizeIdentifier(parts.getOrNull(13)),
                     modelProvider = CodexThread.normalizeIdentifier(parts.getOrNull(14)),
+                    reasoningEffort = CodexThread.normalizeIdentifier(parts.getOrNull(16)),
                     collaborationMode =
                         parts.getOrNull(15)
                             ?.let { raw -> runCatching { CodexCollaborationModeKind.valueOf(raw) }.getOrNull() }

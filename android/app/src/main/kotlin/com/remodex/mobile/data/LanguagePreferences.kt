@@ -42,6 +42,7 @@ object LanguagePreferences {
         val locale =
             when (preference) {
                 AppLanguagePreference.english -> englishLocale
+                AppLanguagePreference.simplifiedChinese -> Locale.SIMPLIFIED_CHINESE
                 AppLanguagePreference.system -> currentSystemLocale(context)
             }
         Locale.setDefault(locale)

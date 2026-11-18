@@ -322,6 +322,7 @@ class SessionPersistence(
                 thread.model.orEmpty(),
                 thread.modelProvider.orEmpty(),
                 thread.collaborationMode.name,
+                thread.reasoningEffort.orEmpty(),
             )
         return fields.joinToString(MANAGED_WORKTREE_ENTRY_SEPARATOR) { urlEncode(it) }
     }
@@ -355,6 +356,7 @@ class SessionPersistence(
                 agentRole = CodexThread.normalizeIdentifier(parts.getOrNull(13)),
                 model = CodexThread.normalizeIdentifier(parts.getOrNull(14)),
                 modelProvider = CodexThread.normalizeIdentifier(parts.getOrNull(15)),
+                reasoningEffort = CodexThread.normalizeIdentifier(parts.getOrNull(17)),
                 collaborationMode =
                     parts.getOrNull(16)
                         ?.let { raw -> runCatching { CodexCollaborationModeKind.valueOf(raw) }.getOrNull() }

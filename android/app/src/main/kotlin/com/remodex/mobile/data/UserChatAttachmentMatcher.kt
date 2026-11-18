@@ -17,7 +17,13 @@ internal object UserChatAttachmentMatcher {
         incoming: List<CodexImageAttachment>,
     ): List<CodexImageAttachment> =
         when {
-            existing.isNotEmpty() -> existing
+            existing.isNotEmpty() -> existing.map { saved ->
+                val refreshed = incoming.firstOrNull { candidate ->
+                    (!saved.sourceURL.isNullOrBlank() && saved.sourceURL == candidate.sourceURL) ||
+                        (!saved.payloadDataURL.isNullOrBlank() && saved.payloadDataURL == candidate.payloadDataURL)
+                }
+                if (!refreshed?.mimeType.isNullOrBlank()) saved.copy(mimeType = refreshed?.mimeType) else saved
+            }
             incoming.isNotEmpty() -> incoming
             else -> emptyList()
         }

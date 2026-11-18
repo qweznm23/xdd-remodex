@@ -115,7 +115,7 @@ fun UsageStatusSummary(
                 CircularProgressIndicator(strokeWidth = 2.dp)
             }
             val usageText = contextUsage?.let { "${it.percentUsed}%" } ?: "-"
-            val limitsText = rateLimitRows.firstOrNull()?.window?.clampedUsedPercent?.toString()?.plus("%") ?: "-"
+            val limitsText = rateLimitRows.firstOrNull()?.window?.remainingPercent?.toString()?.plus("%") ?: "-"
             Text(
                 text = stringResource(R.string.usage_status_summary_values, usageText, limitsText),
                 style = MaterialTheme.typography.bodySmall,

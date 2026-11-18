@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="usage_details_not_read">尚未查询</string>
+    <string name="usage_details_unavailable">服务端未提供</string>
+    <string name="usage_last_successful_read">最近成功刷新：%1$s</string>
+    <string name="usage_previous_snapshot">刷新失败，以下保留上次成功查询的数据。</string>
+    <string name="usage_credit_balance_title">额度余额</string>
+    <string name="usage_credit_balance_value">%1$s：%2$s</string>
+    <string name="usage_credit_unlimited">无限额度</string>
+    <string name="usage_credit_none">无可用额度</string>
+    <string name="usage_reset_cards_title">额度重置卡</string>
+    <string name="usage_reset_cards_count">可用：%1$d 张</string>
+    <string name="usage_reset_cards_no_details">服务端仅返回数量，未提供卡片明细。</string>
+    <string name="usage_reset_card_default">额度重置卡</string>
+    <string name="usage_reset_card_available">可用</string>
+    <string name="usage_reset_card_redeeming">使用中</string>
+    <string name="usage_reset_card_redeemed">已使用</string>
+    <string name="usage_reset_card_unknown">状态未知</string>
+    <string name="usage_reset_card_no_expiry">不过期</string>
+    <string name="usage_reset_card_expiry">有效期至：%1$s</string>
+    <string name="usage_reset_cards_partial">服务端返回 %1$d 张卡的明细，可用总数为 %2$d 张。</string>
+    <string name="usage_quota_remaining_used">剩余 %1$d%% · 已用 %2$d%%</string>
+    <string name="usage_quota_reset_at">额度重置时间：%1$s</string>
+    <string name="usage_quota_weekly">每周额度</string>
+    <string name="usage_quota_remaining">剩余 %1$d%%</string>
+    <string name="usage_refreshing_keep_data">正在刷新…</string>
+    <string name="usage_refresh_failed_keep_data">刷新失败 · 数据未更新</string>
+    <string name="usage_balance_cards">余额与重置卡</string>
+    <string name="usage_quota_short_window">5 小时额度</string>
+    <string name="usage_context_no_data">暂无上下文数据</string>
+    <string name="usage_reset_due">已到重置时间，等待额度更新</string>
+    <string name="usage_reset_in_days">还有 %1$d 天 %2$d 小时重置</string>
+    <string name="usage_reset_in_hours">还有 %1$d 小时 %2$d 分钟重置</string>
+    <string name="usage_reset_in_minutes">还有 %1$d 分钟重置</string>
+</resources>

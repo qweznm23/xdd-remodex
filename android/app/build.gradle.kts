@@ -43,8 +43,9 @@ android {
         minSdk = 26
         targetSdk = 36
 
-        versionCode = 15
+        versionCode = 89
         versionName = "0.1.7"
+        buildConfigField("String", "APP_UPDATE_URL", quotedBuildConfigString(configValue("APP_UPDATE_URL")))
         buildConfigField("boolean", "BETA_ENABLED", betaEnabled.toString())
         buildConfigField("String", "BETA_API_BASE_URL", quotedBuildConfigString(betaApiBaseUrl))
         buildConfigField("String", "BETA_API_KEY", quotedBuildConfigString(betaApiKey))
@@ -65,7 +66,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            versionNameSuffix = "-ws-fix73"
+        }
         release {
+            versionNameSuffix = "-ws-fix73"
+            isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -97,6 +103,36 @@ android {
             pickFirsts += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
+}
+
+// R8 removes the Picnic engine and its Lowmc readers, but Java resources are not
+// resource-shrunk. Exclude only their three tables, and fail packaging if a reader returns.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.packaging.resources.excludes.addAll(
+            listOf("L1", "L3", "L5").map { "org/bouncycastle/pqc/crypto/picnic/lowmc$it.bin.properties" },
+        )
+    }
+}
+
+val verifyUnusedPicnicTables = tasks.register("verifyUnusedPicnicTables") {
+    dependsOn("minifyReleaseWithR8")
+    val mapping = layout.buildDirectory.file("outputs/mapping/release/mapping.txt")
+    val usage = layout.buildDirectory.file("outputs/mapping/release/usage.txt")
+    inputs.files(mapping, usage)
+    doLast {
+        val kept = mapping.get().asFile.readText()
+        val removed = usage.get().asFile.readLines().toSet()
+        for (name in listOf("LowmcConstants", "LowmcConstantsL1", "LowmcConstantsL3", "LowmcConstantsL5", "PicnicEngine")) {
+            val className = "org.bouncycastle.pqc.crypto.picnic.$name"
+            check(className in removed && !kept.contains(className)) {
+                "Restore Picnic data files before packaging: $className is not proven removed by R8"
+            }
+        }
+    }
+}
+tasks.matching { it.name == "packageRelease" || it.name == "packageReleaseBundle" }.configureEach {
+    dependsOn(verifyUnusedPicnicTables)
 }
 
 gradle.taskGraph.whenReady {
@@ -135,6 +171,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+    implementation("androidx.media3:media3-ui:1.8.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
@@ -161,12 +199,8 @@ dependencies {
     implementation("com.termux.termux-app:terminal-emulator:0.118.0")
     implementation("com.hierynomus:sshj:0.39.0")
 
-    val camerax = "1.4.1"
-    implementation("androidx.camera:camera-core:$camerax")
-    implementation("androidx.camera:camera-camera2:$camerax")
-    implementation("androidx.camera:camera-lifecycle:$camerax")
-    implementation("androidx.camera:camera-view:$camerax")
-    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    implementation("com.google.android.gms:play-services-base:18.5.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

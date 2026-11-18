@@ -492,7 +492,30 @@ private fun DeviceStatusSubtitle(
     modifier: Modifier = Modifier,
 ) {
     Text(
-        text = device.menuSubtitle,
+        text = listOfNotNull(
+            when (device.status) {
+                "Switching" -> stringResource(R.string.device_switching)
+                "Connected" -> stringResource(R.string.my_devices_connected)
+                "Selected" -> stringResource(R.string.device_selected)
+                "Previous" -> stringResource(R.string.device_previous)
+                "Saved" -> stringResource(R.string.device_saved)
+                else -> device.status
+            },
+            device.detail?.let { detail ->
+                val age = Regex("(\\d+)([mhdw]) ago").matchEntire(detail)
+                when {
+                    detail == "Reloading chats" -> stringResource(R.string.device_reloading)
+                    detail == "just now" -> stringResource(R.string.device_just_now)
+                    age != null -> stringResource(when (age.groupValues[2]) {
+                        "m" -> R.string.device_minutes_ago
+                        "h" -> R.string.device_hours_ago
+                        "d" -> R.string.device_days_ago
+                        else -> R.string.device_weeks_ago
+                    }, age.groupValues[1])
+                    else -> detail
+                }
+            },
+        ).joinToString(" · "),
         style = MaterialTheme.typography.bodySmall,
         color =
             if (device.isConnected) {

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_update_connecting">Connecting to download server…</string>
+    <string name="app_update_cancelling">Cancelling download…</string>
+    <string name="app_update_keep_app_open">Keep the app running until the download completes. After restarting the app, tap Download to retry.</string>
+    <string name="app_update_effective_source">Update address: %1$s</string>
+    <string name="app_update_follow_connection">Use connection address</string>
+</resources>

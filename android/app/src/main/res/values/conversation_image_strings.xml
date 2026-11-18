@@ -1,0 +1,5 @@
+<resources>
+    <string name="conversation_image_preview">View image</string>
+    <string name="conversation_image_failed">Image could not load. Tap to retry.</string>
+    <string name="conversation_album_image">Image %1$d of %2$d</string>
+</resources>

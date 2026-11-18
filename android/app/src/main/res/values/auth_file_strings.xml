@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_auth_file_bridge_unsupported">This bridge version does not provide authorization-file information.</string>
+    <string name="settings_auth_file_current">Codex’s configured auth.json</string>
+    <string name="settings_auth_file_missing">No auth.json at the configured path</string>
+    <string name="settings_auth_file_failed">Could not read the authorization file. Refresh to retry.</string>
+    <string name="settings_auth_file_keyring">Configured to use the system credential store, not a file</string>
+    <string name="settings_auth_file_memory">Configured to keep authorization in memory</string>
+    <string name="settings_auth_file_auto">Automatic credential storage; the file source is not confirmed</string>
+    <string name="settings_auth_file_remote">Codex uses an external connection; its authorization file cannot be verified locally</string>
+    <string name="settings_auth_file_unknown">Codex did not provide a verifiable authorization-file location</string>
+    <string name="settings_auth_file_path">File path</string>
+    <string name="settings_auth_file_target">Backing file</string>
+    <string name="settings_auth_file_modified">File updated</string>
+    <string name="settings_auth_file_refreshed">Authorization last refreshed</string>
+    <string name="settings_auth_file_size">File size</string>
+    <string name="settings_auth_file_source_note">The path comes from the current Codex configuration. Sign-in status is shown in the live account information above.</string>
+</resources>

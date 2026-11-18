@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sidebar_pinned_group">Pinned</string>
+    <string name="sidebar_pin_thread">Pin conversation</string>
+    <string name="sidebar_unpin_thread">Unpin conversation</string>
+    <string name="sidebar_pin_close">Close</string>
+    <string name="sidebar_pin_failed">Could not update pinned conversations: %1$s</string>
+</resources>

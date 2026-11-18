@@ -19,6 +19,7 @@ class WorkspaceImageService(
     private data class PreviewCacheKey(
         val path: String,
         val maxPixelDimension: Long,
+        val cwd: String?,
     )
 
     private val previewCache = mutableMapOf<PreviewCacheKey, PreviewDataUrl>()
@@ -29,16 +30,18 @@ class WorkspaceImageService(
     suspend fun readPreviewDataUrl(
         path: String,
         maxPixelDimension: Long,
+        cwd: String? = null,
     ): PreviewDataUrl? {
         val trimmedPath = path.trim()
         if (trimmedPath.isEmpty()) return null
-        val key = PreviewCacheKey(trimmedPath, maxPixelDimension)
+        val key = PreviewCacheKey(trimmedPath, maxPixelDimension, cwd)
         val cached = synchronized(previewCache) { previewCache[key] }
         val params =
             linkedMapOf<String, JSONValue>(
                 "path" to JSONValue.Str(trimmedPath),
                 "maxPixelDimension" to JSONValue.NumLong(maxPixelDimension),
             )
+        cwd?.takeIf { it.isNotBlank() }?.let { params["cwd"] = JSONValue.Str(it) }
         if (cached != null) {
             params["ifByteLength"] = JSONValue.NumLong(cached.byteLength)
             params["ifMtimeMs"] = JSONValue.NumDouble(cached.mtimeMs)
@@ -46,7 +49,8 @@ class WorkspaceImageService(
 
         val result = readImage(params)
         if (result.notModified && cached != null) return cached
-        val base64 = result.dataBase64?.takeIf { it.isNotBlank() } ?: return null
+        val base64 = result.dataBase64?.takeIf { it.isNotBlank() }
+            ?: throw java.io.IOException("Image response missing data stage=image_preview_response")
         val mime = result.mimeType.ifBlank { "image/png" }
         val fresh =
             PreviewDataUrl(
@@ -59,7 +63,7 @@ class WorkspaceImageService(
         synchronized(previewCache) {
             previewCache[key] = fresh
             if (fresh.path != trimmedPath) {
-                previewCache[PreviewCacheKey(fresh.path, maxPixelDimension)] = fresh
+                previewCache[PreviewCacheKey(fresh.path, maxPixelDimension, cwd)] = fresh
             }
         }
         return fresh

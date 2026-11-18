@@ -1,0 +1,19 @@
+[Unit]
+Description=Remodex relay
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+EnvironmentFile=@PROJECT_ROOT@/.local/config/runtime.env
+WorkingDirectory=@PROJECT_ROOT@/relay
+ExecStart=@NODE_BIN@ @PROJECT_ROOT@/relay/server.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

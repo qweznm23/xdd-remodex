@@ -15,6 +15,7 @@ class AppLanguagePreferenceTest {
     @Test
     fun storedPreferenceIsRestoredWhenValid() {
         assertEquals(AppLanguagePreference.english, AppLanguagePreference.fromStorage("english"))
+        assertEquals(AppLanguagePreference.simplifiedChinese, AppLanguagePreference.fromStorage("simplifiedChinese"))
         assertEquals(AppLanguagePreference.system, AppLanguagePreference.fromStorage("system"))
     }
 }

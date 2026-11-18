@@ -209,8 +209,8 @@ data class CodexTrustedSessionResolveResponse(
     val macIdentityPublicKey: String,
     val displayName: String? = null,
     val sessionId: String,
-    val responseTimestamp: Long,
-    val signature: String,
+    val responseTimestamp: Long? = null,
+    val signature: String? = null,
 )
 
 @Serializable
@@ -241,6 +241,18 @@ sealed class CodexSecureTransportError(
 
     data object DecryptFailed : CodexSecureTransportError("Unable to decrypt the secure Remodex payload.")
 
+    class PayloadTooLarge(
+        val stage: String,
+        val actualSize: Int,
+        val limitSize: Int,
+        val unit: String,
+        val counter: Int? = null,
+    ) : CodexSecureTransportError(
+        "An incoming bridge message exceeds the receive limit ($stage: $actualSize > $limitSize $unit).",
+    ) {
+        val code: String = "inbound_payload_too_large"
+    }
+
     class TimedOut(
         message: String,
     ) : CodexSecureTransportError(message)
@@ -248,7 +260,8 @@ sealed class CodexSecureTransportError(
 
 sealed class CodexTrustedSessionResolveError(
     message: String,
-) : Exception(message) {
+    cause: Throwable? = null,
+) : Exception(message, cause) {
     data object NoTrustedMac : CodexTrustedSessionResolveError("No trusted Mac is available to reconnect.")
 
     data object UnsupportedRelay : CodexTrustedSessionResolveError("This relay does not support trusted reconnect yet.")
@@ -263,11 +276,13 @@ sealed class CodexTrustedSessionResolveError(
 
     class InvalidResponse(
         message: String,
-    ) : CodexTrustedSessionResolveError(message)
+        cause: Throwable? = null,
+    ) : CodexTrustedSessionResolveError(message, cause)
 
     class Network(
         message: String,
-    ) : CodexTrustedSessionResolveError(message)
+        cause: Throwable? = null,
+    ) : CodexTrustedSessionResolveError(message, cause)
 }
 
 fun codexTrustedSessionResolveTranscriptBytes(

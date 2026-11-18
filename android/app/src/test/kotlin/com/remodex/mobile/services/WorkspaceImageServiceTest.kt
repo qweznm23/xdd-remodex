@@ -8,6 +8,46 @@ import kotlin.test.assertNull
 import kotlinx.coroutines.test.runTest
 
 class WorkspaceImageServiceTest {
+    @Test fun projectPathIsSentAndDifferentWorkspacesDoNotReuseRelativeImageMetadata() = runTest {
+        val captured = mutableListOf<Map<String, JSONValue>>()
+        val service = WorkspaceImageService(MinimalSendRepository { _, params ->
+            val p = params!!.objectValue!!
+            captured.add(p)
+            RPCMessage.success(JSONValue.Str("image"), JSONValue.Obj(mapOf(
+                "path" to JSONValue.Str(p["cwd"]!!.stringValue + "/screen.png"),
+                "mimeType" to JSONValue.Str("image/png"),
+                "dataBase64" to JSONValue.Str("QUJD"),
+            )))
+        })
+        service.readPreviewDataUrl("screen.png", 512, "/project/watch")
+        service.readPreviewDataUrl("screen.png", 512, "/project/phone")
+        assertEquals(listOf("/project/watch", "/project/phone"), captured.map { it["cwd"]?.stringValue })
+        assertNull(captured[1]["ifByteLength"])
+    }
+
+    @Test fun imageFailuresKeepOriginalCauseAndCancellation() = runTest {
+        val failure = java.io.IOException("image_not_found", IllegalStateException("original cause"))
+        failure.addSuppressed(IllegalArgumentException("secondary failure"))
+        val service = WorkspaceImageService(MinimalSendRepository { _, _ -> throw failure })
+        val actual = kotlin.test.assertFailsWith<java.io.IOException> { service.readPreviewDataUrl("/repo/a.png", 512, "/repo") }
+        kotlin.test.assertSame(failure, actual)
+        assertEquals("original cause", actual.cause?.message)
+        assertEquals("secondary failure", actual.suppressed.single().message)
+        val cancelled = kotlinx.coroutines.CancellationException("left conversation")
+        val cancelling = WorkspaceImageService(MinimalSendRepository { _, _ -> throw cancelled })
+        kotlin.test.assertSame(cancelled, kotlin.test.assertFailsWith<kotlinx.coroutines.CancellationException> {
+            cancelling.readPreviewDataUrl("/repo/a.png", 512)
+        })
+    }
+
+    @Test fun missingImagePayloadIsAnExplicitResponseFailure() = runTest {
+        val service = WorkspaceImageService(MinimalSendRepository { _, _ ->
+            RPCMessage.success(JSONValue.Str("image"), JSONValue.Obj(mapOf("path" to JSONValue.Str("/repo/a.png"))))
+        })
+        val error = kotlin.test.assertFailsWith<java.io.IOException> { service.readPreviewDataUrl("/repo/a.png", 512) }
+        kotlin.test.assertTrue(error.message!!.contains("stage=image_preview_response"))
+    }
+
     @Test
     fun readPreviewDataUrl_usesConditionalMetadataAfterFirstRead() = runTest {
         val capturedParams = mutableListOf<Map<String, JSONValue>>()

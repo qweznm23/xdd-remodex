@@ -60,6 +60,11 @@ internal fun appendFileAttachmentsToDraft(
             sb.append(", ").append(mime)
         }
         sb.append(")\n")
+        if (file.remotePath != null) {
+            sb.append("Complete file uploaded to computer: ")
+                .append(kotlinx.serialization.json.JsonPrimitive(file.remotePath).toString()).append('\n')
+            return@forEachIndexed
+        }
         val content = file.textContent?.trim()
         if (!content.isNullOrEmpty()) {
             sb.append("```").append(inferCodeFenceLanguage(file.fileName)).append('\n')

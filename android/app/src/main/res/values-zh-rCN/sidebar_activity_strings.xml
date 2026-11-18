@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sidebar_unread">有未读更新</string>
+    <string name="sidebar_unread_badge">未读</string>
+    <string name="sidebar_recent_group">最近使用</string>
+    <string name="sidebar_pinned_empty">长按会话可置顶到这里</string>
+    <string name="sidebar_recent_empty">显示 Codex 返回的最近会话</string>
+    <string name="sidebar_activity_failed">读取或保存未读和最近使用状态失败：%1$s</string>
+</resources>

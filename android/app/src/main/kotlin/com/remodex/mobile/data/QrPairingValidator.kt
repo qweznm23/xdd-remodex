@@ -312,7 +312,7 @@ private fun validatePairingFields(
     }
     if (validateRelayUrl(relay, requireWebSocketScheme = true) == null) {
         return QrPairingValidationResult.ScanError(
-            "Pairing metadata has an invalid or insecure connection route. Use a local or secure route.",
+            "Pairing metadata has an invalid connection route. Use a ws:// or wss:// address without credentials.",
         )
     }
     return null

@@ -1,6 +1,8 @@
 package com.remodex.mobile.services
 
+import com.remodex.mobile.core.config.FeatureFlags
 import android.content.Context
+import android.util.Log
 import com.remodex.mobile.core.model.CodexBridgeUpdatePrompt
 import com.remodex.mobile.core.model.CodexAccessMode
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
@@ -27,6 +29,7 @@ import com.remodex.mobile.core.model.RPCMessage
 import com.remodex.mobile.core.model.ThreadHistoryPaginationState
 import com.remodex.mobile.core.persistence.CodexMessagePersistence
 import com.remodex.mobile.core.persistence.MacScopedSessionStore
+import com.remodex.mobile.core.persistence.TimelinePersistenceWriter
 import com.remodex.mobile.core.persistence.SessionPersistence
 import com.remodex.mobile.core.protocol.JsonRpcCodec
 import com.remodex.mobile.core.security.SecureStore
@@ -55,6 +58,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -96,6 +100,9 @@ class CodexService(
 
     internal val jsonRpc = JsonRpcCodec(json)
 
+    override val fileTransferBaseUrl: String?
+        get() = webSocket?.request()?.url?.newBuilder()?.encodedPath("/")?.query(null)?.fragment(null)?.build()?.toString()
+
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Nullable so [resetBridgeSession] can run from extension files (no lateinit [isInitialized] outside the class). */
@@ -134,6 +141,11 @@ class CodexService(
     internal val _isSessionReady = MutableStateFlow(false)
     override val isSessionReady: StateFlow<Boolean> = _isSessionReady.asStateFlow()
 
+    internal val predictionStore = ComposerPredictions()
+    override val composerPredictions = predictionStore.suggestions
+    override fun dismissPredictionForTyping(threadId: String) = predictionStore.typing(threadId)
+    override fun dismissComposerPrediction(threadId: String, turnId: String) = predictionStore.dismiss(threadId, turnId)
+
     internal val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Offline)
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
@@ -166,6 +178,10 @@ class CodexService(
     internal val _rateLimitBuckets = MutableStateFlow<List<CodexRateLimitBucket>>(emptyList())
     override val rateLimitBuckets: StateFlow<List<CodexRateLimitBucket>> = _rateLimitBuckets.asStateFlow()
 
+    internal val rateLimitRefreshGuard = RateLimitRefreshGuard()
+    internal val _accountUsageDetails = MutableStateFlow(com.remodex.mobile.core.model.AccountUsageDetails())
+    override val accountUsageDetails = _accountUsageDetails.asStateFlow()
+
     internal val _isLoadingRateLimits = MutableStateFlow(false)
     override val isLoadingRateLimits: StateFlow<Boolean> = _isLoadingRateLimits.asStateFlow()
 
@@ -196,6 +212,9 @@ class CodexService(
     internal val contextWindowUsageLoadingRevisionByThread = mutableMapOf<String, Long>()
 
     private val runtimeSelection = sessionPersistence.loadRuntimeSelection()
+    internal val threadRuntimeSelection = ThreadRuntimeSelection(
+        ThreadModelSelection(runtimeSelection.selectedModelId, runtimeSelection.selectedReasoningEffort),
+    )
 
     internal val _selectedModelId = MutableStateFlow(runtimeSelection.selectedModelId)
     override val selectedModelId: StateFlow<String?> = _selectedModelId.asStateFlow()
@@ -222,6 +241,16 @@ class CodexService(
     internal val _pendingApprovalRequest = MutableStateFlow<PendingApprovalRequest?>(null)
     override val pendingApprovalRequest: StateFlow<PendingApprovalRequest?> =
         _pendingApprovalRequest.asStateFlow()
+
+    override val conversationQuestionsByThread get() = messageTimelineStore.conversationQuestionsByThread
+    override val questionThreadIds get() = messageTimelineStore.questionThreadIds
+    internal val questionSubmissionMutex = Mutex()
+    internal val _pendingStructuredInputRequests = MutableStateFlow<Map<String, PendingStructuredInputRequest>>(emptyMap())
+    override val pendingStructuredInputRequests = _pendingStructuredInputRequests.asStateFlow()
+    override suspend fun answerConversationQuestions(threadId: String, request: com.remodex.mobile.core.model.CodexStructuredUserInputRequest, answers: Map<String, List<String>>, allowHistorical: Boolean) =
+        answerConversationQuestionsInternal(threadId, request, answers, allowHistorical)
+    override suspend fun skipConversationQuestions(threadId: String, request: com.remodex.mobile.core.model.CodexStructuredUserInputRequest) =
+        skipConversationQuestionsInternal(threadId, request)
 
     internal val _pendingStructuredInputRequest = MutableStateFlow<PendingStructuredInputRequest?>(null)
     override val pendingStructuredInputRequest: StateFlow<PendingStructuredInputRequest?> =
@@ -267,6 +296,10 @@ class CodexService(
 
     internal var trustedSessionResolveClientLazy: CodexTrustedSessionResolveClient? = null
     internal val deviceSwitchMutex = Mutex()
+    internal val threadRefreshMutex = Mutex()
+    internal val connectionLifecycleMutex = Mutex()
+    @Volatile internal var connectionGeneration: Long = 0
+    internal var wireDropGeneration: Long? = null
     internal var isCancellingDeviceSwitch = false
     internal var macScopedContextOverrideDeviceId: String? = null
     internal var suspendAutomaticMacScopedPersistence = false
@@ -279,6 +312,19 @@ class CodexService(
     internal val pendingStructuredInputResponders =
         ConcurrentHashMap<String, (answersByQuestionId: Map<String, List<String>>) -> Unit>()
 
+    internal val timelinePersistenceWriter = TimelinePersistenceWriter(
+        scope = scope,
+        save = messagePersistence::save,
+        onFailure = { deviceId, threadCount, error ->
+            Log.e(
+                "CodexService",
+                "operation=timeline-cache stage=encrypted-save attempt=1 " +
+                    "deviceScoped=${deviceId != null} threadCount=$threadCount",
+                error,
+            )
+        },
+    )
+
     internal val messageTimelineStore =
         MessageTimelineStore(
             initialMessages =
@@ -286,7 +332,7 @@ class CodexService(
                     macDeviceId = normalizedCurrentTrustedMacDeviceId(),
                 ),
             saveMessages = { messages ->
-                messagePersistence.save(messages, resolvedMacScopedPersistenceDeviceId())
+                timelinePersistenceWriter.submit(messages, resolvedMacScopedPersistenceDeviceId())
             },
         )
     internal val commandExecutionDetailsStore = CommandExecutionDetailsStore()
@@ -316,6 +362,7 @@ class CodexService(
     override val olderHistoryErrorByThread: StateFlow<Map<String, String>> =
         _olderHistoryErrorByThread.asStateFlow()
     internal val runningTurnStateLock = Any()
+    internal val threadStatusRefreshGuard = ThreadStatusRefreshGuard()
 
     /** Thread ids that already received a successful `thread/resume` this session — parity iOS `resumedThreadIDs`. */
     internal val resumedThreadIds = Collections.synchronizedSet(mutableSetOf<String>())
@@ -337,11 +384,27 @@ class CodexService(
             it.putAll(sessionPersistence.loadAssociatedManagedWorktreePaths())
         }
 
+    internal val codexSidebar = CodexSidebarController()
+    override val sidebarActivity get() = codexSidebar.state
+    override suspend fun markThreadRead(threadId: String, deviceId: String, revision: String) = markCodexThreadRead(threadId, deviceId, revision)
+    override suspend fun setThreadPinned(threadId: String, deviceId: String, pinned: Boolean) = setCodexThreadPinned(threadId, deviceId, pinned)
+
     init {
         initializeTrustedDeviceState()
         normalizedCurrentTrustedMacDeviceId()?.let { deviceId ->
             loadMacScopedLocalState(deviceId)
             loadMacScopedDefaultsState(deviceId)
+        }
+        syncActiveThreadRuntimeSelection()
+        scope.launch {
+            currentTrustedMacDeviceId.collect { device ->
+                codexSidebar.reset(device)
+            }
+        }
+        scope.launch {
+            combine(_activeThreadId, _threads, _availableModels) { _, _, _ -> Unit }.collect {
+                syncActiveThreadRuntimeSelection()
+            }
         }
         scope.launch {
             runCatching { messagePersistence.migrateLegacyMonolithToPerThreadIfNeeded() }
@@ -354,7 +417,9 @@ class CodexService(
      */
     @Volatile
     internal var testRpcRequestHandler: (suspend (String, JSONValue?) -> RPCMessage)? = null
-    internal val loadingHistory = ConcurrentHashMap.newKeySet<String>()
+    internal val loadingHistory = ThreadHistoryRequests()
+    internal val historyLoadRevision = java.util.concurrent.atomic.AtomicLong()
+    override val loadingHistoryThreadIds: StateFlow<Set<String>> get() = loadingHistory.activeThreadIds
     internal var supportsTurnCollaborationMode = true
     internal var supportsStructuredSkillInput = true
     internal var supportsStructuredMentionInput = true
@@ -388,6 +453,19 @@ class CodexService(
                 }
             },
             onTurnFinished = { th -> noteTurnFinished(th) },
+            onPredictionTurnStarted = predictionStore::started,
+            onPredictionInvalidated = predictionStore::invalidate,
+            onPredictionSource = { thread, turn ->
+                if (_activeThreadId.value == thread) predictionStore.completed(thread, turn)?.let { requestComposerPrediction(it) }
+            },
+            onTurnCompletedActivity = { _, _ ->
+                // Read/unread comes from Codex receipts, never from inferred local completions.
+                scope.launch {
+                    if (sessionReady) try { refreshThreadsInternal() }
+                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (failure: Exception) { Log.e("RemodexSidebar", "operation=turn-completed stage=refresh", failure) }
+                }
+            },
             isTurnStreamingActive = { threadId, turnId ->
                 val runMap = _runningTurnIdByThread.value
                 val fb = _protectedRunningFallbackThreadIds.value
@@ -425,6 +503,7 @@ class CodexService(
         val th = threadId.trim()
         if (th.isEmpty()) return
         synchronized(runningTurnStateLock) {
+            threadStatusRefreshGuard.changed(th)
             _protectedRunningFallbackThreadIds.value =
                 if (active) {
                     _protectedRunningFallbackThreadIds.value + th
@@ -442,6 +521,7 @@ class CodexService(
         val t = turnId.trim()
         if (th.isEmpty() || t.isEmpty()) return
         synchronized(runningTurnStateLock) {
+            threadStatusRefreshGuard.changed(th)
             _runningTurnIdByThread.value = _runningTurnIdByThread.value + (th to t)
             _protectedRunningFallbackThreadIds.value = _protectedRunningFallbackThreadIds.value - th
         }
@@ -452,6 +532,7 @@ class CodexService(
         if (th.isEmpty()) return
         val turnId = _runningTurnIdByThread.value[th]
         synchronized(runningTurnStateLock) {
+            threadStatusRefreshGuard.changed(th)
             _runningTurnIdByThread.value = _runningTurnIdByThread.value.filterKeys { it != th }
             _protectedRunningFallbackThreadIds.value = _protectedRunningFallbackThreadIds.value - th
         }
@@ -475,6 +556,32 @@ class CodexService(
     ) = connectImpl(serverUrl, token, role)
 
     override suspend fun disconnect() = disconnectImpl()
+
+    override suspend fun resolveReconnectSnapshot(
+        snapshot: com.remodex.mobile.core.persistence.RelaySessionSnapshot,
+        relayHostOverride: String,
+    ) = withContext(Dispatchers.IO) {
+        val targetId = snapshot.relayMacDeviceId ?: snapshot.lastTrustedMacDeviceId
+        val trusted = trustedMacRecord(targetId)
+        if (trusted == null) {
+            snapshot
+        } else {
+            try {
+                val relay = snapshot.relayUrl ?: trusted.relayURL.orEmpty()
+                val resolved = trustedSessionResolveClient().resolveTrustedMacSession(
+                    trusted,
+                    com.remodex.mobile.pairing.applyRelayHostOverride(relay, relayHostOverride),
+                )
+                applyResolvedTrustedSession(resolved, relay)
+                sessionPersistence.loadRelaySnapshot()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("RemodexReconnect", "Reconnect failed stage=trusted_session_resolve attempt=1", e)
+                throw e
+            }
+        }
+    }
 
     override suspend fun setActiveThreadId(threadId: String?) = setActiveThreadIdImpl(threadId)
 
@@ -526,6 +633,10 @@ class CodexService(
         loadOlderThreadHistoryInternal(threadId)
     }
 
+    override suspend fun refreshConversation(threadId: String) = withContext(Dispatchers.IO) {
+        refreshConversationInternal(threadId)
+    }
+
     override suspend fun refreshRateLimits() = refreshRateLimitsForRepository()
 
     override suspend fun refreshContextWindowUsage(threadId: String) =
@@ -540,7 +651,15 @@ class CodexService(
     override suspend fun sendRequest(
         method: String,
         params: JSONValue?,
-    ): RPCMessage = sendRequestImpl(method, params)
+    ): RPCMessage {
+        // Defense in depth: a stale UI callback must not manage a repository.
+        if (!FeatureFlags.gitIntegrationEnabled && method.startsWith("git/")) {
+            throw UnsupportedOperationException(
+                "App Git integration is disabled (operation=$method, stage=client_policy)",
+            )
+        }
+        return sendRequestImpl(method, params)
+    }
 
     override suspend fun renameThread(
         threadId: String,

@@ -1,124 +1,42 @@
-# CLAUDE.md (Local-First)
+# XDD Remodex 维护规范
 
-Keep this file and `AGENTS.md` aligned.
+AGENTS.md 与 CLAUDE.md 保持一致。本仓库独立维护 Android 客户端和 Linux 服务端。
 
-This repo is local-first now. Do not reintroduce hosted-service assumptions, remote deployment runbooks, or hardcoded production domains.
+## 工作区与 Git
 
-## Agent behavioral guidelines
+- `android/` 是客户端；`phodex-bridge/` 是 Codex 桥接；`relay/` 是中继；`tools/` 是更新下载服务。
+- 常用操作使用根目录 Makefile、`scripts/`，环境配置示例位于 `ops/`。以 README 为操作入口。
+- 沿用原 Git 历史，维护分支为 `main`。原来源保留为 `upstream`；新的 `origin` 待用户指定。未经用户授权不推送，不向原上游推送。
+- 修改前检查 Git 状态，保留其他工作，只提交当前任务和用户授权整理的内容；不得破坏性回退。
+- `.local/` 是私有运行数据、密钥、缓存、安装包和历史归档，不得加入 Git。不要通过强制添加绕过忽略规则。
+- `.local/archive/` 不是现行源码。原 Git 备份、旧平台代码和 fixXX 排障脚本仅供查阅，不继续在那里开发。
+- 旧 `/root/remodex-test` 是兼容入口，现行代码和新维护脚本都在本仓库。
+- 保留原许可证、来源及源文件版权声明。不要把旧上游代码误称为新写的实现。
 
-Behavioral guidelines to reduce common LLM coding mistakes. These bias toward caution over speed; for trivial tasks, use judgment.
+## 构建、验证与部署
 
-### 1. Think Before Coding
+- `make test-server` 验证服务端；`make android-check` 验证客户端；`make android-release` 测试并打包，但不会发布。
+- Android 必须通过 `scripts/build-android.sh` 使用跨项目共享验证锁。不要并行另起一套 Gradle 构建。
+- 保留项目 JDK、Gradle、AGP、Kotlin、JVM 参数、worker 和编译策略，非必要不改；Android 不套前端 build-limited。
+- 编译、发布必要 lint、完整 lint、单元测试、真机检查与发布是不同结果，分别据实报告。已有完整 lint 错误不得说成通过。
+- 发布要使用 `scripts/publish-android.sh` 的显式 `--publish`，校验版本递增、签名和包完整性，不自动覆盖安装设备。
+- 服务管理使用 `scripts/remodexctl`。部署前保留可恢复的代码及配置步骤，不回滚新生成的授权和配对凭据。
+- 本机交互式网页检查使用 Ubuntu :0 的可见浏览器，通过 linux-browser 或现有 CDP 9222 操作；不要另起隐藏浏览器，不暴露 CDP 端口。
+- 服务器诊断和运维使用可审查的明文脚本文件，不编码或压缩脚本后交给 exec/eval 执行。
 
-Don't assume. Don't hide confusion. Surface tradeoffs.
+## 授权与错误处理
 
-Before implementing:
+- Codex auth.json、编号库、签名密钥和配对身份不得写进源码、状态响应或日志。操作按既有主机和受保护文件传输边界处理。
+- 当前凭据与编号库按账号身份和凭据版本比较，不能只比较文件修改时间。保留较新和无法比较的版本；规则见 phodex-bridge/AUTHORIZATION.md。
+- 查看页面和读取状态不能强制刷新 Token。自动补刷新、手动刷新、同步和切换使用已有共享锁、原子写入及操作标识。
+- 保留原始异常类型、消息、堆栈、cause、suppressed、阶段及 HTTP/RPC/业务错误码。清理和补偿失败不能覆盖首个错误。
+- 不把 401、403、超时、解析错误、取消一律归为过期或网络异常；未知原因明确未知。取消继续传播，只在拥有超时的边界转换超时。
+- 用户简短提示与诊断记录分开；诊断有界、截断明确标记。迟到回调不能覆盖较新的状态。
+- 错误测试要验证原因链、错误码、阶段、取消和凭据恢复，不只检查成功/失败布尔值。
 
-- State assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them — do not pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+## 聊天与连接
 
-For this repo: when the next verification step is safe and obvious (local code, protocol/schema, official sources), inspect first instead of asking — see Core guardrails.
-
-### 2. Simplicity First
-
-Minimum code that solves the problem. Nothing speculative.
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-- Ask: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-Aligns with Core guardrails: avoid junk code, placeholder hacks, and noisy one-off workarounds.
-
-### 3. Surgical Changes
-
-Touch only what you must. Clean up only your own mess.
-
-When editing existing code:
-
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it — do not delete it.
-
-When your changes create orphans:
-
-- Remove imports/variables/functions that your changes made unused.
-- Do not remove pre-existing dead code unless asked.
-
-The test: every changed line should trace directly to the user's request.
-
-For this repo: prefer targeted edits over drive-by refactors; put shared logic in services/coordinators instead of duplicating in views; do not add one-off report markdown unless the user asks — see Core guardrails and Build guardrails.
-
-### 4. Goal-Driven Execution
-
-Define success criteria. Loop until verified.
-
-Transform tasks into verifiable goals:
-
-- "Add validation" → write tests for invalid inputs, then make them pass.
-- "Fix the bug" → write a test that reproduces it, then make it pass.
-- "Refactor X" → ensure tests pass before and after.
-
-For multi-step tasks, state a brief plan:
-
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
-For this repo: do not run Xcode tests unless the user explicitly asks. For small iOS/mobile fixes, prefer inspection and targeted edits over simulator runs — see Build guardrails.
-
-These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-
-## Core guardrails
-
-- Prefer local Mac runtime, local bridge, QR pairing, and daemon workflows.
-- Be an intraprendente agent: proactively inspect local code, protocol/schema, and official sources to confirm facts before replying; do not repeatedly stop to ask for confirmation when the next verification step is safe and obvious.
-- Keep repo isolation by thread/project metadata and local `cwd`.
-- Do not reintroduce filtering by selected repo in sidebar/content.
-- Keep cross-repo open/create flow with automatic local context switch.
-- Preserve single responsibility: shared logic belongs in services/coordinators, not duplicated in views.
-- Treat this repo as open source: avoid junk code, placeholder hacks, noisy one-off workarounds, and low-signal docs.
-- If you touch docs, keep them local-only and remove stale hosted-service notes instead of adding compatibility layers.
-- Do not create one-off report markdown files in the repo root (security reports, audit notes, scratch summaries, etc.) unless the user explicitly asks for a file. Keep ad-hoc analysis in the chat.
-- For open-source/self-hosted safety, do not log live relay `sessionId` values or other bearer-like pairing identifiers in server logs; redact or hash them instead.
-- Keep user-facing answers compact by default unless the user explicitly asks for more detail.
-
-## iOS runtime + timeline guardrails
-
-- `turn/started` may not include a usable `turnId`: keep the per-thread running fallback.
-- If Stop is tapped and `activeTurnIdByThread` is missing, resolve via `thread/read` before interrupting.
-- On reconnect/background recover, rehydrate active turn state so Stop remains visible.
-- Suppress benign background disconnect noise (`NWError.posix(.ECONNABORTED)`) and retry on foreground.
-- Keep assistant rows item-scoped to avoid timeline flattening/reordering.
-- Merge late reasoning deltas into existing rows; do not spawn fake extra "Thinking..." rows.
-- Ignore late turn-less activity events when the turn is already inactive.
-- Preserve item-aware history reconciliation instead of falling back to `turnId`-only matching.
-
-## Local connection guardrails
-
-- Prefer saved relay pairing and local connection state as the source of truth.
-- Avoid hardcoded remote domains; default to local values or explicit user config.
-- Keep pairing/auth UX stable: do not clear saved relay info too early during reconnect flows.
-- Preserve reconnect behavior across relaunch when the local host session is still valid.
-- Preserve the QR/local-relay pairing path: do not regress the scanner -> saved pairing -> connect flow by letting onboarding/auto-reconnect race manual scan control.
-- For local relay recovery, keep resumed desktop-thread live mirroring and rollout fallback logic intact so reopened/running threads still recover state even when the rollout file is older than the recent-candidate window.
-
-## Build guardrails
-
-- Do not run Xcode tests unless the user explicitly asks. Do not decide to run them on your own.
-- Markdown files inside Xcode-synced groups can still produce harmless warnings.
-- For small iOS/mobile fixes, prefer inspection and targeted edits over simulator runs by default.
-
-## Local quick runbook
-
-```bash
-cd phodex-bridge
-npm start
-```
+- 保持工作目录、会话及消息身份边界，跨项目会话切换不能按当前仓库过滤掉其他内容。
+- 保持已有配对、重连、实时消息与历史分页；不要通过重置配对、丢消息或大幅延迟更新来掩盖问题。
+- 消息按稳定条目标识合并；恢复和迟到消息不能覆盖较新的会话状态。
+- 不记录完整 relay sessionId 或其他 bearer 类标识，使用脱敏或哈希。

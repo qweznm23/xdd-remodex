@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.draft
 
+import com.remodex.mobile.core.config.FeatureFlags
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,6 +49,7 @@ import com.remodex.mobile.services.SubscriptionService
 import com.remodex.mobile.ui.agent.truncatePathMiddle
 import com.remodex.mobile.ui.sidebar.SidebarProjectPickerSheet
 import com.remodex.mobile.ui.theme.remodexScreenTopAppBarColors
+import com.remodex.mobile.ui.turn.TURN_COMPOSER_RUNTIME_AUTO_ID
 import com.remodex.mobile.ui.turn.TurnComposerAttachment
 import com.remodex.mobile.ui.turn.TurnComposerBar
 import com.remodex.mobile.ui.turn.TurnComposerEvent
@@ -77,8 +79,8 @@ fun NewChatDraftScreen(
     val activeThreadId by repository.activeThreadId.collectAsStateWithLifecycle()
     val availableModels by repository.availableModels.collectAsStateWithLifecycle()
     val isLoadingModels by repository.isLoadingModels.collectAsStateWithLifecycle()
-    val selectedModelId by repository.selectedModelId.collectAsStateWithLifecycle()
-    val selectedReasoningEffort by repository.selectedReasoningEffort.collectAsStateWithLifecycle()
+    var selectedModelId by remember(route.id) { mutableStateOf(repository.selectedModelId.value) }
+    var selectedReasoningEffort by remember(route.id) { mutableStateOf(repository.selectedReasoningEffort.value) }
     val selectedAccessMode by repository.selectedAccessMode.collectAsStateWithLifecycle()
     val selectedServiceTier by repository.selectedServiceTier.collectAsStateWithLifecycle()
     val projectFolderService = remember(repository) { ProjectFolderService(repository) }
@@ -124,8 +126,20 @@ fun NewChatDraftScreen(
         gitStatusMessage = null
     }
 
+    val runtimeLabels = listOf(
+        stringResource(R.string.turn_runtime_model_fallback),
+        stringResource(R.string.turn_runtime_no_models),
+        stringResource(R.string.turn_runtime_auto),
+        stringResource(R.string.turn_runtime_normal),
+        stringResource(R.string.turn_runtime_reasoning_title_low),
+        stringResource(R.string.turn_runtime_reasoning_title_medium),
+        stringResource(R.string.turn_runtime_reasoning_title_high),
+        stringResource(R.string.turn_runtime_reasoning_title_xhigh),
+    )
     val runtimeControls =
         remember(
+            runtimeLabels,
+            runtimeLoadingLabel,
             availableModels,
             isLoadingModels,
             selectedModelId,
@@ -141,16 +155,16 @@ fun NewChatDraftScreen(
                 selectedAccessMode = selectedAccessMode,
                 selectedServiceTier = selectedServiceTier,
                 loadingLabel = runtimeLoadingLabel,
-                modelFallbackLabel = "Model",
-                noModelsLabel = "No models",
-                autoLabel = "Auto",
-                normalTierLabel = "Normal",
+                modelFallbackLabel = runtimeLabels[0],
+                noModelsLabel = runtimeLabels[1],
+                autoLabel = runtimeLabels[2],
+                normalTierLabel = runtimeLabels[3],
                 reasoningEffortTitles =
                     ReasoningEffortTitleStrings(
-                        low = "Low",
-                        medium = "Medium",
-                        high = "High",
-                        xhigh = "Extra high",
+                        low = runtimeLabels[4],
+                        medium = runtimeLabels[5],
+                        high = runtimeLabels[6],
+                        xhigh = runtimeLabels[7],
                     ),
             )
         }
@@ -192,8 +206,11 @@ fun NewChatDraftScreen(
                         }
                 val thread =
                     repository.startThread(
+                        model = runtimeControls.model.selected.id.takeUnless { it == TURN_COMPOSER_RUNTIME_AUTO_ID },
                         cwd = requestedCwd,
                     )
+                repository.setActiveThreadId(thread.id)
+                repository.setSelectedReasoningEffort(selectedReasoningEffort)
                 repository.startTurn(
                     threadId = thread.id,
                     text = text,
@@ -262,29 +279,31 @@ fun NewChatDraftScreen(
                                 },
                                 enabled = hasSelectedProject,
                             )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.new_chat_draft_git_status)) },
-                                onClick = {
-                                    showThreadMenu = false
-                                    if (!canUseGitActions || isLoadingGitStatus) return@DropdownMenuItem
-                                    val projectPath = selectedProjectPath
-                                    isLoadingGitStatus = true
-                                    gitStatusMessage = null
-                                    scope.launch {
-                                        runCatching {
-                                            GitActionsService(repository, projectPath).status()
-                                        }.onSuccess { status ->
-                                            gitStatusMessage = NewChatDraftLogic.gitStatusSummary(status)
-                                        }.onFailure { error ->
-                                            gitStatusMessage =
-                                                error.message?.takeIf { it.isNotBlank() }
-                                                    ?: error.javaClass.simpleName
+                            if (FeatureFlags.gitIntegrationEnabled) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.new_chat_draft_git_status)) },
+                                    onClick = {
+                                        showThreadMenu = false
+                                        if (!canUseGitActions || isLoadingGitStatus) return@DropdownMenuItem
+                                        val projectPath = selectedProjectPath
+                                        isLoadingGitStatus = true
+                                        gitStatusMessage = null
+                                        scope.launch {
+                                            runCatching {
+                                                GitActionsService(repository, projectPath).status()
+                                            }.onSuccess { status ->
+                                                gitStatusMessage = NewChatDraftLogic.gitStatusSummary(status)
+                                            }.onFailure { error ->
+                                                gitStatusMessage =
+                                                    error.message?.takeIf { it.isNotBlank() }
+                                                        ?: error.javaClass.simpleName
+                                            }
+                                            isLoadingGitStatus = false
                                         }
-                                        isLoadingGitStatus = false
-                                    }
-                                },
-                                enabled = canUseGitActions && !isLoadingGitStatus,
-                            )
+                                    },
+                                    enabled = canUseGitActions && !isLoadingGitStatus,
+                                )
+                            }
                         }
                     }
                 },
@@ -352,8 +371,11 @@ fun NewChatDraftScreen(
                 onPickFiles = {},
                 onTakePhoto = {},
                 onSetPlanModeEnabled = { isPlanModeEnabled = it },
-                onSelectModel = { option -> scope.launch { repository.setSelectedModelId(option.id) } },
-                onSelectReasoningEffort = { option -> scope.launch { repository.setSelectedReasoningEffort(option.id) } },
+                onSelectModel = { option ->
+                    selectedModelId = option.id
+                    selectedReasoningEffort = null
+                },
+                onSelectReasoningEffort = { option -> selectedReasoningEffort = option.id.takeUnless { it == TURN_COMPOSER_RUNTIME_AUTO_ID } },
                 onSelectAccessMode = { option ->
                     scope.launch {
                         repository.setSelectedAccessMode(

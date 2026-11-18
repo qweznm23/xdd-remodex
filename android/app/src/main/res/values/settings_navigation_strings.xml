@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_appearance_summary">Theme: %1$s · Language: %2$s</string>
+    <string name="settings_components">Components &amp; tools</string>
+    <string name="settings_group_preferences">Preferences</string>
+    <string name="settings_group_account_connection">Account &amp; connection</string>
+    <string name="settings_group_application">Application</string>
+    <string name="settings_accounts_auth">Account &amp; authorization</string>
+    <string name="settings_accounts_summary">Current account, sign-in and authorization</string>
+    <string name="settings_usage_summary">Remaining quota, resets and context</string>
+    <string name="settings_connection_summary">Connection status and network settings</string>
+    <string name="settings_components_summary">Phone app, computer bridge and terminal tools</string>
+    <string name="settings_current_connection">Current connection</string>
+    <string name="settings_current_account">Current Codex account</string>
+    <string name="settings_account_identity">Account</string>
+    <string name="settings_account_status">Sign-in status</string>
+    <string name="settings_account_plan">Plan</string>
+    <string name="settings_account_method">Authorization method</string>
+    <string name="settings_auth_valid">Signed in</string>
+    <string name="settings_auth_pending">Awaiting sign-in</string>
+    <string name="settings_auth_expired">Sign in again</string>
+    <string name="settings_auth_missing">Signed out</string>
+    <string name="settings_auth_files">Authorization files</string>
+    <string name="settings_auth_files_scope">This connection does not provide an authorization-file list. The account above represents the currently active authorization.</string>
+    <string name="settings_phone_component">On this phone</string>
+    <string name="settings_computer_components">On the computer</string>
+    <string name="settings_bridge_version">Remodex bridge version</string>
+    <string name="settings_host_system">Host system</string>
+    <string name="settings_host_transport">Codex connection mode</string>
+    <string name="settings_help_tools">Tools &amp; help</string>
+    <string name="settings_terminal_summary">Windows SSH setup and connection guide</string>
+    <string name="settings_host_read_failed">Read failed; retry or view details</string>
+    <string name="settings_host_read_source">From the currently connected computer</string>
+    <string name="settings_font_title">Font</string>
+    <string name="settings_pet_summary">Show and choose a desktop pet</string>
+</resources>

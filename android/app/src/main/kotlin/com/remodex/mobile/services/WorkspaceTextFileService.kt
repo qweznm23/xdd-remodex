@@ -9,6 +9,8 @@ import com.remodex.mobile.data.CodexRepository
 class WorkspaceTextFileService(
     private val repository: CodexRepository,
 ) {
+    internal val transfers = WorkspaceFileTransferService(repository)
+
     data class TextPreview(
         val metadata: WorkspaceTextFileMetadata,
         val content: String,

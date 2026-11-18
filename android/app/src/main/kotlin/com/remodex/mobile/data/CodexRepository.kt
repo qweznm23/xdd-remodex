@@ -32,7 +32,14 @@ import kotlinx.coroutines.flow.emptyFlow
 /**
  * Facade for bridge WebSocket, secure transport, and JSON-RPC.
  */
+data class ComposerPrediction(val sourceTurnId: String, val text: String, val collapsedByTyping: Boolean = false)
+private val emptyPredictions = kotlinx.coroutines.flow.MutableStateFlow<Map<String, ComposerPrediction>>(emptyMap())
+
 interface CodexRepository {
+    val composerPredictions: StateFlow<Map<String, ComposerPrediction>> get() = emptyPredictions
+    fun dismissPredictionForTyping(threadId: String) = Unit
+    fun dismissComposerPrediction(threadId: String, turnId: String) = Unit
+
     val isSessionReady: StateFlow<Boolean>
 
     val connectionState: StateFlow<ConnectionState>
@@ -43,13 +50,22 @@ interface CodexRepository {
     /** Local selection; does not call the bridge until send/UI layers do. */
     val activeThreadId: StateFlow<String?>
 
+    val sidebarActivity: StateFlow<com.remodex.mobile.core.model.CodexSidebarState>
+        get() = EmptySidebarActivity
+    suspend fun setThreadPinned(threadId: String, deviceId: String, pinned: Boolean) {}
+    suspend fun markThreadRead(threadId: String, deviceId: String, revision: String) {}
+
+
     /** Per-thread message rows (persisted + live notifications). */
     val messagesByThread: StateFlow<Map<String, List<CodexMessage>>>
+    val questionThreadIds: StateFlow<Set<String>> get() = EmptyQuestionThreads
+    val conversationQuestionsByThread: StateFlow<Map<String, List<com.remodex.mobile.core.model.CodexStructuredUserInputRequest>>> get() = EmptyConversationQuestions
 
     /** Cursor-backed history state for large threads. */
     val threadHistoryPaginationByThread: StateFlow<Map<String, ThreadHistoryPaginationState>>
 
     val loadingOlderHistoryThreadIds: StateFlow<Set<String>>
+    val loadingHistoryThreadIds: StateFlow<Set<String>> get() = EmptyLoadingHistoryThreads
 
     val olderHistoryErrorByThread: StateFlow<Map<String, String>>
 
@@ -81,6 +97,9 @@ interface CodexRepository {
     /** Account rate limits from the bridge (`account/rateLimits/read` + push updates). */
     val rateLimitBuckets: StateFlow<List<CodexRateLimitBucket>>
 
+    val accountUsageDetails: StateFlow<com.remodex.mobile.core.model.AccountUsageDetails>
+        get() = EmptyAccountUsageDetails
+
     val isLoadingRateLimits: StateFlow<Boolean>
 
     val rateLimitsErrorMessage: StateFlow<String?>
@@ -108,6 +127,14 @@ interface CodexRepository {
     val pendingApprovalRequest: StateFlow<PendingApprovalRequest?>
 
     val pendingStructuredInputRequest: StateFlow<PendingStructuredInputRequest?>
+    val pendingStructuredInputRequests: StateFlow<Map<String, PendingStructuredInputRequest>>
+        get() = EmptyPendingQuestions
+    suspend fun answerConversationQuestions(threadId: String, request: com.remodex.mobile.core.model.CodexStructuredUserInputRequest, answers: Map<String, List<String>>, allowHistorical: Boolean = false) {
+        throw UnsupportedOperationException("Question replies are unavailable")
+    }
+    suspend fun skipConversationQuestions(threadId: String, request: com.remodex.mobile.core.model.CodexStructuredUserInputRequest) {
+        throw UnsupportedOperationException("Question skipping is unavailable")
+    }
 
     /** Recoverable npm / pairing prompts from the service layer (bridge upgrade, unsupported runtime fields). */
     val bridgeUpdatePrompt: StateFlow<CodexBridgeUpdatePrompt?>
@@ -123,6 +150,8 @@ interface CodexRepository {
 
     val previousTrustedMacDeviceId: StateFlow<String?>
 
+    val fileTransferBaseUrl: String? get() = null
+
     val relayMacDeviceId: StateFlow<String?>
 
     /**
@@ -137,6 +166,12 @@ interface CodexRepository {
     )
 
     suspend fun disconnect()
+
+    /** Resolve the current relay session before reconnecting a previously paired device. */
+    suspend fun resolveReconnectSnapshot(
+        snapshot: com.remodex.mobile.core.persistence.RelaySessionSnapshot,
+        relayHostOverride: String = "",
+    ): com.remodex.mobile.core.persistence.RelaySessionSnapshot = snapshot
 
     suspend fun setActiveThreadId(threadId: String?)
 
@@ -202,6 +237,8 @@ interface CodexRepository {
         threadId: String,
         force: Boolean = false,
     )
+
+    suspend fun refreshConversation(threadId: String) = syncThreadHistory(threadId, force = true)
 
     /** Loads the next older [thread/read] page when the bridge/runtime exposes a cursor. */
     suspend fun loadOlderThreadHistory(threadId: String) {
@@ -360,3 +397,14 @@ interface CodexRepository {
 
     fun forgetTrustedDevice(deviceId: String) = Unit
 }
+
+private val EmptySidebarActivity = kotlinx.coroutines.flow.MutableStateFlow(com.remodex.mobile.core.model.CodexSidebarState())
+
+private val EmptyAccountUsageDetails = kotlinx.coroutines.flow.MutableStateFlow(com.remodex.mobile.core.model.AccountUsageDetails())
+
+private val EmptyPendingQuestions = kotlinx.coroutines.flow.MutableStateFlow<Map<String, PendingStructuredInputRequest>>(emptyMap())
+
+private val EmptyQuestionThreads = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+private val EmptyLoadingHistoryThreads = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+
+private val EmptyConversationQuestions = kotlinx.coroutines.flow.MutableStateFlow<Map<String, List<com.remodex.mobile.core.model.CodexStructuredUserInputRequest>>>(emptyMap())

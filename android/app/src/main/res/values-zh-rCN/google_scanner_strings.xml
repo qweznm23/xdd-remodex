@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="google_scan_title">扫描配对二维码</string>
+    <string name="google_scan_hint">打开 Google 扫码器，对准电脑上的配对二维码。首次使用可能需要下载组件。</string>
+    <string name="google_scan_start">打开扫码器</string>
+    <string name="google_scan_preparing">正在准备扫码器…</string>
+    <string name="google_scan_downloading">正在下载扫码组件…</string>
+    <string name="google_scan_paused">组件下载已暂停，正在等待 Google Play 服务恢复…</string>
+    <string name="google_scan_installing">正在安装扫码组件…</string>
+    <string name="google_scan_opened">扫码器已打开</string>
+    <string name="google_scan_canceled">已取消扫码，可以重新扫描或输入配对码。</string>
+    <string name="google_scan_failed">扫码器准备或打开失败，可以重试或输入配对码。</string>
+    <string name="google_scan_no_services">Google Play 服务不可用或需要更新。请启用或更新服务，也可以在下方输入配对码。</string>
+    <string name="google_scan_percent">%1$d%%</string>
+    <string name="google_scan_cancel_wait">停止等待</string>
+    <string name="google_scan_retry">重新扫码</string>
+    <string name="google_scan_details">错误详情</string>
+    <string name="google_scan_close">关闭</string>
+</resources>

@@ -7,9 +7,10 @@ import com.remodex.mobile.AppContainer
 import com.remodex.mobile.core.persistence.OnboardingPreferences
 import com.remodex.mobile.core.persistence.SessionPersistence
 import com.remodex.mobile.core.transport.ConnectionState
+import com.remodex.mobile.core.transport.isBridgeUnavailableClose
 import com.remodex.mobile.data.CodexRepository
-import com.remodex.mobile.pairing.buildWebSocketConnectParams
 import com.remodex.mobile.pairing.reconnectUsingSavedRelaySnapshot
+import com.remodex.mobile.pairing.retryTemporaryBridgeAbsence
 import com.remodex.mobile.services.DesktopHandoffService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,7 +57,6 @@ class RootViewModel(
     }
 
     private fun computeInitialPhase(): RootPhase {
-        // TODO: set to false after onboarding UI QA — restores one-time first-run flow.
         if (FORCE_ONBOARDING_ON_EVERY_COLD_START || !onboardingPreferences.hasSeenOnboarding()) {
             return RootPhase.Onboarding
         }
@@ -131,19 +131,21 @@ class RootViewModel(
     }
 
     fun reconnectSavedPairingManually() {
-        stopAutoReconnectForManualControl()
+        val previousAuto = stopAutoReconnectForManualControl()
         if (manualReconnectJob?.isActive == true) return
         manualReconnectJob =
             viewModelScope.launch {
+                previousAuto?.join()
                 attemptSavedPairingReconnect(RootReconnectAttempt.Manual)
             }
     }
 
     fun wakeSavedComputerDisplay() {
-        stopAutoReconnectForManualControl()
+        val previousAuto = stopAutoReconnectForManualControl()
         if (manualReconnectJob?.isActive == true) return
         manualReconnectJob =
             viewModelScope.launch {
+                previousAuto?.join()
                 wakeSavedComputerDisplayThenReconnect()
             }
     }
@@ -194,20 +196,29 @@ class RootViewModel(
     private fun scheduleAutoReconnectAfterDropIfNeeded(connectionState: ConnectionState) {
         val snap = sessionPersistence.loadRelaySnapshot()
         val hasRelayPairing = !snap.relayUrl.isNullOrBlank() && !snap.relaySessionId.isNullOrBlank()
+        val bridgeWentAway = isBridgeUnavailableClose((connectionState as? ConnectionState.Error)?.relayCloseCode)
+        val previousAuto = autoReconnectJob
+        val previousManual = manualReconnectJob
         if (!shouldScheduleAutoReconnectAfterDrop(
                 phase = _phase.value,
                 hasRelayPairing = hasRelayPairing,
                 sessionReady = repository.isSessionReady.value,
                 connectionState = connectionState,
-                reconnectAlreadyActive = autoReconnectJob?.isActive == true || manualReconnectJob?.isActive == true,
+                reconnectAlreadyActive = previousAuto?.isActive == true || previousManual?.isActive == true,
             )
         ) {
             return
         }
         autoReconnectJob =
             viewModelScope.launch {
+                if (bridgeWentAway) {
+                    // A drop from an established socket may race the foreground job's completion.
+                    previousAuto?.join()
+                    previousManual?.join()
+                    if (repository.connectionState.value !== connectionState) return@launch
+                }
                 delay(AUTO_RECONNECT_AFTER_DROP_DELAY_MS)
-                attemptAutoConnectIfNeeded(minIntervalMs = AUTO_RECONNECT_MIN_INTERVAL_MS)
+                attemptAutoConnectIfNeeded(minIntervalMs = if (bridgeWentAway) 0L else AUTO_RECONNECT_MIN_INTERVAL_MS)
             }
     }
 
@@ -219,67 +230,83 @@ class RootViewModel(
                 hasRelayPairing = hasRelayPairing,
                 sessionReady = repository.isSessionReady.value,
                 connectionState = repository.connectionState.value,
+                forceReconnect = attempt == RootReconnectAttempt.Manual,
             )
         ) {
             return
         }
-        _reconnectUiState.value = RootReconnectUiState(attempt = attempt)
-        runCatching {
-            when (attempt) {
-                RootReconnectAttempt.Auto -> {
-                    val (url, token) =
-                        buildWebSocketConnectParams(
-                            snap,
-                            sessionPersistence.loadLocalRelayHostOverride().orEmpty(),
-                        )
-                    repository.connect(serverUrl = url, token = token, role = null)
-                }
-                RootReconnectAttempt.Manual ->
-                    reconnectUsingSavedRelaySnapshot(
-                        repository,
-                        snap,
-                        sessionPersistence.loadLocalRelayHostOverride().orEmpty(),
-                    )
-                RootReconnectAttempt.WakeDisplay ->
-                    DesktopHandoffService(
-                        repository = repository,
-                        savedRelaySnapshotProvider = { sessionPersistence.loadRelaySnapshot() },
-                    ).wakeDisplay()
-            }
-        }.fold(
-            onSuccess = {
-                trustedReconnectFailureBudget.reset()
-                _reconnectUiState.value = RootReconnectUiState()
-                if (attempt != RootReconnectAttempt.WakeDisplay) {
-                    viewModelScope.launch {
-                        AppContainer.betaEngagementRepository.recordMissionEvent(
-                            eventType = "reconnect_completed",
-                            screen = "connection",
-                        )
+        val attemptState = RootReconnectUiState(attempt = attempt)
+        _reconnectUiState.value = attemptState
+        try {
+            runCatching {
+                when (attempt) {
+                    RootReconnectAttempt.Auto,
+                    RootReconnectAttempt.Manual -> {
+                        retryTemporaryBridgeAbsence { index ->
+                            val current = sessionPersistence.loadRelaySnapshot()
+                            if (index > 0) {
+                                val originalDevice = snap.relayMacDeviceId ?: snap.lastTrustedMacDeviceId
+                                val targetDevice = current.relayMacDeviceId ?: current.lastTrustedMacDeviceId
+                                val stillOffline = shouldAttemptSavedPairingReconnect(
+                                    _phase.value, !current.relaySessionId.isNullOrBlank() && !current.relayUrl.isNullOrBlank(),
+                                    repository.isSessionReady.value, repository.connectionState.value,
+                                )
+                                if (!stillOffline || targetDevice != originalDevice || current.relayUrl != snap.relayUrl) {
+                                    throw kotlinx.coroutines.CancellationException("Reconnect target or connection state changed")
+                                }
+                            }
+                            reconnectUsingSavedRelaySnapshot(repository, current,
+                                sessionPersistence.loadLocalRelayHostOverride().orEmpty())
+                        }
                     }
+                    RootReconnectAttempt.WakeDisplay ->
+                        DesktopHandoffService(
+                            repository = repository,
+                            savedRelaySnapshotProvider = { sessionPersistence.loadRelaySnapshot() },
+                        ).wakeDisplay()
                 }
-            },
-            onFailure = { error ->
-                val recoveryDecision = trustedReconnectFailureBudget.record(error)
-                if (recoveryDecision.shouldDropSavedRelaySession) {
-                    sessionPersistence.clearRelaySession()
-                    _phase.value = RootPhase.PairingScan
-                }
-                _reconnectUiState.value =
-                    RootReconnectUiState(
-                        recoveryAction = recoveryDecision.recoveryAction,
-                        wakeDisplayAvailable =
-                            recoveryDecision.recoveryAction == RootReconnectRecoveryAction.RetrySavedPairing,
-                        lastErrorMessage =
-                            if (recoveryDecision.shouldDropSavedRelaySession) {
-                                recoveryDecision.fallbackMessage
-                            } else {
-                                error.message?.trim()?.takeIf { it.isNotEmpty() }
-                                    ?: recoveryDecision.fallbackMessage
-                            },
-                    )
-            },
-        )
+            }.fold(
+                onSuccess = {
+                    trustedReconnectFailureBudget.reset()
+                    _reconnectUiState.value = RootReconnectUiState()
+                    if (attempt != RootReconnectAttempt.WakeDisplay) {
+                        viewModelScope.launch {
+                            AppContainer.betaEngagementRepository.recordMissionEvent(
+                                eventType = "reconnect_completed",
+                                screen = "connection",
+                            )
+                        }
+                    }
+                },
+                onFailure = { error ->
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    val recoveryDecision = trustedReconnectFailureBudget.record(error)
+                    if (recoveryDecision.shouldDropSavedRelaySession) {
+                        sessionPersistence.clearRelaySession()
+                        _phase.value = RootPhase.PairingScan
+                    }
+                    _reconnectUiState.value =
+                        RootReconnectUiState(
+                            recoveryAction = recoveryDecision.recoveryAction,
+                            wakeDisplayAvailable =
+                                recoveryDecision.recoveryAction == RootReconnectRecoveryAction.RetrySavedPairing &&
+                                error !is com.remodex.mobile.core.transport.ConnectionStageTimeout,
+                            lastErrorMessage =
+                                if (recoveryDecision.shouldDropSavedRelaySession) {
+                                    recoveryDecision.fallbackMessage
+                                } else {
+                                    error.message?.trim()?.takeIf { it.isNotEmpty() }
+                                        ?: recoveryDecision.fallbackMessage
+                                },
+                        )
+                },
+            )
+        } finally {
+            // A cancelled attempt must not leave the spinner active or overwrite a newer attempt.
+            if (_reconnectUiState.value === attemptState) {
+                _reconnectUiState.value = RootReconnectUiState()
+            }
+        }
     }
 
     private suspend fun wakeSavedComputerDisplayThenReconnect() {
@@ -335,17 +362,19 @@ class RootViewModel(
         )
     }
 
-    private fun stopAutoReconnectForManualControl() {
-        autoReconnectJob?.cancel()
+    private fun stopAutoReconnectForManualControl(): Job? {
+        val previous = autoReconnectJob
+        previous?.cancel()
         autoReconnectJob = null
         if (_reconnectUiState.value.attempt == RootReconnectAttempt.Auto) {
             _reconnectUiState.value = RootReconnectUiState()
         }
+        return previous
     }
 
     companion object {
         /** When true, always open the 5-step onboarding on process start (QA only). */
-        private const val FORCE_ONBOARDING_ON_EVERY_COLD_START = true
+        private const val FORCE_ONBOARDING_ON_EVERY_COLD_START = false
 
         private const val AUTO_RECONNECT_AFTER_DROP_DELAY_MS = 1_000L
         private const val AUTO_RECONNECT_MIN_INTERVAL_MS = 5_000L

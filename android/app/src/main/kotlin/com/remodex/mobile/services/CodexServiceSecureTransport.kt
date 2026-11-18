@@ -33,9 +33,11 @@ import kotlinx.coroutines.channels.ClosedReceiveChannelException
  * Must stay `iphone` until phodex-bridge `secure-transport.js` accepts another literal for this direction.
  */
 private const val SECURE_ENVELOPE_MOBILE_SENDER = "iphone"
-private const val MAX_CIPHERTEXT_BASE64_LENGTH = 2 * 1024 * 1024
+// bridge.js compacts history JSON to 4 MiB. Wrapping that JSON as payloadText can
+// double its UTF-8 size through escaping; reserve another 512 bytes for wrapper metadata.
+internal const val MAX_SECURE_PLAINTEXT_BYTES = 2 * 4 * 1024 * 1024 + 512
+internal const val MAX_CIPHERTEXT_BASE64_LENGTH = 4 * ((MAX_SECURE_PLAINTEXT_BYTES + 2) / 3)
 private const val MAX_TAG_BASE64_LENGTH = 64
-private const val MAX_SECURE_PLAINTEXT_BYTES = 1 * 1024 * 1024
 
 /**
  * Mirrors [CodexService+SecureTransport.swift](../../../../../../../../CodexMobile/CodexMobile/Services/CodexService+SecureTransport.swift).
@@ -78,10 +80,22 @@ internal fun CodexService.handleEncryptedEnvelope(raw: String) {
     if (envelope.sender != "mac") return
     if (envelope.counter < 0) return
     if (envelope.counter <= sess.lastInboundCounter) return
-    if (
-        envelope.ciphertext.length > MAX_CIPHERTEXT_BASE64_LENGTH ||
-        envelope.tag.length > MAX_TAG_BASE64_LENGTH
-    ) {
+    if (envelope.ciphertext.length > MAX_CIPHERTEXT_BASE64_LENGTH) {
+        rejectOversizedInbound(
+            CodexSecureTransportError.PayloadTooLarge(
+                "secure_ciphertext", envelope.ciphertext.length, MAX_CIPHERTEXT_BASE64_LENGTH,
+                "base64_chars", envelope.counter,
+            ),
+        )
+        return
+    }
+    if (envelope.tag.length > MAX_TAG_BASE64_LENGTH) {
+        rejectOversizedInbound(
+            CodexSecureTransportError.PayloadTooLarge(
+                "secure_tag", envelope.tag.length, MAX_TAG_BASE64_LENGTH,
+                "base64_chars", envelope.counter,
+            ),
+        )
         return
     }
 
@@ -93,7 +107,15 @@ internal fun CodexService.handleEncryptedEnvelope(raw: String) {
             base64DecodeOrEmpty(envelope.ciphertext),
             base64DecodeOrEmpty(envelope.tag),
         ) ?: return
-    if (plaintext.size > MAX_SECURE_PLAINTEXT_BYTES) return
+    if (plaintext.size > MAX_SECURE_PLAINTEXT_BYTES) {
+        rejectOversizedInbound(
+            CodexSecureTransportError.PayloadTooLarge(
+                "secure_plaintext", plaintext.size, MAX_SECURE_PLAINTEXT_BYTES,
+                "bytes", envelope.counter,
+            ),
+        )
+        return
+    }
 
     val payload =
         runCatching {

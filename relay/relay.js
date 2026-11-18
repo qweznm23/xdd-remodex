@@ -197,13 +197,13 @@ function setupRelay(
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
       relayMetrics.closedConnections += 1;
       if (role === "mac") {
         if (session.mac === ws) {
           session.mac = null;
           unregisterLiveMacSession(session.macRegistration, sessionId);
-          console.log(`[relay] Mac disconnected -> ${relaySessionLogLabel(sessionId)}`);
+          console.log(`[relay] Mac disconnected -> ${relaySessionLogLabel(sessionId)} code=${code} reason=${JSON.stringify(reason.toString())}`);
           if (session.clients.size > 0) {
             scheduleMacAbsenceTimeout(sessionId, {
               macAbsenceGraceMs,
@@ -218,7 +218,7 @@ function setupRelay(
         session.clients.delete(ws);
         console.log(
           `[relay] Mobile disconnected (${role}) -> ${relaySessionLogLabel(sessionId)} `
-          + `(${session.clients.size} remaining)`
+          + `(${session.clients.size} remaining) code=${code} reason=${JSON.stringify(reason.toString())}`
         );
       }
       scheduleCleanup(sessionId, { setTimeoutFn });

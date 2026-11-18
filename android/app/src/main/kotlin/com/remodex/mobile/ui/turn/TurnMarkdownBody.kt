@@ -1,4 +1,4 @@
-﻿package com.remodex.mobile.ui.turn
+package com.remodex.mobile.ui.turn
 
 import android.content.ClipData
 import androidx.compose.foundation.background
@@ -43,7 +43,6 @@ import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
-import com.mikepenz.markdown.model.rememberMarkdownState
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.TurnTimelineCacheKey
 import java.net.URI
@@ -69,13 +68,19 @@ fun TurnMarkdownBody(
     val segments = TurnMarkdownRenderCache.fenceSegments(displayMarkdown)
     val dispatchRepoDiff = LocalOpenRepoDiffForMarkdownLink.current
     val threadProjectRoot = LocalThreadGitProjectRoot.current
+    var videoPreview by remember(keyPrefix,threadProjectRoot) { mutableStateOf<String?>(null) }
+    videoPreview?.let { ConversationVideoPlayer(it,threadProjectRoot,onDismiss = {videoPreview = null}) }
+    var interactivePreview by remember(keyPrefix, threadProjectRoot) { mutableStateOf<InteractivePageReference?>(null) }
+    interactivePreview?.let { InteractivePageDialog(it, threadProjectRoot) { interactivePreview = null } }
     val defaultUriHandler = LocalUriHandler.current
     val repoFileMarkdownUriHandler =
-        remember(dispatchRepoDiff, defaultUriHandler, threadProjectRoot) {
+        remember(dispatchRepoDiff, defaultUriHandler, threadProjectRoot, keyPrefix) {
             object : UriHandler {
                 override fun openUri(uri: String) {
                     val trimmed = uri.trim()
-                    if (RepoMarkdownFileLink.previewPath(trimmed) != null) {
+                    if (com.remodex.mobile.core.model.ConversationMediaType.isVideo(trimmed)) {
+                        videoPreview = trimmed
+                    } else if (RepoMarkdownFileLink.previewPath(trimmed) != null) {
                         dispatchRepoDiff(trimmed, threadProjectRoot)
                     } else if (MarkdownUrlPolicy.isAllowedLink(trimmed)) {
                         runCatching { defaultUriHandler.openUri(trimmed) }
@@ -91,11 +96,13 @@ fun TurnMarkdownBody(
         segments.forEachIndexed { index, segment ->
             when (segment) {
                 is MarkdownFenceSegment.Text -> {
-                    val state = rememberMarkdownState(segment.markdown, retainState = true)
+                    val state = rememberCachedMarkdown(segment.markdown)
                     val bodyStyle = MaterialTheme.typography.bodyMedium
                     CompositionLocalProvider(LocalUriHandler provides repoFileMarkdownUriHandler) {
                         Markdown(
-                            markdownState = state,
+                            state = state,
+                            error = { Text(segment.markdown, color = contentColor) },
+                            imageTransformer = ConversationMarkdownImages,
                             modifier = Modifier.fillMaxWidth(),
                             colors = markdownColor(text = contentColor),
                             typography =
@@ -144,6 +151,9 @@ fun TurnMarkdownBody(
                                 ),
                             components =
                                 markdownComponents(
+                                    paragraph = { model -> ConversationImageParagraph(model) },
+                                    image = { model -> MarkdownImageAlbumCard(model) },
+                                    table = { model -> ConversationMarkdownTable(model) },
                                     codeBlock = { model ->
                                         CodeBlockCard(
                                             raw = model.content.trimEnd(),
@@ -159,6 +169,9 @@ fun TurnMarkdownBody(
                                 ),
                         )
                     }
+                }
+                is MarkdownFenceSegment.Interactive -> {
+                    InteractivePageCard(segment.reference) { interactivePreview = segment.reference }
                 }
                 is MarkdownFenceSegment.Code -> {
                     CodeBlockCard(
@@ -264,7 +277,7 @@ private fun CodeBlockCard(
                         .align(Alignment.End)
                         .padding(end = 8.dp, bottom = 4.dp),
             ) {
-                Text("Show full block")
+                Text(stringResource(R.string.markdown_show_full_block))
             }
         }
     }
@@ -294,6 +307,8 @@ private fun codeBlockPreview(raw: String): String {
 
 internal sealed interface MarkdownFenceSegment {
     data class Text(val markdown: String) : MarkdownFenceSegment
+
+    data class Interactive(val reference: InteractivePageReference) : MarkdownFenceSegment
 
     data class Code(
         val code: String,
@@ -333,7 +348,11 @@ internal object MarkdownFenceSegmentParser {
             if (fence == null) {
                 val opening = parseOpeningFence(trimmed)
                 if (opening == null) {
-                    textBuffer += line
+                    val page = InteractivePageReference.parse(line)
+                    if (page != null) {
+                        flushText()
+                        segments += MarkdownFenceSegment.Interactive(page)
+                    } else textBuffer += line
                 } else {
                     flushText()
                     activeFence = opening

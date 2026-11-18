@@ -1,5 +1,7 @@
 package com.remodex.mobile.ui.home
 
+import com.remodex.mobile.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -212,7 +214,7 @@ fun ThreadCompletionBanner(
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onDismiss) {
-                    Text("OK")
+                    Text(stringResource(android.R.string.ok))
                 }
             }
         }

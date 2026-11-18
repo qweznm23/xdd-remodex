@@ -5,12 +5,79 @@ import com.remodex.mobile.core.model.CodexMessageDeliveryState
 import com.remodex.mobile.core.model.CodexImageAttachment
 import com.remodex.mobile.core.model.CodexMessageKind
 import com.remodex.mobile.core.model.CodexMessageRole
+import com.remodex.mobile.ui.agent.TimelineListItem
+import com.remodex.mobile.ui.agent.toTimelineListItems
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 class MessageTimelineStoreTest {
+    @Test
+    fun lateClosingBracketAfterCompletionDoesNotHideFullAnswer() = runTest {
+        val store = MessageTimelineStore()
+        val answer = "已修复历史问题回复。\n\n[下载 APK](http://example.test/app.apk)"
+        store.appendAssistantDelta("thread-1", "turn-1", "item-1", answer.dropLast(1))
+        store.completeAssistantMessage("thread-1", "turn-1", "item-1", answer, assistantPhase = "final_answer")
+        store.appendAssistantDelta("thread-1", "turn-1", "item-1", ")")
+        store.finishStreamingMessages("thread-1", "turn-1")
+
+        val visible = store.messagesByThread.value.getValue("thread-1").toTimelineListItems()
+            .filterIsInstance<TimelineListItem.Single>()
+        assertEquals(listOf(answer), visible.map { it.message.text })
+        assertEquals(1, store.messagesByThread.value.getValue("thread-1").size)
+    }
+
+    @Test
+    fun lateDeltaAfterTurnFinishContinuesSameItemUntilFullCompletion() = runTest {
+        val store = MessageTimelineStore()
+        store.appendAssistantDelta("thread-1", "turn-1", "item-1", "完整回复(")
+        val rowId = store.messagesByThread.value.getValue("thread-1").single().id
+        store.finishStreamingMessages("thread-1", "turn-1")
+        store.appendAssistantDelta("thread-1", "turn-1", "item-1", ")")
+        assertEquals("完整回复()", store.messagesByThread.value.getValue("thread-1").single().text)
+        store.completeAssistantMessage("thread-1", "turn-1", "item-1", "完整回复()")
+        assertEquals(rowId, store.messagesByThread.value.getValue("thread-1").single().id)
+    }
+
+    @Test
+    fun completedItemStaysCompleteAfterPersistenceAndDoesNotBlockNextItem() = runTest {
+        val store = MessageTimelineStore()
+        store.completeAssistantMessage("thread-1", "turn-1", "item-1", "完整回复()")
+        val persisted = Json.encodeToString(store.messagesByThread.value.getValue("thread-1"))
+        val restored = MessageTimelineStore(mapOf("thread-1" to Json.decodeFromString<List<CodexMessage>>(persisted)))
+        restored.appendAssistantDelta("thread-1", "turn-1", "item-1", ")")
+        restored.appendAssistantDelta("thread-1", "turn-2", "item-2", "下一条回复")
+        val rows = restored.messagesByThread.value.getValue("thread-1")
+        assertEquals(listOf("完整回复()", "下一条回复"), rows.map { it.text })
+        assertEquals(listOf(false, true), rows.map { it.isStreaming })
+    }
+
+    @Test
+    fun lateDeltaDoesNotAppendToUnrelatedCompletedItemWithoutId() = runTest {
+        val store = MessageTimelineStore()
+        store.completeAssistantMessage("thread-1", "turn-1", null, "上一条完整回复")
+        store.appendAssistantDelta("thread-1", "turn-1", "next-item", "下一条回复")
+        assertEquals(listOf("上一条完整回复", "下一条回复"), store.messagesByThread.value.getValue("thread-1").map { it.text })
+    }
+
+    @Test
+    fun rolloutMirrorDoesNotReplaceNativeIdentityBeforeLateDelta() = runTest {
+        val nativeId = "msg-native"
+        val mirrorId = "rollout-agent-message:thread-1:turn-1:timestamp:hash"
+        for (ids in listOf(listOf(nativeId, mirrorId), listOf(mirrorId, nativeId))) {
+            val store = MessageTimelineStore()
+            ids.forEach { store.completeAssistantMessage("thread-1", "turn-1", it, "完整回复()") }
+            store.appendAssistantDelta("thread-1", "turn-1", nativeId, ")")
+            val row = store.messagesByThread.value.getValue("thread-1").single()
+            assertEquals("完整回复()", row.text)
+            assertEquals(nativeId, row.itemId)
+            assertEquals(false, row.isStreaming)
+        }
+    }
+
     @Test
     fun init_dedupesPersistedPhotoUserEchoRows() {
         val payload = "data:image/jpeg;base64,abc"

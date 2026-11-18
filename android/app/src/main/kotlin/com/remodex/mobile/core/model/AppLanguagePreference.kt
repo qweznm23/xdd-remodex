@@ -2,6 +2,7 @@ package com.remodex.mobile.core.model
 
 enum class AppLanguagePreference {
     english,
+    simplifiedChinese,
     system,
     ;
 

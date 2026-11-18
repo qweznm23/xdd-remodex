@@ -5,6 +5,8 @@
 // Depends on: http, ws, ./relay, ./push-service
 
 const http = require("http");
+const { createFileDownloads } = require("./file-downloads");
+const { createUpdateDownloads } = require("./update-downloads");
 const { monitorEventLoopDelay } = require("perf_hooks");
 const { WebSocketServer } = require("ws");
 const {
@@ -20,13 +22,18 @@ function createRelayServer({
   enablePushService = false,
   exposeDetailedHealth = false,
   httpRateLimiter = createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 120 }),
+  fileRateLimiter = createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 1200 }),
   pushRateLimiter = createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 30 }),
   upgradeRateLimiter = createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 }),
   pushSessionService,
   relayOptions = {},
   trustProxy = false,
+  updateOrigin = "",
+  fileOrigin = "",
 } = {}) {
   const runtimeMetrics = createRuntimeMetrics();
+  const updateDownloads = createUpdateDownloads(updateOrigin);
+  const fileDownloads = createFileDownloads(fileOrigin);
   const pushEnabled = Boolean(enablePushService || pushSessionService);
   const resolvedPushSessionService = pushEnabled
     ? (pushSessionService || createPushSessionService({
@@ -50,6 +57,9 @@ function createRelayServer({
       pushSessionService: resolvedPushSessionService,
       runtimeMetrics,
       trustProxy,
+      updateDownloads,
+      fileDownloads,
+      fileRateLimiter,
     });
   });
   const wss = new WebSocketServer({ noServer: true });
@@ -99,6 +109,9 @@ async function handleHTTPRequest(req, res, {
   pushSessionService,
   runtimeMetrics,
   trustProxy,
+  updateDownloads,
+  fileDownloads,
+  fileRateLimiter,
 }) {
   const pathname = safePathname(req.url);
   if (req.method === "GET" && pathname === "/health") {
@@ -117,9 +130,15 @@ async function handleHTTPRequest(req, res, {
   }
 
   const requestKey = clientAddressKey(req, { trustProxy });
+  if (req.method === "GET" && pathname === "/files/stream") {
+    if (!fileRateLimiter.allow(requestKey)) return writeRateLimitResponse(res);
+    if (fileDownloads(req,res,pathname)) return;
+  }
   if (!httpRateLimiter.allow(requestKey)) {
     return writeRateLimitResponse(res);
   }
+
+  if (updateDownloads(req, res, pathname)) return;
 
   if (req.method === "POST" && pathname === "/v1/push/session/register-device") {
     if (!pushEnabled) {
@@ -414,7 +433,7 @@ if (require.main === module) {
     ["REMODEX_ENABLE_PUSH_SERVICE", "PHODEX_ENABLE_PUSH_SERVICE"]
   ) ?? false;
   const bindHost = process.env.RELAY_BIND_HOST || "0.0.0.0";
-  const { server } = createRelayServer({ enablePushService, trustProxy });
+  const { server } = createRelayServer({ enablePushService, trustProxy, updateOrigin: process.env.REMODEX_UPDATE_ORIGIN || "", fileOrigin: process.env.REMODEX_FILE_ORIGIN || "" });
   server.listen(port, bindHost, () => {
     console.log(`[relay] listening on ${bindHost}:${port}`);
   });

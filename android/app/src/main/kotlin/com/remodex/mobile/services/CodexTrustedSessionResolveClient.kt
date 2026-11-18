@@ -144,9 +144,10 @@ internal class CodexTrustedSessionResolveClient(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (call.isCanceled()) throw CancellationException()
+                if (call.isCanceled()) throw CancellationException("Trusted session resolve cancelled", error)
                 throw CodexTrustedSessionResolveError.Network(
                     "Could not reach the trusted device relay. Check your connection and try again.",
+                    error,
                 )
             } finally {
                 if (activeCall == call) activeCall = null
@@ -155,12 +156,14 @@ internal class CodexTrustedSessionResolveClient(
             val data = httpResponse.body?.string().orEmpty()
             if (httpResponse.code in 200..299) {
                 val resolved =
-                    runCatching {
+                    try {
                         json.decodeFromString<CodexTrustedSessionResolveResponse>(data)
-                    }.getOrNull()
-                        ?: throw CodexTrustedSessionResolveError.InvalidResponse(
+                    } catch (error: kotlinx.serialization.SerializationException) {
+                        throw CodexTrustedSessionResolveError.InvalidResponse(
                             "The trusted device relay returned malformed session data.",
+                            error,
                         )
+                    }
                 if (!resolved.ok) {
                     throw CodexTrustedSessionResolveError.InvalidResponse(
                         "The trusted device relay returned malformed session data.",
@@ -194,49 +197,60 @@ internal class CodexTrustedSessionResolveClient(
         }
     }
 
-    private fun validateResolvedTrustedSession(
-        resolved: CodexTrustedSessionResolveResponse,
-        trustedMac: CodexTrustedMacRecord,
-        phoneDeviceId: String,
-        phoneIdentityPublicKey: String,
-        nonce: String,
-        timestamp: Long,
-    ) {
-        if (resolved.macDeviceId != trustedMac.macDeviceId) {
-            throw CodexTrustedSessionResolveError.InvalidResponse(
-                "The trusted device relay returned a session for a different device.",
-            )
-        }
-        val resolvedPublicKey = resolved.macIdentityPublicKey.trim()
-        if (resolvedPublicKey != trustedMac.macIdentityPublicKey.trim()) {
-            throw CodexTrustedSessionResolveError.InvalidResponse(
-                "The trusted device relay returned a session with a mismatched Mac identity key.",
-            )
-        }
-        val skewSeconds = kotlin.math.abs(resolved.responseTimestamp - System.currentTimeMillis()) / 1000.0
-        if (skewSeconds > CODEX_TRUSTED_SESSION_RESOLVE_CLOCK_SKEW_TOLERANCE_SECONDS) {
-            throw CodexTrustedSessionResolveError.InvalidResponse(
-                "The trusted device relay returned an expired session response.",
-            )
-        }
-        val responseTranscript =
-            codexTrustedSessionResolveResponseTranscriptBytes(
-                macDeviceId = resolved.macDeviceId,
-                macIdentityPublicKey = resolved.macIdentityPublicKey,
-                displayName = resolved.displayName,
-                sessionId = resolved.sessionId,
-                phoneDeviceId = phoneDeviceId,
-                phoneIdentityPublicKey = phoneIdentityPublicKey,
-                nonce = nonce,
-                timestamp = timestamp,
-                responseTimestamp = resolved.responseTimestamp,
-            )
-        val macPub = base64DecodeOrEmpty(resolved.macIdentityPublicKey)
-        val macSig = base64DecodeOrEmpty(resolved.signature)
-        if (!RemodexNativeCrypto.ed25519Verify(responseTranscript, macSig, macPub)) {
-            throw CodexTrustedSessionResolveError.InvalidResponse(
-                "The trusted device relay returned an invalid session signature.",
-            )
-        }
+}
+
+internal fun validateResolvedTrustedSession(
+    resolved: CodexTrustedSessionResolveResponse,
+    trustedMac: CodexTrustedMacRecord,
+    phoneDeviceId: String,
+    phoneIdentityPublicKey: String,
+    nonce: String,
+    timestamp: Long,
+) {
+    if (resolved.macDeviceId != trustedMac.macDeviceId) {
+        throw CodexTrustedSessionResolveError.InvalidResponse(
+            "The trusted device relay returned a session for a different device.",
+        )
+    }
+    val resolvedPublicKey = resolved.macIdentityPublicKey.trim()
+    if (resolvedPublicKey != trustedMac.macIdentityPublicKey.trim()) {
+        throw CodexTrustedSessionResolveError.InvalidResponse(
+            "The trusted device relay returned a session with a mismatched Mac identity key.",
+        )
+    }
+    if (resolved.sessionId.isBlank()) {
+        throw CodexTrustedSessionResolveError.InvalidResponse("The relay returned an empty session ID.")
+    }
+    // The bundled relay only discovers the live room. Authentication still happens
+    // in performSecureHandshake, using the saved identity key and fresh challenge.
+    if (resolved.responseTimestamp == null && resolved.signature == null) return
+    val responseTimestamp = resolved.responseTimestamp
+        ?: throw CodexTrustedSessionResolveError.InvalidResponse("The signed session response is missing its timestamp.")
+    val signature = resolved.signature?.takeIf { it.isNotBlank() }
+        ?: throw CodexTrustedSessionResolveError.InvalidResponse("The signed session response is missing its signature.")
+    val skewSeconds = kotlin.math.abs(responseTimestamp - System.currentTimeMillis()) / 1000.0
+    if (skewSeconds > CODEX_TRUSTED_SESSION_RESOLVE_CLOCK_SKEW_TOLERANCE_SECONDS) {
+        throw CodexTrustedSessionResolveError.InvalidResponse(
+            "The trusted device relay returned an expired session response.",
+        )
+    }
+    val responseTranscript =
+        codexTrustedSessionResolveResponseTranscriptBytes(
+            macDeviceId = resolved.macDeviceId,
+            macIdentityPublicKey = resolved.macIdentityPublicKey,
+            displayName = resolved.displayName,
+            sessionId = resolved.sessionId,
+            phoneDeviceId = phoneDeviceId,
+            phoneIdentityPublicKey = phoneIdentityPublicKey,
+            nonce = nonce,
+            timestamp = timestamp,
+            responseTimestamp = responseTimestamp,
+        )
+    val macPub = base64DecodeOrEmpty(resolved.macIdentityPublicKey)
+    val macSig = base64DecodeOrEmpty(signature)
+    if (!RemodexNativeCrypto.ed25519Verify(responseTranscript, macSig, macPub)) {
+        throw CodexTrustedSessionResolveError.InvalidResponse(
+            "The trusted device relay returned an invalid session signature.",
+        )
     }
 }

@@ -86,7 +86,6 @@ fun ConversationHeader(
     gitActionsBusy: Boolean,
     showsDiscardRuntimeRecovery: Boolean,
     isGitActionEnabled: Boolean,
-    isGitInitialized: Boolean,
     showDesktopHandoff: Boolean,
     handingOffToDesktop: Boolean,
     showWorktreeHandoff: Boolean,
@@ -97,11 +96,13 @@ fun ConversationHeader(
     onContinueDesktop: () -> Unit,
     onWorktreeHandoff: () -> Unit,
     onStopTurn: () -> Unit,
+    onRefreshConversation: (() -> Unit)? = null,
+    refreshingConversation: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var overflowExpanded by remember { mutableStateOf(false) }
     var gitMenuExpanded by remember { mutableStateOf(false) }
-    val showOverflow = showDesktopHandoff || showWorktreeHandoff || showTurnStop
+    val showOverflow = onRefreshConversation != null || showDesktopHandoff || showWorktreeHandoff || showTurnStop
     val gitMenuCd = stringResource(R.string.cd_git_actions_menu)
     val chrome = isAgentLightChrome()
     val pathColor =
@@ -198,7 +199,6 @@ fun ConversationHeader(
                 gitActionsBusy = gitActionsBusy,
                 showsDiscardRuntimeRecovery = showsDiscardRuntimeRecovery,
                 isGitActionEnabled = isGitActionEnabled,
-                isGitInitialized = isGitInitialized,
                 gitMenuCd = gitMenuCd,
                 showOverflow = showOverflow,
                 overflowExpanded = overflowExpanded,
@@ -214,6 +214,8 @@ fun ConversationHeader(
                 onContinueDesktop = onContinueDesktop,
                 onWorktreeHandoff = onWorktreeHandoff,
                 onStopTurn = onStopTurn,
+                onRefreshConversation = onRefreshConversation,
+                refreshingConversation = refreshingConversation,
             )
         }
     }
@@ -278,7 +280,6 @@ private fun HeaderActions(
     gitActionsBusy: Boolean,
     showsDiscardRuntimeRecovery: Boolean,
     isGitActionEnabled: Boolean,
-    isGitInitialized: Boolean,
     gitMenuCd: String,
     showOverflow: Boolean,
     overflowExpanded: Boolean,
@@ -294,6 +295,8 @@ private fun HeaderActions(
     onContinueDesktop: () -> Unit,
     onWorktreeHandoff: () -> Unit,
     onStopTurn: () -> Unit,
+    onRefreshConversation: (() -> Unit)?,
+    refreshingConversation: Boolean,
 ) {
     val colors = rememberSidebarColorPalette()
     Row(
@@ -332,7 +335,6 @@ private fun HeaderActions(
                     canViewRepoDiff = canViewRepoDiff,
                     showsDiscardRuntimeRecovery = showsDiscardRuntimeRecovery,
                     isGitActionEnabled = isGitActionEnabled,
-                    isGitInitialized = isGitInitialized,
                     onSelect = {
                         onSetGitMenuExpanded(false)
                         onGitAction(it)
@@ -345,20 +347,45 @@ private fun HeaderActions(
             Box {
                 RemodexCircleIconButton(
                     onClick = { onSetOverflowExpanded(true) },
-                    contentDescription = stringResource(R.string.turn_top_bar_thread_actions_cd),
+                    contentDescription = stringResource(
+                        if (refreshingConversation) R.string.conversation_refreshing else R.string.turn_top_bar_thread_actions_cd,
+                    ),
                     colors = colors,
                 ) {
-                    Icon(
-                        painter = painterResource(LucideR.drawable.lucide_ic_ellipsis_vertical),
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = colors.primaryText,
-                    )
+                    if (refreshingConversation) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            painter = painterResource(LucideR.drawable.lucide_ic_ellipsis_vertical),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = colors.primaryText,
+                        )
+                    }
                 }
                 RemodexDropdownMenu(
                     expanded = overflowExpanded,
                     onDismissRequest = { onSetOverflowExpanded(false) },
                 ) {
+                    if (onRefreshConversation != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(
+                                if (refreshingConversation) R.string.conversation_refreshing else R.string.conversation_refresh,
+                            )) },
+                            leadingIcon = {
+                                Icon(
+                                    painter = painterResource(LucideR.drawable.lucide_ic_refresh_cw),
+                                    contentDescription = null,
+                                )
+                            },
+                            enabled = !refreshingConversation,
+                            onClick = {
+                                onSetOverflowExpanded(false)
+                                onRefreshConversation()
+                            },
+                        )
+                        if (showDesktopHandoff || showWorktreeHandoff || showTurnStop) HorizontalDivider()
+                    }
                     if (showDesktopHandoff) {
                         DropdownMenuItem(
                             text = {
@@ -426,7 +453,6 @@ private fun GitActionsDropdown(
     canViewRepoDiff: Boolean,
     showsDiscardRuntimeRecovery: Boolean,
     isGitActionEnabled: Boolean,
-    isGitInitialized: Boolean,
     onSelect: (TurnGitActionKind) -> Unit,
 ) {
     RemodexDropdownMenu(
@@ -481,14 +507,6 @@ private fun GitActionsDropdown(
             onClick = { onSelect(TurnGitActionKind.syncNow) },
             enabled = isGitActionEnabled,
         )
-        if (!isGitInitialized) {
-            GitActionMenuItem(
-                label = TurnGitActionKind.initialize.title,
-                iconRes = LucideR.drawable.lucide_ic_git_branch,
-                onClick = { onSelect(TurnGitActionKind.initialize) },
-                enabled = isGitActionEnabled,
-            )
-        }
         if (showsDiscardRuntimeRecovery) {
             HorizontalDivider()
             GitActionMenuSectionHeader(stringResource(R.string.git_action_section_recovery))

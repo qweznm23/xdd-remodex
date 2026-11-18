@@ -27,6 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertSame
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.runTest
@@ -349,21 +350,19 @@ class GitActionsServiceTest {
     @Test
     fun mapsRpcFailureToBridgeFailure() =
         runTest {
+            val original = CodexServiceError.RpcFailure(
+                RPCError(-32000, "failed", JSONValue.Obj(mapOf("errorCode" to JSONValue.Str("branch_not_found")))),
+            )
+            val suppressed = IllegalStateException("secondary diagnostic")
+            original.addSuppressed(suppressed)
             val repo =
                 GitActionsFakeRepository { _, _ ->
-                    throw CodexServiceError.RpcFailure(
-                        RPCError(
-                            code = -32000,
-                            message = "failed",
-                            data =
-                                JSONValue.Obj(
-                                    mapOf("errorCode" to JSONValue.Str("branch_not_found")),
-                                ),
-                        ),
-                    )
+                    throw original
                 }
             val err = assertFailsWith<GitActionsError.BridgeFailure> { GitActionsService(repo, "/x").status() }
             assertEquals("branch_not_found", err.errorCode)
+            assertSame(original, err.cause)
+            assertSame(suppressed, err.cause!!.suppressed.single())
         }
 
     @Test

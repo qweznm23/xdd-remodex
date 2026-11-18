@@ -1,8 +1,12 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -85,19 +89,9 @@ private enum class ComposerRuntimePopupTab {
     Reasoning,
 }
 
-private data class ComposerRuntimeModelEntry(
-    val id: String,
-    val label: String,
-)
-
-private val ComposerRuntimeModelEntries =
-    listOf(
-        ComposerRuntimeModelEntry("gpt-5.5", "GPT-5.5"),
-        ComposerRuntimeModelEntry("gpt-5.4", "gpt-5.4"),
-        ComposerRuntimeModelEntry("gpt-5.4-mini", "GPT-5.4-Mini"),
-        ComposerRuntimeModelEntry("gpt-5.3-codex", "gpt-5.3-codex"),
-        ComposerRuntimeModelEntry("gpt-5.2", "gpt-5.2"),
-    )
+/** Only server-backed options are selectable; the chip may still show a historical model. */
+internal fun composerModelPopupOptions(state: TurnComposerRuntimeSelectorState): List<TurnComposerRuntimeOption> =
+    state.options.map { it.copy(enabled = it.enabled && state.enabled) }
 
 private val ComposerRuntimeReasoningOrder = listOf("low", "medium", "high", "xhigh")
 
@@ -116,26 +110,7 @@ internal fun UnifiedComposerModelRuntimeChip(
     var selectedTab by remember { mutableStateOf(ComposerRuntimePopupTab.Model) }
 
     val modelState = runtimeControls.model
-    val modelOptions =
-        remember(modelState.selected, modelState.options) {
-            if (modelState.options.any { it.id == modelState.selected.id }) {
-                modelState.options
-            } else {
-                listOf(modelState.selected) + modelState.options
-            }
-        }
-    val popupModelOptions =
-        remember(modelOptions) {
-            ComposerRuntimeModelEntries.map { entry ->
-                modelOptions.firstOrNull { it.matchesRuntimeModelEntry(entry) }
-                    ?.copy(label = entry.label)
-                    ?: TurnComposerRuntimeOption(
-                        id = entry.id,
-                        label = entry.label,
-                        enabled = false,
-                    )
-            }
-        }
+    val popupModelOptions = remember(modelState) { composerModelPopupOptions(modelState) }
     val reasoningOptions =
         remember(runtimeControls.reasoningEffort.options) {
             runtimeControls.reasoningEffort.options
@@ -165,12 +140,12 @@ internal fun UnifiedComposerModelRuntimeChip(
         enabled &&
             (hasModelChoice || hasReasoningChoice || canToggleFast || runtimeToolbarMenu.sections.any { it.items.any { item -> item.enabled } })
 
-    Box {
+    Box(modifier = modifier) {
         val showFastModeIcon = runtimeControls.serviceTier.selected.id != TURN_COMPOSER_RUNTIME_AUTO_ID
         val chipShape = RoundedCornerShape(999.dp)
         Box(
             modifier =
-                modifier
+                Modifier
                     .wrapContentWidth()
                     .widthIn(max = 136.dp)
                     .remodexFlatControlChrome(chipShape)
@@ -263,7 +238,11 @@ private fun ComposerRuntimePopup(
     val panelShape = RemodexPopupChrome.PopupShape
     val panelColor = RemodexPopupChrome.surfaceColor()
     val border = RemodexPopupChrome.borderStroke()
-    val listHeight = 28.5.dp * ComposerRuntimeModelEntries.size
+    val optionCount = when (selectedTab) {
+        ComposerRuntimePopupTab.Model -> modelOptions.size
+        ComposerRuntimePopupTab.Reasoning -> reasoningOptions.size
+    }
+    val listHeight = 28.5.dp * optionCount.coerceIn(1, 8)
     Column(
         modifier = Modifier.width(198.dp),
     ) {
@@ -290,7 +269,7 @@ private fun ComposerRuntimePopup(
                     thickness = 0.5.dp,
                 )
                 Column(
-                    modifier = Modifier.height(listHeight),
+                    modifier = Modifier.height(listHeight).verticalScroll(rememberScrollState()),
                 ) {
                     when (selectedTab) {
                         ComposerRuntimePopupTab.Model ->
@@ -326,7 +305,7 @@ private fun ComposerRuntimePopup(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "FAST MODE",
+                        text = stringResource(R.string.onboarding_feature_fast_title),
                         modifier = Modifier.weight(1f),
                         style =
                             MaterialTheme.typography.labelLarge.copy(
@@ -372,13 +351,13 @@ private fun ComposerRuntimeSegmentedTabs(
         horizontalArrangement = Arrangement.spacedBy(1.5.dp),
     ) {
         ComposerRuntimeSegmentTab(
-            label = "Model",
+            label = stringResource(R.string.turn_runtime_model_label),
             selected = selectedTab == ComposerRuntimePopupTab.Model,
             onClick = { onSelectTab(ComposerRuntimePopupTab.Model) },
             modifier = Modifier.weight(1f),
         )
         ComposerRuntimeSegmentTab(
-            label = "Reasoning",
+            label = stringResource(R.string.turn_timeline_kind_thinking),
             selected = selectedTab == ComposerRuntimePopupTab.Reasoning,
             onClick = { onSelectTab(ComposerRuntimePopupTab.Reasoning) },
             modifier = Modifier.weight(1f),
@@ -555,26 +534,18 @@ private fun ComposerRuntimePopupPointer(
     }
 }
 
-private fun TurnComposerRuntimeOption.matchesRuntimeModelEntry(
-    entry: ComposerRuntimeModelEntry,
-): Boolean {
-    val normalizedEntry = entry.id.lowercase()
-    return id.lowercase() == normalizedEntry ||
-        label.lowercase() == normalizedEntry ||
-        label.lowercase() == entry.label.lowercase()
-}
-
 private fun String.reasoningSortKey(): String =
     trim()
         .lowercase()
         .replace('-', '_')
         .replace(' ', '_')
 
+@Composable
 private fun TurnComposerRuntimeOption.reasoningPopupLabel(): String =
     when (id.reasoningSortKey()) {
-        "low" -> "Low"
-        "medium", "mid" -> "Mid"
-        "high" -> "High"
-        "xhigh", "extra_high" -> "XHigh"
+        "low" -> stringResource(R.string.turn_runtime_reasoning_title_low)
+        "medium", "mid" -> stringResource(R.string.turn_runtime_reasoning_title_medium)
+        "high" -> stringResource(R.string.turn_runtime_reasoning_title_high)
+        "xhigh", "extra_high" -> stringResource(R.string.turn_runtime_reasoning_title_xhigh)
         else -> label
     }

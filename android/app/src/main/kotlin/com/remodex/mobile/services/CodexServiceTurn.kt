@@ -102,7 +102,7 @@ internal suspend fun CodexService.startTurnInternal(
         var includeStructuredMentionItems = supportsStructuredMentionInput && fileMentions.isNotEmpty()
         var includesServiceTier = shouldWireServiceTier(supportsServiceTier, _selectedServiceTier.value != null)
         var effortWireMode: TurnStartEffortWireMode? =
-            selectedReasoningEffortForSelectedModel()?.let { TurnStartEffortWireMode.UseEffort }
+            selectedReasoningEffortForThread(threadId)?.let { TurnStartEffortWireMode.UseEffort }
         var didDowngradePlanModeForRuntime = false
         while (true) {
             val params =
@@ -245,7 +245,7 @@ private suspend fun CodexService.markTurnStartAccepted(
     bumpThreadActivityAfterTurn(threadId)
 }
 
-private fun CodexService.bumpThreadActivityAfterTurn(threadId: String) {
+internal fun CodexService.bumpThreadActivityAfterTurn(threadId: String) {
     val list = _threads.value
     if (list.none { it.id == threadId }) return
     publishThreads(
@@ -405,11 +405,12 @@ private fun CodexService.buildTurnStartRequestParams(
             ),
         )
 
-    val threadModel = runtimeModelIdentifierForTurn(threadId)
+    val runtimeSelection = runtimeSelectionForThread(threadId)
+    val threadModel = runtimeSelection.modelId
     if (threadModel != null) {
         params["model"] = JSONValue.Str(threadModel)
     }
-    val reasoningEffort = selectedReasoningEffortForSelectedModel()
+    val reasoningEffort = runtimeSelection.reasoningEffort
     when (effortWireMode) {
         TurnStartEffortWireMode.UseEffort ->
             reasoningEffort?.let { params["effort"] = JSONValue.Str(it) }
@@ -425,7 +426,7 @@ private fun CodexService.buildTurnStartRequestParams(
             buildCollaborationModePayload(
                 collaborationMode,
                 threadModel,
-                selectedReasoningEffortForSelectedModel(),
+                reasoningEffort,
             )
     }
 
@@ -677,42 +678,15 @@ private suspend fun CodexService.sendInterruptRpc(
 }
 
 internal suspend fun CodexService.fetchThreadTurnInterruptSnapshotImpl(threadId: String): ThreadTurnInterruptSnapshot {
-    val camel =
-        JSONValue.Obj(
-            mapOf(
-                "threadId" to JSONValue.Str(threadId),
-                "includeTurns" to JSONValue.Bool(true),
-            ),
-        )
-    val response =
-        try {
-            sendRequestImpl("thread/read", camel)
-        } catch (e: CodexServiceError.RpcFailure) {
-            if (shouldRetryThreadReadSnakeCase(e)) {
-                sendRequestImpl(
-                    "thread/read",
-                    JSONValue.Obj(
-                        mapOf(
-                            "thread_id" to JSONValue.Str(threadId),
-                            "include_turns" to JSONValue.Bool(true),
-                        ),
-                    ),
-                )
-            } else {
-                throw e
-            }
-        }
-    val threadEl = (response.result as? JSONValue.Obj)?.map?.get("thread") as? JSONValue.Obj
-    return ThreadTurnSnapshot.fromThreadObject(threadEl?.map ?: emptyMap())
-}
-
-private fun shouldRetryThreadReadSnakeCase(e: CodexServiceError.RpcFailure): Boolean {
-    val c = e.rpcError.code
-    if (c != -32600 && c != -32602) return false
-    val m = e.rpcError.message.lowercase()
-    val hints =
-        listOf("threadid", "includeturns", "thread_id", "include_turns", "unknown field", "missing field", "invalid")
-    return hints.any { m.contains(it) }
+    val metadata = fetchThreadMetadata(threadId) { method, params -> sendRequestImpl(method, params) }
+    val page = fetchThreadHistoryPage(threadId, null, limit = 1, itemsView = "summary") { method, params ->
+        sendRequestImpl(method, params)
+    }
+    val snapshot = ThreadTurnSnapshot.fromThreadObject(page.threadObject(metadata.map))
+    val latest = page.turns.lastOrNull()?.objectValue
+    return snapshot.copy(latestSuccessfulTurnId = latest?.get("id")?.stringValue?.takeIf {
+        latest["status"]?.stringValue == "completed" && snapshot.interruptibleTurnId == null && !snapshot.hasInterruptibleTurnWithoutId
+    })
 }
 
 private fun shouldRetryInterruptSnakeCase(e: CodexServiceError.RpcFailure): Boolean {

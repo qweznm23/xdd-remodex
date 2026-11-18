@@ -1,19 +1,11 @@
 package com.remodex.mobile.ui.onboarding
 
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,7 +29,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -47,21 +38,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.remodex.mobile.AppContainer
 import com.remodex.mobile.R
 import com.remodex.mobile.core.config.AppEnvironment
@@ -77,6 +60,7 @@ import com.remodex.mobile.pairing.LoopbackRelayException
 import com.remodex.mobile.pairing.applyQrPayloadAndConnect
 import com.remodex.mobile.ui.dev.PairingQrScanner
 import com.remodex.mobile.ui.home.BridgeUpdateSheet
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
@@ -88,7 +72,6 @@ fun QrScannerScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -109,12 +92,6 @@ fun QrScannerScreen(
         }
     }
 
-    fun hasCameraPermission(): Boolean =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-            PackageManager.PERMISSION_GRANTED
-
-    var cameraPermissionGranted by remember { mutableStateOf(hasCameraPermission()) }
-
     fun resetScanner() {
         pendingPayload = null
         scanEnabled = true
@@ -125,33 +102,6 @@ fun QrScannerScreen(
         bridgeUpdateCommand = null
         bridgeUpdateVisible = false
         scannerResetNonce += 1
-    }
-
-    val permissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            cameraPermissionGranted = granted || hasCameraPermission()
-            if (cameraPermissionGranted) {
-                resetScanner()
-            } else {
-                errorMessage = context.getString(R.string.qr_scanner_camera_denied)
-            }
-        }
-
-    DisposableEffect(lifecycleOwner, context) {
-        val observer =
-            LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME) {
-                    val granted = hasCameraPermission()
-                    cameraPermissionGranted = granted
-                    if (granted) {
-                        resetScanner()
-                    }
-                }
-            }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
     }
 
     fun runConnect(payload: CodexPairingQRPayload) {
@@ -175,6 +125,8 @@ fun QrScannerScreen(
                     )
                 }
                 onPairingComplete()
+            } catch (cancel: CancellationException) {
+                throw cancel
             } catch (e: LoopbackRelayException) {
                 errorMessage = e.message
                 pendingPayload = null
@@ -245,6 +197,8 @@ fun QrScannerScreen(
                         handlePairingResult(resolved)
                     }
                 }
+            } catch (cancel: CancellationException) {
+                throw cancel
             } catch (e: Exception) {
                 connecting = false
                 errorMessage = e.message ?: e::class.simpleName
@@ -271,24 +225,17 @@ fun QrScannerScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(0.64f)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(Color(0xFF3B332C)),
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                color = Color.White,
+                contentColor = Color(0xFF151515),
             ) {
-                if (!cameraPermissionGranted) {
-                    PermissionPrompt(
-                        onGrantCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-                } else {
-                    if (scanEnabled && pendingPayload == null) {
+                Column {
+                    if (scanEnabled && pendingPayload == null && !manualPairingDialogVisible) {
                         key(scannerResetNonce) {
                             PairingQrScanner(
-                                modifier = Modifier.matchParentSize(),
+                                modifier = Modifier.fillMaxWidth(),
                                 onDecodedPayload = { raw ->
                                     errorMessage = null
                                     handlePairingResult(validatePairingQrCode(raw))
@@ -296,12 +243,24 @@ fun QrScannerScreen(
                             )
                         }
                     }
-                    QrScannerOverlay(
-                        connecting = connecting,
-                        statusMessage = statusMessage,
-                        errorMessage = errorMessage,
-                        onScanAgain = ::resetScanner,
-                    )
+                    if (connecting) {
+                        Row(
+                            Modifier.padding(20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            Text(statusMessage ?: stringResource(R.string.qr_connecting))
+                        }
+                    }
+                    errorMessage?.let { error ->
+                        Column(Modifier.padding(20.dp)) {
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                            TextButton(onClick = ::resetScanner, enabled = !connecting) {
+                                Text(stringResource(R.string.qr_scan_again))
+                            }
+                        }
+                    }
                 }
             }
 
@@ -311,7 +270,7 @@ fun QrScannerScreen(
                 onClick = { manualPairingDialogVisible = true },
                 enabled = !connecting,
             ) {
-                Text("Enter pairing code")
+                Text(stringResource(R.string.pairing_enter_code))
             }
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -349,13 +308,13 @@ fun QrScannerScreen(
     if (manualPairingDialogVisible) {
         AlertDialog(
             onDismissRequest = { if (!connecting) manualPairingDialogVisible = false },
-            title = { Text("Pair manually") },
+            title = { Text(stringResource(R.string.pairing_manual)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = manualPairingText,
                         onValueChange = { manualPairingText = it },
-                        label = { Text("Pairing code") },
+                        label = { Text(stringResource(R.string.pairing_code_label)) },
                         placeholder = { Text("ABCDEFGHJK") },
                         singleLine = false,
                         minLines = 2,
@@ -368,7 +327,7 @@ fun QrScannerScreen(
                     onClick = ::submitManualPairing,
                     enabled = !connecting,
                 ) {
-                    Text("Connect")
+                    Text(stringResource(R.string.pairing_connect))
                 }
             },
             dismissButton = {
@@ -376,7 +335,7 @@ fun QrScannerScreen(
                     onClick = { manualPairingDialogVisible = false },
                     enabled = !connecting,
                 ) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.git_branch_create_cancel))
                 }
             },
         )
@@ -531,130 +490,5 @@ private fun QrScannerHeader(onBack: () -> Unit) {
             color = Color(0xFF151515),
         )
         Spacer(modifier = Modifier.size(52.dp))
-    }
-}
-
-@Composable
-private fun PermissionPrompt(
-    onGrantCamera: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier.padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = "Camera access is needed to scan.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color.White,
-            textAlign = TextAlign.Center,
-        )
-        Button(onClick = onGrantCamera) {
-            Text(stringResource(R.string.qr_scanner_grant_camera))
-        }
-    }
-}
-
-@Composable
-private fun QrScannerOverlay(
-    connecting: Boolean,
-    statusMessage: String?,
-    errorMessage: String?,
-    onScanAgain: () -> Unit,
-) {
-    val scanSize = 178.dp
-    val scanRadius = 22.dp
-
-    Box(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.Black.copy(alpha = 0.08f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.34f),
-                        ),
-                    ),
-                ),
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val scanSizePx = scanSize.toPx()
-            val scanRadiusPx = scanRadius.toPx()
-            val left = (size.width - scanSizePx) / 2f
-            val top = (size.height - scanSizePx) / 2f
-            val dimPath =
-                Path().apply {
-                    fillType = PathFillType.EvenOdd
-                    addRect(androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height))
-                    addRoundRect(
-                        androidx.compose.ui.geometry.RoundRect(
-                            left = left,
-                            top = top,
-                            right = left + scanSizePx,
-                            bottom = top + scanSizePx,
-                            radiusX = scanRadiusPx,
-                            radiusY = scanRadiusPx,
-                        ),
-                    )
-                }
-            drawPath(dimPath, Color.Black.copy(alpha = 0.42f))
-        }
-
-        Box(
-            modifier =
-                Modifier
-                    .align(Alignment.Center)
-                    .size(scanSize)
-                    .clip(RoundedCornerShape(scanRadius))
-                    .border(2.dp, Color.White.copy(alpha = 0.92f), RoundedCornerShape(scanRadius)),
-        ) {
-            if (connecting) {
-                CircularProgressIndicator(
-                    modifier =
-                        Modifier
-                            .align(Alignment.Center)
-                            .size(42.dp),
-                    color = Color.White,
-                )
-            }
-        }
-
-        Column(
-            modifier =
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 20.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = when {
-                    connecting -> "Connecting"
-                    errorMessage != null -> "Scan failed"
-                    statusMessage != null -> "Code found"
-                    else -> "Scan Code"
-                },
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-            )
-            Text(
-                text = errorMessage ?: "Scan the pairing QR from your desktop bridge",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.76f),
-                textAlign = TextAlign.Center,
-            )
-            if (errorMessage != null) {
-                Button(
-                    onClick = onScanAgain,
-                    modifier = Modifier.padding(top = 8.dp),
-                ) {
-                    Text(stringResource(R.string.qr_scan_again))
-                }
-            }
-        }
     }
 }

@@ -10,8 +10,97 @@ import com.remodex.mobile.core.model.CodexMessageRole
  * Simplified vs iOS [CodexService.mergeHistoryMessages] but same keying idea.
  */
 internal object HistoryMessageMerge {
+    /** A page is an item window, not a complete turn. Keep same-turn page boundaries. */
+    fun mergeItemPage(
+        existing: List<CodexMessage>, incoming: List<CodexMessage>,
+        older: Boolean = false, beforeMessageId: String? = null,
+    ): List<CodexMessage> {
+        val out = existing.toMutableList()
+        fun same(a: CodexMessage, b: CodexMessage) = a.turnId == b.turnId &&
+            a.role == b.role && a.kind == b.kind && !a.itemId.isNullOrBlank() && a.itemId == b.itemId
+        incoming.forEachIndexed { position, row ->
+            val index = out.indexOfFirst { same(it, row) }
+            if (index >= 0) {
+                val current = out[index]
+                // Reuse existing snapshot reconciliation, scoped to this single stable item.
+                out[index] = merge(listOf(current), listOf(row)).first().let {
+                    if (current.isStreaming && !it.isAssistantMessageComplete) it.copy(isStreaming = true) else it
+                }
+            } else {
+                val following = incoming.drop(position + 1).firstNotNullOfOrNull { next ->
+                    out.indexOfFirst { same(it, next) }.takeIf { it >= 0 }
+                }
+                val previous = incoming.take(position).asReversed().firstNotNullOfOrNull { prev ->
+                    out.indexOfFirst { same(it, prev) }.takeIf { it >= 0 }?.plus(1)
+                }
+                val boundary = out.indexOfFirst { it.id == beforeMessageId }.takeIf { it >= 0 }
+                val insertion = following ?: previous ?: if (older) boundary ?: 0 else out.size
+                out.add(insertion, row)
+            }
+        }
+        return normalize(applyIncomingTurnOrder(out, incoming))
+    }
+
+    /** Insert newly recovered turns relative to the overlapping server history window. */
+    fun mergeRecentPage(existing: List<CodexMessage>, incoming: List<CodexMessage>): List<CodexMessage> {
+        val merged = merge(existing, incoming)
+        val known = existing.mapNotNull { it.turnId }.toSet()
+        val order = incoming.mapNotNull { it.turnId }.distinct()
+        val selected = order.toSet()
+        val anchor = merged.indexOfFirst { it.turnId in known && it.turnId in selected }
+        if (anchor < 0) return merged
+        val insertion = merged.take(anchor).count { it.turnId !in selected }
+        val retained = merged.filterNot { it.turnId in selected }.toMutableList()
+        val byTurn = merged.groupBy { it.turnId }
+        retained.addAll(insertion, order.flatMap { byTurn[it].orEmpty() })
+        return retained
+    }
+
+    /** Place newly fetched older turns before the previous page boundary without moving cached/live turns. */
+    fun mergeOlderPage(
+        existing: List<CodexMessage>,
+        incoming: List<CodexMessage>,
+        beforeTurnId: String?,
+    ): List<CodexMessage> {
+        val merged = merge(existing, incoming)
+        val knownTurns = existing.mapNotNull { it.turnId }.toSet()
+        val newOlderTurns = incoming.mapNotNull { it.turnId }.toSet() - knownTurns
+        val olderRows = merged.filter { it.turnId in newOlderTurns }
+        if (olderRows.isEmpty()) return merged
+        val retained = merged.filterNot { it.turnId in newOlderTurns }.toMutableList()
+        val anchor = retained.indexOfFirst { it.turnId == beforeTurnId }.takeIf { it >= 0 } ?: 0
+        retained.addAll(anchor, olderRows)
+        return retained
+    }
+
     fun normalize(messages: List<CodexMessage>): List<CodexMessage> =
-        messages.dedupeCompatibleUserChats()
+        ConversationQuestionCodec.reconcile(messages.dedupeAssistantItemSnapshots().dedupeCompatibleUserChats())
+
+    /** Repair cached duplicate rows created by a delta arriving after an item stopped streaming. */
+    private fun List<CodexMessage>.dedupeAssistantItemSnapshots(): List<CodexMessage> {
+        val out = ArrayList<CodexMessage>(size)
+        val indexes = mutableMapOf<Triple<String, String?, String>, Int>()
+        for (message in this) {
+            val itemId = message.itemId?.takeIf { it.isNotBlank() }
+            if (message.role != CodexMessageRole.assistant || message.kind != CodexMessageKind.chat || itemId == null) {
+                out.add(message)
+                continue
+            }
+            val key = Triple(message.threadId, message.turnId, itemId)
+            val index = indexes[key]
+            val previous = index?.let(out::get)
+            // Only coalesce snapshots whose overlap is known. Ambiguous fragments remain until
+            // official history supplies the full item; never discard text based on length alone.
+            if (previous != null && (previous.text.startsWith(message.text) || previous.text.endsWith(message.text) ||
+                    message.text.startsWith(previous.text) || message.text.endsWith(previous.text))) {
+                out[index] = mergeAssistantChatDuplicate(previous, message)
+            } else {
+                indexes[key] = out.size
+                out.add(message)
+            }
+        }
+        return out
+    }
 
     fun merge(
         existing: List<CodexMessage>,
@@ -20,6 +109,7 @@ internal object HistoryMessageMerge {
         if (incoming.isEmpty()) return existing
         if (existing.isEmpty()) {
             return incoming
+                .dedupeAssistantItemSnapshots()
                 .dedupeCompatibleUserChats()
         }
         val merged = existing.toMutableList()
@@ -154,7 +244,7 @@ internal object HistoryMessageMerge {
             applyIncomingTurnOrder(
                 messages = mergeLateAdditionsIntoTurnPositions(merged, additions),
                 incoming = incoming,
-            ).dedupeCompatibleUserChats()
+            ).dedupeAssistantItemSnapshots().dedupeCompatibleUserChats()
         if (additions.isEmpty() && mergedTimeline == existing) return existing
         return mergedTimeline
     }
@@ -353,9 +443,11 @@ internal object HistoryMessageMerge {
         existing.copy(
             text = mergeSnapshot(existing.text, incoming.text),
             assistantPhase = incoming.assistantPhase ?: existing.assistantPhase,
+            structuredUserInputRequest = incoming.structuredUserInputRequest?.let { ConversationQuestionCodec.mergeRequest(existing.structuredUserInputRequest, it) } ?: existing.structuredUserInputRequest,
             turnId = incoming.turnId ?: existing.turnId,
             itemId = incoming.itemId ?: existing.itemId,
-            isStreaming = incoming.isStreaming,
+            isStreaming = incoming.isStreaming && !existing.isAssistantMessageComplete && !incoming.isAssistantMessageComplete,
+            isAssistantMessageComplete = existing.isAssistantMessageComplete || incoming.isAssistantMessageComplete,
             deliveryState = CodexMessageDeliveryState.confirmed,
             attachments =
                 if (incoming.attachments.isNotEmpty()) {

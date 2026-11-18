@@ -1,9 +1,14 @@
 package com.remodex.mobile.services
 
+import android.util.Log
+import com.remodex.mobile.core.transport.awaitConnectionStage
 import com.remodex.mobile.core.transport.ConnectionState
 import com.remodex.mobile.core.transport.SecureControlMultiplexer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -16,8 +21,8 @@ internal suspend fun CodexService.connectImpl(
     serverUrl: String,
     token: String,
     role: String?,
-) = withContext(Dispatchers.IO) {
-    disconnectImpl(preservePresentationState = true)
+) = connectionLifecycleMutex.withLock { withContext(Dispatchers.IO) {
+    withContext(NonCancellable) { resetBridgeSession(preservePresentationState = true) }
     _connectionState.value = ConnectionState.Connecting
     controlMux = SecureControlMultiplexer(json) { }
     val inbound = Channel<String>(capacity = 64)
@@ -29,24 +34,34 @@ internal suspend fun CodexService.connectImpl(
                     processWireText(line)
                 } catch (_: CancellationException) {
                     break
-                } catch (_: Exception) {
-                    // Keep reader alive (parity with iOS receive loop).
+                } catch (error: Exception) {
+                    Log.e("RemodexConnection", "Receive failed stage=wire_dispatch generation=$connectionGeneration", error)
                 }
             }
         }
 
+    var stage = "websocket_open"
     try {
-        openWebSocketAwaitOpen(parseRelayHttpUrl(serverUrl), token, role)
-        performSecureHandshake()
-        initializeSession()
+        awaitConnectionStage(stage, 15_000L) {
+            openWebSocketAwaitOpen(parseRelayHttpUrl(serverUrl), token, role)
+        }
+        stage = "secure_handshake"
+        awaitConnectionStage(stage, 30_000L) { performSecureHandshake() }
+        stage = "initialize"
+        awaitConnectionStage(stage, 20_000L) { initializeSession() }
     } catch (t: Throwable) {
         closingByClient = true
         try {
-            resetBridgeSession(preservePresentationState = true)
+            withContext(NonCancellable) { resetBridgeSession(preservePresentationState = true) }
+        } catch (cleanup: Throwable) {
+            t.addSuppressed(cleanup)
         } finally {
             closingByClient = false
         }
-        _connectionState.value =
+        if (t !is CancellationException) {
+            Log.e("RemodexConnection", "Connection failed stage=$stage attempt=1", t)
+        }
+        _connectionState.value = if (t is CancellationException) ConnectionState.Offline else
             ConnectionState.Error(
                 t.message?.trim()?.takeIf { it.isNotEmpty() } ?: "Connection failed",
             )
@@ -74,10 +89,10 @@ internal suspend fun CodexService.connectImpl(
         }
     }
     Unit
-}
+} }
 
 internal suspend fun CodexService.disconnectImpl(preservePresentationState: Boolean = false) =
-    withContext(Dispatchers.IO) {
+    connectionLifecycleMutex.withLock { withContext(NonCancellable + Dispatchers.IO) {
         closingByClient = true
         try {
             resetBridgeSession(preservePresentationState = preservePresentationState)
@@ -85,11 +100,12 @@ internal suspend fun CodexService.disconnectImpl(preservePresentationState: Bool
         } finally {
             closingByClient = false
         }
-    }
+    } }
 
 internal suspend fun CodexService.setActiveThreadIdImpl(threadId: String?) {
     _activeThreadId.value = threadId?.trim()?.takeIf { it.isNotEmpty() }
     val id = _activeThreadId.value
+    syncActiveThreadRuntimeSelection()
     persistActiveThreadId(id)
     if (id != null && sessionReady) {
         scope.launch(Dispatchers.IO) {
@@ -99,6 +115,11 @@ internal suspend fun CodexService.setActiveThreadIdImpl(threadId: String?) {
 }
 
 internal suspend fun CodexService.resetBridgeSession(preservePresentationState: Boolean = false) {
+    connectionGeneration++
+    predictionStore.disconnected()
+    val oldSocket = webSocket
+    webSocket = null
+    oldSocket?.cancel()
     sessionReady = false
     _isSessionReady.value = false
     supportsServiceTier = true
@@ -118,6 +139,7 @@ internal suspend fun CodexService.resetBridgeSession(preservePresentationState: 
         }
     }
     clearPendingServerRequests()
+    messageTimelineStore.invalidateLiveQuestions()
     hydratedThreadIds.clear()
     resumedThreadIds.clear()
     _threadHistoryPaginationByThread.value = emptyMap()
@@ -140,12 +162,10 @@ internal suspend fun CodexService.resetBridgeSession(preservePresentationState: 
     if (!preservePresentationState) {
         commandExecutionDetailsStore.clear()
     }
-    wireJob?.cancel()
+    wireJob?.cancelAndJoin()
     wireJob = null
-    wireInbound?.close()
+    wireInbound?.cancel(CancellationException("Connection generation replaced"))
     wireInbound = null
-    webSocket?.close(1000, "client disconnect")
-    webSocket = null
     secureSession = null
     controlMux?.reset()
     controlMux = null
@@ -153,25 +173,36 @@ internal suspend fun CodexService.resetBridgeSession(preservePresentationState: 
         d.cancel(CancellationException("disconnected"))
     }
     pendingRpc.clear()
-    _rateLimitBuckets.value = emptyList()
-    _isLoadingRateLimits.value = false
-    _rateLimitsErrorMessage.value = null
-    _hasResolvedRateLimitsSnapshot.value = false
+    synchronized(rateLimitRefreshGuard) {
+        rateLimitRefreshGuard.reset()
+        _accountUsageDetails.value = com.remodex.mobile.core.model.AccountUsageDetails()
+        _rateLimitBuckets.value = emptyList()
+        _isLoadingRateLimits.value = false
+        _rateLimitsErrorMessage.value = null
+        _hasResolvedRateLimitsSnapshot.value = false
+    }
     _contextWindowUsageByThread.value = emptyMap()
     _contextWindowUsageLoadingThreads.value = emptySet()
     _contextWindowUsageErrorByThread.value = emptyMap()
 }
 
-internal fun CodexService.scheduleWireDrop(message: String) {
+internal fun CodexService.scheduleWireDrop(message: String, generation: Long = connectionGeneration, relayCloseCode: Int? = null) {
     if (closingByClient) return
-    if (!wireDropHandling.compareAndSet(false, true)) return
+    synchronized(wireDropHandling) {
+        if (wireDropGeneration == generation) return
+        wireDropGeneration = generation
+    }
     scope.launch(Dispatchers.IO) {
         try {
-            if (!sessionReady) return@launch
-            resetBridgeSession(preservePresentationState = true)
-            _connectionState.value = ConnectionState.Error(message)
+            connectionLifecycleMutex.withLock {
+                if (connectionGeneration != generation || !sessionReady) return@withLock
+                withContext(NonCancellable) { resetBridgeSession(preservePresentationState = true) }
+                _connectionState.value = ConnectionState.Error(message, relayCloseCode)
+            }
         } finally {
-            wireDropHandling.set(false)
+            synchronized(wireDropHandling) {
+                if (wireDropGeneration == generation) wireDropGeneration = null
+            }
         }
     }
 }

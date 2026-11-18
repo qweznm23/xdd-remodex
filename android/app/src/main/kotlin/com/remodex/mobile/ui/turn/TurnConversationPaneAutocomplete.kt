@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.core.config.FeatureFlags
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexMessageKind
 import com.remodex.mobile.core.model.CodexFuzzyFileMatch
@@ -103,13 +104,14 @@ internal fun decodeSkillAutocompleteSuggestions(result: JSONValue?): List<SkillA
     return out.values.sortedBy { it.label.lowercase() }
 }
 
+private val fileCandidateTokenRegex = Regex("""(?:^|[\s(])([A-Za-z0-9._/\-]+(?:\:[0-9]+)?)""")
+
 internal fun extractThreadFileAutocompleteCandidates(messages: List<CodexMessage>): List<String> {
-    val tokenRegex = Regex("""(?:^|[\s(])([A-Za-z0-9._/\-]+(?:\:[0-9]+)?)""")
     val out = linkedSetOf<String>()
     messages
         .filter { it.kind == CodexMessageKind.fileChange || it.kind == CodexMessageKind.commandExecution }
         .forEach { message ->
-            tokenRegex.findAll(message.text).forEach { match ->
+            fileCandidateTokenRegex.findAll(message.text).forEach { match ->
                 val token = match.groupValues[1].trim()
                 if (token.contains('/') || token.contains('.')) {
                     out += token
@@ -143,7 +145,8 @@ internal fun buildComposerAutocompleteState(
                     "subagents" to "Delegate using subagents",
                     "fork" to "Fork current thread",
                 ).filter { (cmd, _) ->
-                    (query.isBlank() || cmd.startsWith(query, ignoreCase = true)) &&
+                    (FeatureFlags.gitIntegrationEnabled || !cmd.startsWith("review")) &&
+                        (query.isBlank() || cmd.startsWith(query, ignoreCase = true)) &&
                         !(isThreadRunning && (cmd == "fork" || cmd.startsWith("review")))
                 }
                     .take(6)

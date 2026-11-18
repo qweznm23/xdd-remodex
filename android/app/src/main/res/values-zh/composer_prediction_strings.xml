@@ -1,0 +1,7 @@
+<resources>
+    <string name="prediction_heading">建议回复</string>
+    <string name="prediction_action">建议</string>
+    <string name="prediction_fill">填入输入框</string>
+    <string name="prediction_expand">展开全文</string>
+    <string name="prediction_collapse">收起建议</string>
+</resources>

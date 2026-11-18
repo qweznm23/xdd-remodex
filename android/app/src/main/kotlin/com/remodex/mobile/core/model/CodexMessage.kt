@@ -30,7 +30,7 @@ enum class CodexMessageKind {
     @SerialName("subagentAction")
     subagentAction,
     plan,
-    /** Ephemeral structured-input timeline marker when the bridge requests `requestUserInput` (J.7b); dialog remains authoritative; not persisted. */
+    /** Structured question card; persisted metadata never grants authority to answer a stale RPC. */
     @SerialName("userInputPrompt")
     userInputPrompt,
 
@@ -52,6 +52,8 @@ data class CodexMessage(
     val turnId: String? = null,
     val itemId: String? = null,
     val isStreaming: Boolean = false,
+    /** A complete assistant item was received; stopping animation alone does not imply this. */
+    val isAssistantMessageComplete: Boolean = false,
     val deliveryState: CodexMessageDeliveryState = CodexMessageDeliveryState.confirmed,
     val attachments: List<CodexImageAttachment> = emptyList(),
     val planState: CodexPlanState? = null,

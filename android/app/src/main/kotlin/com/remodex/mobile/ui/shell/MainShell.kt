@@ -3,6 +3,13 @@ package com.remodex.mobile.ui.shell
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
+import androidx.activity.compose.BackHandler
+import com.remodex.mobile.services.loadGitToolbarStatus
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +46,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboard
@@ -104,15 +112,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
 private const val GIT_OPERATION_TIMEOUT_MS = 150_000L
-
-private object GitInitPromptSession {
-    /** Process-local so a cold start can show the prompt once, but chat switches stay quiet. */
-    var shownThisProcess: Boolean = false
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -125,6 +130,13 @@ fun MainShell(
     val repository = LocalCodexRepository.current
     val workspaceTextFileService = remember(repository) { WorkspaceTextFileService(repository) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val timelineRenderingEnabled by remember(drawerState) {
+        derivedStateOf {
+            // The full-width sheet only hides the conversation at its settled open anchor.
+            // Resume on the first close/drag frame, not at the end of the drawer animation.
+            !drawerState.isOpen || drawerState.isAnimationRunning || drawerState.currentOffset != 0f
+        }
+    }
     val scope = rememberCoroutineScope()
     val navController = rememberNavController()
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
@@ -137,18 +149,23 @@ fun MainShell(
     val currentReady by rememberUpdatedState(ready)
     var backgroundedWhileReady by remember { mutableStateOf(false) }
     val activeThreadId by repository.activeThreadId.collectAsStateWithLifecycle()
+    var refreshingConversation by remember(activeThreadId) { mutableStateOf(false) }
+    var conversationRefreshError by remember(activeThreadId) { mutableStateOf<String?>(null) }
+    var conversationRefreshJob by remember(activeThreadId) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var historyPresentationReceipt by remember(activeThreadId) { mutableStateOf<com.remodex.mobile.ui.turn.HistoryPresentationReceipt?>(null) }
+    DisposableEffect(activeThreadId) {
+        onDispose { conversationRefreshJob?.cancel() }
+    }
     val threads by repository.threads.collectAsStateWithLifecycle()
     val runningTurnByThread by repository.runningTurnIdByThread.collectAsStateWithLifecycle()
     val protectedRunningFallback by repository.protectedRunningFallbackThreadIds.collectAsStateWithLifecycle()
     val pendingApprovalRequest by repository.pendingApprovalRequest.collectAsStateWithLifecycle()
-    val pendingStructuredInputRequest by repository.pendingStructuredInputRequest.collectAsStateWithLifecycle()
     val bridgeUpdatePrompt by repository.bridgeUpdatePrompt.collectAsStateWithLifecycle()
     val connectionState by repository.connectionState.collectAsStateWithLifecycle()
     val reconnectUiState by viewModel.reconnectUiState.collectAsStateWithLifecycle()
-    val messagesByThread by repository.messagesByThread.collectAsStateWithLifecycle()
     val handoffFallbackMessage = stringResource(R.string.turn_open_desktop_failed_fallback)
     val appName = stringResource(R.string.app_name)
-    val gitStatusLoadingToast = stringResource(R.string.git_status_loading_toast)
+    val gitStatusFailureMessage = stringResource(R.string.git_status_unavailable)
     val context = LocalContext.current
     var desktopHandoffError by remember { mutableStateOf<String?>(null) }
     var handingOffToDesktop by remember { mutableStateOf(false) }
@@ -159,6 +176,7 @@ fun MainShell(
     var repoDiffTotals by remember { mutableStateOf<GitDiffTotals?>(null) }
     var defaultGitBaseBranch by remember { mutableStateOf<String?>(null) }
     var isLoadingRepoDiff by remember { mutableStateOf(false) }
+    var gitStatusFailed by remember { mutableStateOf(false) }
     var gitToolbarRefreshNonce by remember { mutableStateOf(0) }
     var showRepoDiffSheet by remember { mutableStateOf(false) }
     var repoDiffSheetScope by remember { mutableStateOf(GitRepoDiffScope.LastTurn) }
@@ -179,8 +197,6 @@ fun MainShell(
     var gitActionProgressIncludesPullRequest by remember { mutableStateOf(false) }
     var gitActionSheetMode by remember { mutableStateOf<GitActionSheetMode?>(null) }
     var gitActionSheetInitialNextStep by remember { mutableStateOf<GitActionNextStep?>(null) }
-    var showGitInitPrompt by remember { mutableStateOf(false) }
-    var gitInitError by remember { mutableStateOf<String?>(null) }
     var gitSyncAlert by remember { mutableStateOf<TurnGitSyncAlert?>(null) }
     var pendingGitOperation by remember { mutableStateOf<PendingGitOperation?>(null) }
     var showNothingToCommit by remember { mutableStateOf(false) }
@@ -211,10 +227,11 @@ fun MainShell(
         remember(threadPathFull) {
             threadPathFull?.let { truncatePathMiddle(it) }
         }
-    val threadMessages =
-        remember(activeThreadId, messagesByThread) {
-            activeThreadId?.let { tid -> messagesByThread[tid] }.orEmpty()
-        }
+    // The shell only needs chat bodies for Git summaries, never for navigation or connection state.
+    val threadMessages = if (FeatureFlags.gitIntegrationEnabled) {
+        val messagesByThread by repository.messagesByThread.collectAsStateWithLifecycle()
+        activeThreadId?.let { messagesByThread[it] }.orEmpty()
+    } else emptyList()
     val lastTurnDiffTotals =
         remember(threadMessages) {
             val rows = RepoDiffLastTurnAggregator.fileRowsFromLastTurn(threadMessages)
@@ -289,22 +306,8 @@ fun MainShell(
     }
 
     val gitCwd = remember(activeThread) { activeThread?.gitWorkingDirectoryForGitActions() }
-    val showGitControls = ready && !gitCwd.isNullOrBlank()
+    val showGitControls = FeatureFlags.gitIntegrationEnabled && ready && !gitCwd.isNullOrBlank()
     val isWorktreeProject = activeThread?.isManagedWorktreeProject == true
-    LaunchedEffect(repoStatusSnapshot?.state, gitCwd, showGitControls) {
-        val needsInit = repoStatusSnapshot?.state in setOf("not_initialized", "missing_local_repo")
-        if (showGitControls && needsInit) {
-            if (!GitInitPromptSession.shownThisProcess) {
-                GitInitPromptSession.shownThisProcess = true
-                showGitInitPrompt = true
-            } else {
-                showGitInitPrompt = false
-            }
-        } else {
-            showGitInitPrompt = false
-            gitInitError = null
-        }
-    }
     val associatedWorktreePath =
         remember(activeThreadId, threads) {
             activeThreadId?.let { repository.associatedManagedWorktreePathFor(it) }
@@ -328,8 +331,8 @@ fun MainShell(
                     (!isWorktreeProject && (associatedWorktreePath != null || defaultGitBaseBranch != null))
             )
     val gitToastMessage =
-        if (isLoadingRepoDiff && showGitControls && gitActionProgressPhase == null) {
-                gitStatusLoadingToast
+        if (gitStatusFailed && showGitControls && gitActionProgressPhase == null) {
+                gitStatusFailureMessage
             } else {
                 null
             }
@@ -684,36 +687,6 @@ fun MainShell(
         }
     }
 
-    fun initializeRepositoryForCurrentThread() {
-        val cwd = gitCwd ?: return
-        if (repoStatusSnapshot?.isRepo == true) return
-        if (!showGitControls || gitActionBusy) return
-        scope.launch {
-            gitActionBusy = true
-            gitActionProgressMessage = context.getString(R.string.git_init_initializing)
-            gitInitError = null
-            try {
-                withTimeout(GIT_OPERATION_TIMEOUT_MS) {
-                    val git = GitActionsService(repository, cwd)
-                    val result = git.initializeRepository()
-                    val refreshedStatus = result.status ?: runCatching { git.status() }.getOrNull()
-                    repoStatusSnapshot = refreshedStatus
-                    repoDiffTotals = refreshedStatus?.workingTreeDiffTotals
-                    branchesWithStatusSnapshot = runCatching { git.branchesWithStatus() }.getOrNull()
-                    defaultGitBaseBranch = branchesWithStatusSnapshot?.defaultBranch
-                    showGitInitPrompt = false
-                    gitActionProgressMessage = context.getString(R.string.git_init_initialized)
-                }
-            } catch (e: Throwable) {
-                gitActionProgressMessage = null
-                gitInitError = e.message?.ifBlank { null } ?: e.toString()
-            } finally {
-                gitActionBusy = false
-                gitToolbarRefreshNonce++
-            }
-        }
-    }
-
     fun pullRebaseForPendingGitOperation() {
         val cwd = pendingGitOperation?.cwd ?: gitCwd ?: return
         gitSyncAlert = null
@@ -870,10 +843,6 @@ fun MainShell(
             return
         }
         if (!showGitControls || showTurnStop) return
-        if (action == TurnGitActionKind.initialize) {
-            initializeRepositoryForCurrentThread()
-            return
-        }
         when (action) {
             TurnGitActionKind.commit -> {
                 gitActionSheetMode = GitActionSheetMode.commit
@@ -948,7 +917,9 @@ fun MainShell(
         }
     }
 
-    LaunchedEffect(activeThreadId, ready, threads, gitToolbarRefreshNonce) {
+    LaunchedEffect(activeThreadId, ready, gitCwd, showTurnStop, gitToolbarRefreshNonce) {
+        if (!FeatureFlags.gitIntegrationEnabled) return@LaunchedEffect
+        gitStatusFailed = false
         if (!ready) {
             repoStatusSnapshot = null
             branchesWithStatusSnapshot = null
@@ -966,8 +937,7 @@ fun MainShell(
             isLoadingRepoDiff = false
             return@LaunchedEffect
         }
-        val thread = threads.firstOrNull { it.id == tid }
-        val cwd = thread?.gitWorkingDirectoryForGitActions()
+        val cwd = gitCwd
         if (cwd == null) {
             repoStatusSnapshot = null
             branchesWithStatusSnapshot = null
@@ -977,25 +947,50 @@ fun MainShell(
             return@LaunchedEffect
         }
         repoStatusSnapshot = null
+        branchesWithStatusSnapshot = null
+        repoDiffTotals = null
+        defaultGitBaseBranch = null
         isLoadingRepoDiff = true
-        val git = GitActionsService(repository, cwd)
-        val status = runCatching { git.status() }.getOrNull()
-        val branches = runCatching { git.branchesWithStatus() }.getOrNull()
-        repoStatusSnapshot = status
-        branchesWithStatusSnapshot = branches
-        repoDiffTotals = status?.workingTreeDiffTotals
-        defaultGitBaseBranch = branches?.defaultBranch
-        isLoadingRepoDiff = false
+        try {
+            val branches = loadGitToolbarStatus(cwd) {
+                GitActionsService(repository, cwd).branchesWithStatus()
+            }
+            currentCoroutineContext().ensureActive()
+            repoStatusSnapshot = branches.status
+            branchesWithStatusSnapshot = branches
+            repoDiffTotals = branches.status?.workingTreeDiffTotals
+            defaultGitBaseBranch = branches.defaultBranch
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            currentCoroutineContext().ensureActive()
+            gitStatusFailed = true
+            Log.w("RemodexGit", "operation=git/branchesWithStatus stage=toolbar attempt=1 thread=$tid cwd=$cwd", error)
+        } finally {
+            if (currentCoroutineContext().isActive) isLoadingRepoDiff = false
+        }
     }
 
-    val hasSidebarSnapshot = threads.isNotEmpty()
-    LaunchedEffect(drawerState, ready, hasSidebarSnapshot) {
-        snapshotFlow { drawerState.isOpen }
-            .collect { open ->
-                if (open && ready && !hasSidebarSnapshot) {
-                    runCatching { repository.refreshThreads() }
+    LaunchedEffect(drawerState, ready, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            snapshotFlow { drawerState.isOpen }.collectLatest { open ->
+                if (open && ready) {
+                    while (currentCoroutineContext().isActive) {
+                        try {
+                            repository.refreshThreads()
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            // The service records the original failure. Keep the cached list;
+                            // a new visibility/connection cycle or manual refresh can try again.
+                            return@collectLatest
+                        }
+                        // Reconcile missed notifications without reading conversation history.
+                        delay(10_000L)
+                    }
                 }
             }
+        }
     }
 
     DisposableEffect(navController, drawerState, scope) {
@@ -1009,6 +1004,12 @@ fun MainShell(
         onDispose {
             navController.removeOnDestinationChangedListener(listener)
         }
+    }
+
+    // The conversation is the root route; Back should reveal the chat list.
+    // Register before child content so dialogs and nested navigation take priority.
+    BackHandler(enabled = showShellHeader && activeThreadId != null && drawerState.isClosed) {
+        scope.launch { drawerState.open() }
     }
 
     ModalNavigationDrawer(
@@ -1057,6 +1058,13 @@ fun MainShell(
             ) {
                 CompositionLocalProvider(
                     LocalOpenRepoDiffForMarkdownLink provides ::openRepoDiffSheetFromMarkdown,
+                    com.remodex.mobile.ui.turn.LocalConversationVisible provides (drawerState.isClosed && !drawerState.isAnimationRunning),
+                    com.remodex.mobile.ui.turn.LocalTimelineRenderingEnabled provides timelineRenderingEnabled,
+                    com.remodex.mobile.ui.turn.LocalHistoryPresentationReceipt provides { receipt ->
+                        if (receipt.threadId == activeThreadId && receipt.revision >= (historyPresentationReceipt?.revision ?: 0L)) {
+                            historyPresentationReceipt = receipt
+                        }
+                    },
                 ) {
                     AppNavHost(
                         navController = navController,
@@ -1075,6 +1083,42 @@ fun MainShell(
                 if (showShellHeader) {
                     ConversationHeader(
                         title = activeThreadTitle,
+                        refreshingConversation = refreshingConversation,
+                        onRefreshConversation = activeThreadId?.let { tid ->
+                            {
+                                if (!refreshingConversation) {
+                                    refreshingConversation = true
+                                    conversationRefreshError = null
+                                    conversationRefreshJob = scope.launch {
+                                        try {
+                                            repository.refreshConversation(tid)
+                                            val revision = repository.threadHistoryPaginationByThread.value[tid]?.initialLoadRevision ?: 0L
+                                            try {
+                                                com.remodex.mobile.ui.turn.awaitHistoryPresentation(
+                                                    androidx.compose.runtime.snapshotFlow { historyPresentationReceipt }, tid, revision,
+                                                    renderingEnabled = kotlinx.coroutines.flow.combine(
+                                                        androidx.compose.runtime.snapshotFlow { timelineRenderingEnabled },
+                                                        lifecycleOwner.lifecycle.currentStateFlow,
+                                                    ) { enabled, lifecycle -> enabled && lifecycle.isAtLeast(Lifecycle.State.STARTED) },
+                                                )
+                                            } catch (failure: java.util.concurrent.TimeoutException) {
+                                                android.util.Log.e("RemodexHistoryUI", "operation=manual-refresh thread=$tid stage=history-presentation attempt=1", failure)
+                                                throw failure
+                                            }
+                                            android.widget.Toast.makeText(
+                                                context, R.string.conversation_refreshed, android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (failure: Exception) {
+                                            conversationRefreshError = failure.message ?: failure.javaClass.name
+                                        } finally {
+                                            refreshingConversation = false
+                                        }
+                                    }
+                                }
+                            }
+                        },
                         pathSubtitle = pathSubtitle,
                         onPathClick =
                             threadPathFull?.let {
@@ -1092,7 +1136,6 @@ fun MainShell(
                         gitActionsBusy = gitActionBusy,
                         showsDiscardRuntimeRecovery = repoStatusSnapshot?.isDirty == true,
                         isGitActionEnabled = showGitControls && !showTurnStop,
-                        isGitInitialized = repoStatusSnapshot?.isRepo == true,
                         showDesktopHandoff = showDesktopHandoff,
                         handingOffToDesktop = handingOffToDesktop,
                         showWorktreeHandoff = showWorktreeHandoff,
@@ -1134,8 +1177,9 @@ fun MainShell(
                     ThreadCompletionBanner(
                         bannerMessage = gitToastMessage,
                         gitProgress = gitProgressToast,
-                        onTap = { },
+                        onTap = { if (gitStatusFailed) gitToolbarRefreshNonce++ },
                         onDismiss = {
+                            gitStatusFailed = false
                             if (gitActionProgressMessage != null) {
                                 gitActionProgressMessage = null
                             }
@@ -1244,57 +1288,6 @@ fun MainShell(
         onSubmit = { executeGitActionSheet(it) },
     )
 
-    if (showGitInitPrompt) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!gitActionBusy) {
-                    showGitInitPrompt = false
-                    gitInitError = null
-                }
-            },
-            title = { Text(stringResource(R.string.git_init_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(R.string.git_init_message))
-                    gitInitError?.let { err ->
-                        Text(
-                            text = err,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { initializeRepositoryForCurrentThread() },
-                    enabled = !gitActionBusy,
-                ) {
-                    Text(
-                        text =
-                            if (gitActionBusy) {
-                                stringResource(R.string.git_init_initializing)
-                            } else {
-                                stringResource(R.string.git_init_initialize)
-                            },
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        if (!gitActionBusy) {
-                            showGitInitPrompt = false
-                            gitInitError = null
-                        }
-                    },
-                    enabled = !gitActionBusy,
-                ) {
-                    Text(stringResource(android.R.string.cancel))
-                }
-            },
-        )
-    }
-
     if (showNothingToCommit) {
         AlertDialog(
             onDismissRequest = { showNothingToCommit = false },
@@ -1381,6 +1374,19 @@ fun MainShell(
         )
     }
 
+    conversationRefreshError?.let { error ->
+        AlertDialog(
+            onDismissRequest = { conversationRefreshError = null },
+            title = { Text(stringResource(R.string.conversation_refresh_failed)) },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = { conversationRefreshError = null }) {
+                    Text(stringResource(android.R.string.ok))
+                }
+            },
+        )
+    }
+
     if (desktopHandoffError != null) {
         AlertDialog(
             onDismissRequest = { desktopHandoffError = null },
@@ -1397,7 +1403,7 @@ fun MainShell(
     if (worktreeHandoffError != null) {
         AlertDialog(
             onDismissRequest = { worktreeHandoffError = null },
-            title = { Text("Worktree handoff failed") },
+            title = { Text(stringResource(R.string.worktree_handoff_failed)) },
             text = { Text(worktreeHandoffError ?: "") },
             confirmButton = {
                 TextButton(onClick = { worktreeHandoffError = null }) {
@@ -1478,17 +1484,6 @@ fun MainShell(
         )
     }
 
-    pendingStructuredInputRequest?.let { request ->
-        StructuredInputDialog(
-            request = request,
-            onSubmit = { answers ->
-                repository.resolvePendingStructuredInput(request.id, answers)
-            },
-            onSkip = {
-                repository.resolvePendingStructuredInput(request.id, emptyMap())
-            },
-        )
-    }
 
     BridgeUpdateSheet(
         visible = bridgeUpdatePrompt != null,

@@ -1,0 +1,5 @@
+<resources>
+    <string name="conversation_image_preview">查看图片</string>
+    <string name="conversation_image_failed">图片加载失败，点按重试</string>
+    <string name="conversation_album_image">第 %1$d 张，共 %2$d 张图片</string>
+</resources>

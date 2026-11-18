@@ -347,6 +347,7 @@ test("pairing code resolve returns bootstrap metadata for a live mac session", a
       sessionId: "pairing-live-1",
       macDeviceId: "mac-pairing-1",
       macIdentityPublicKey: "mac-public-key-pairing-1",
+      displayName: null,
       expiresAt,
     });
 
@@ -659,7 +660,7 @@ test("relay logs redact live session identifiers", async () => {
       const macClosed = onceClosed(mac);
       const androidClosed = onceClosed(android);
       mac.close();
-      android.close();
+      android.close(1009, "Inbound buffer full");
       await Promise.all([macClosed, androidClosed]);
     });
   } finally {
@@ -669,6 +670,7 @@ test("relay logs redact live session identifiers", async () => {
   assert.ok(capturedLogs.some((line) => line.includes("/relay/[session]")));
   assert.ok(capturedLogs.some((line) => line.includes("role=android")));
   assert.ok(capturedLogs.some((line) => line.includes("session#")));
+  assert.ok(capturedLogs.some((line) => line.includes('code=1009 reason="Inbound buffer full"')));
   assert.ok(capturedLogs.every((line) => !line.includes("session-sensitive")));
 });
 
@@ -955,6 +957,9 @@ function listen(server) {
 
 function close(server, wss) {
   return new Promise((resolve, reject) => {
+    // An assertion can fail before a test closes its clients. Do not hide the
+    // original failure by waiting forever for those sockets in finally.
+    for (const client of wss.clients) client.terminate();
     wss.close();
     server.close((error) => {
       if (error) {

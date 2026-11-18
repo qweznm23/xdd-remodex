@@ -37,12 +37,15 @@ fun RootScreen(modifier: Modifier = Modifier) {
                 openManualPairingInitially = phase == RootPhase.PairingCode,
                 modifier = modifier,
             )
-        RootPhase.Main ->
+        RootPhase.Main -> androidx.compose.runtime.CompositionLocalProvider(
+            LocalReconnectForMedia provides viewModel::onAppForegrounded,
+        ) {
             MainShell(
                 viewModel = viewModel,
                 onOpenPairingScanner = viewModel::openPairingScanner,
                 onOpenPairingCode = viewModel::openPairingCode,
                 modifier = modifier,
             )
+        }
     }
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="google_scan_title">Scan pairing QR code</string>
+    <string name="google_scan_hint">Open Google’s scanner and point it at the pairing QR code on your computer. First use may require a component download.</string>
+    <string name="google_scan_start">Open scanner</string>
+    <string name="google_scan_preparing">Preparing scanner…</string>
+    <string name="google_scan_downloading">Downloading scanner component…</string>
+    <string name="google_scan_paused">Component download paused. Waiting for Google Play services…</string>
+    <string name="google_scan_installing">Installing scanner component…</string>
+    <string name="google_scan_opened">Scanner opened</string>
+    <string name="google_scan_canceled">Scan canceled. You can scan again or enter a pairing code.</string>
+    <string name="google_scan_failed">Could not prepare or open the scanner. Retry or enter a pairing code.</string>
+    <string name="google_scan_no_services">Google Play services is unavailable or needs updating. Enable or update it, or enter a pairing code below.</string>
+    <string name="google_scan_percent">%1$d%%</string>
+    <string name="google_scan_cancel_wait">Stop waiting</string>
+    <string name="google_scan_retry">Retry scan</string>
+    <string name="google_scan_details">Error details</string>
+    <string name="google_scan_close">Close</string>
+</resources>

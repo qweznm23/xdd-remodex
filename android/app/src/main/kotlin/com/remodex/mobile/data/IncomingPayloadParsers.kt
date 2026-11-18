@@ -34,6 +34,7 @@ internal fun parseStructuredInputQuestions(
         if (id.isEmpty()) return@mapNotNull null
         PendingStructuredInputQuestion(
             id = id,
+            isSecret = questionObject["isSecret"]?.boolValue == true,
             header = questionObject["header"]?.stringValue?.trim().orEmpty(),
             question = questionObject["question"]?.stringValue?.trim().orEmpty(),
             options =

@@ -3,6 +3,7 @@ package com.remodex.mobile.ui.home
 import com.remodex.mobile.core.model.CodexSecureTransportError
 import com.remodex.mobile.core.model.CodexTrustedSessionResolveError
 import com.remodex.mobile.core.transport.ConnectionState
+import com.remodex.mobile.core.transport.isBridgeUnavailableClose
 import com.remodex.mobile.pairing.LoopbackRelayException
 
 enum class RootReconnectAttempt {
@@ -80,9 +81,12 @@ internal fun shouldAttemptSavedPairingReconnect(
     hasRelayPairing: Boolean,
     sessionReady: Boolean,
     connectionState: ConnectionState,
+    forceReconnect: Boolean = false,
 ): Boolean {
     if (phase != RootPhase.Main) return false
-    if (!hasRelayPairing || sessionReady) return false
+    if (!hasRelayPairing) return false
+    if (forceReconnect) return true
+    if (sessionReady) return false
     return connectionState !is ConnectionState.Connecting &&
         connectionState !is ConnectionState.Connected
 }
@@ -94,8 +98,8 @@ internal fun shouldScheduleAutoReconnectAfterDrop(
     connectionState: ConnectionState,
     reconnectAlreadyActive: Boolean,
 ): Boolean {
-    if (reconnectAlreadyActive) return false
     if (connectionState !is ConnectionState.Error) return false
+    if (reconnectAlreadyActive && !isBridgeUnavailableClose(connectionState.relayCloseCode)) return false
     return shouldAttemptSavedPairingReconnect(
         phase = phase,
         hasRelayPairing = hasRelayPairing,

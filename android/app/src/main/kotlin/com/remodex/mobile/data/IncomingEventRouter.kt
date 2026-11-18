@@ -60,6 +60,10 @@ internal class IncomingEventRouter(
         PendingStructuredInputRequest,
         (answersByQuestionId: Map<String, List<String>>) -> Unit,
     ) -> Unit,
+    private val onPredictionTurnStarted: (String, String?) -> Unit = { _, _ -> },
+    private val onPredictionInvalidated: (String) -> Unit = {},
+    private val onPredictionSource: (String, String) -> Unit = { _, _ -> },
+    private val onTurnCompletedActivity: (String, String) -> Unit = { _, _ -> },
     private val onRateLimitsUpdated: (Map<String, JSONValue>?) -> Unit = { _ -> },
     /**
      * Live context window from [thread/tokenUsage/updated] or legacy `codex/event` `token_count`
@@ -86,6 +90,16 @@ internal class IncomingEventRouter(
 ) {
     private val threadIdByTurnId = ConcurrentHashMap<String, String>()
     private val assistantSilenceFinalizeJobs = ConcurrentHashMap<String, Job>()
+
+    private fun handleThreadStatusChanged(params: Map<String, JSONValue>?) {
+        val threadId = params?.get("threadId")?.stringValue?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        when (com.remodex.mobile.core.model.ThreadRuntimeStatus.decode(params["status"])) {
+            com.remodex.mobile.core.model.ThreadRuntimeStatus.Active -> onTurnLifecycle(threadId, null)
+            com.remodex.mobile.core.model.ThreadRuntimeStatus.Idle,
+            com.remodex.mobile.core.model.ThreadRuntimeStatus.SystemError -> onTurnFinished(threadId)
+            else -> Unit
+        }
+    }
 
     fun resetCaches() {
         threadIdByTurnId.clear()
@@ -128,6 +142,7 @@ internal class IncomingEventRouter(
         }
         when (m) {
             "thread/started" -> handleThreadStarted(obj)
+            "thread/status/changed" -> handleThreadStatusChanged(obj)
             "thread/name/updated" -> handleThreadNameUpdated(obj)
             "turn/started" -> handleTurnStarted(obj)
             "turn/completed" -> handleTurnCompleted(obj)
@@ -503,6 +518,7 @@ internal class IncomingEventRouter(
         if (turnId != null) {
             recordTurnThread(turnId, threadId)
         }
+        onPredictionTurnStarted(threadId, turnId)
         onTurnLifecycle(threadId, turnId)
         if (turnId != null) {
             scope.launch {
@@ -518,8 +534,14 @@ internal class IncomingEventRouter(
         val threadId = resolveThreadId(p) ?: IncomingNotificationParsers.extractThreadId(p) ?: return
         val turnId = IncomingNotificationParsers.extractTurnIdForTurnLifecycleEvent(p)
         cancelAssistantSilenceFinalize(threadId, turnId)
-        onTurnFinished(threadId)
+        onPredictionInvalidated(threadId)
+        finishTurnAndRefreshThreads(threadId)
         handleErrorNotification(p)
+    }
+
+    private fun finishTurnAndRefreshThreads(threadId: String) {
+        onTurnFinished(threadId)
+        onRequestThreadSync()
     }
 
     private fun handleTurnCompleted(params: Map<String, JSONValue>?) {
@@ -527,7 +549,8 @@ internal class IncomingEventRouter(
         val threadId = resolveThreadId(p) ?: return
         val turnId = IncomingNotificationParsers.extractTurnIdForTurnLifecycleEvent(p)
         cancelAssistantSilenceFinalize(threadId, turnId)
-        onTurnFinished(threadId)
+        if (!turnId.isNullOrBlank()) onTurnCompletedActivity(threadId, turnId)
+        finishTurnAndRefreshThreads(threadId)
         if (turnId != null) {
             scope.launch {
                 messageTimeline.confirmLatestPendingUserMessage(threadId, turnId)
@@ -545,6 +568,10 @@ internal class IncomingEventRouter(
         }
         val failureMsg = TurnCompletionNotificationLogic.parseTurnFailureMessage(p)
         val terminal = TurnCompletionNotificationLogic.parseTurnTerminalState(p, failureMsg)
+        val explicitStatus = p["turn"]?.objectValue?.get("status")?.stringValue ?: p["status"]?.stringValue
+        if (turnId != null && (explicitStatus == null || explicitStatus == "completed") &&
+            terminal == com.remodex.mobile.core.notification.TurnTerminalStateForNotification.Completed) onPredictionSource(threadId, turnId)
+        else if (explicitStatus != null) onPredictionInvalidated(threadId)
         val attention = TurnCompletionNotificationLogic.attentionKindFromTerminalState(terminal)
         if (attention != null) {
             onRunCompletionAttention(threadId, turnId, attention)
@@ -632,7 +659,7 @@ internal class IncomingEventRouter(
                 when (decoded.role) {
                     CodexMessageRole.assistant -> {
                         val text = decoded.text.trim()
-                        if (text.isEmpty() && decoded.attachments.isEmpty()) return
+                        if (text.isEmpty() && decoded.attachments.isEmpty() && decoded.structuredUserInputRequest == null) return
                         val assistantPhase =
                             decoded.assistantPhase ?: IncomingNotificationParsers.extractAssistantPhase(p, itemObj)
                         scope.launch {
@@ -643,16 +670,17 @@ internal class IncomingEventRouter(
                                 itemId = itemId,
                                 text = text,
                                 attachments = decoded.attachments,
+                                structuredUserInputRequest = decoded.structuredUserInputRequest,
                                 assistantPhase = assistantPhase,
                             )
                         }
                         if (completesTurn && turnId.isNullOrBlank()) {
-                            onTurnFinished(threadId)
+                            finishTurnAndRefreshThreads(threadId)
                         }
                     }
                     CodexMessageRole.user -> {
                         val text = decoded.text.trim()
-                        if (text.isEmpty() && decoded.attachments.isEmpty()) return
+                        if (text.isEmpty() && decoded.attachments.isEmpty() && decoded.structuredUserInputRequest == null) return
                         val createdAt = IncomingNotificationParsers.extractCreatedAt(p)
                         scope.launch {
                             messageTimeline.appendMirroredUser(
@@ -760,7 +788,7 @@ internal class IncomingEventRouter(
             )
         }
         if (completesTurn && turnId.isNullOrBlank()) {
-            onTurnFinished(threadId)
+            finishTurnAndRefreshThreads(threadId)
         }
     }
 
@@ -984,8 +1012,11 @@ internal class IncomingEventRouter(
                 ?: event?.let { firstString(it, listOf("saved_path", "savedPath", "path", "url", "image_url")) }
                 ?: return
         val attachment =
-            TurnAttachmentCodec.attachmentFromHistorySource(imagePath)
-                ?: CodexImageAttachment(thumbnailBase64JPEG = "", sourceURL = imagePath)
+            (TurnAttachmentCodec.attachmentFromHistorySource(imagePath)
+                ?: CodexImageAttachment(thumbnailBase64JPEG = "", sourceURL = imagePath)).copy(
+                    mimeType = firstString(p,listOf("mimeType","mime_type","media_type"))
+                        ?: event?.let { firstString(it,listOf("mimeType","mime_type","media_type")) },
+                )
         val turnId = IncomingNotificationParsers.extractTurnId(p)
         val threadId = resolveThreadId(p) ?: return
         recordTurnThread(turnId, threadId)
@@ -1272,7 +1303,8 @@ internal class IncomingEventRouter(
             messageTimeline.upsertPlanMessage(
                 threadId = threadId,
                 turnId = request.turnId?.trim()?.takeIf { it.isNotEmpty() },
-                itemId = request.id,
+                itemId = ConversationQuestionCodec.markerId(request),
+                structuredUserInputRequest = ConversationQuestionCodec.fromPending(request),
                 text = proposedPlan,
                 isStreaming = false,
             )
@@ -1281,8 +1313,9 @@ internal class IncomingEventRouter(
         messageTimeline.appendStructuredInputPromptMarker(
             threadId = threadId,
             turnId = request.turnId?.trim()?.takeIf { it.isNotEmpty() },
-            messageId = request.id,
+            messageId = ConversationQuestionCodec.markerId(request),
             bodyText = StructuredInputTimelineFormatter.bodyText(request.questions),
+            request = ConversationQuestionCodec.fromPending(request),
         )
     }
 
@@ -1329,6 +1362,7 @@ internal class IncomingEventRouter(
             threadId = resolveThreadId(obj),
             turnId = IncomingNotificationParsers.extractTurnId(obj),
             questions = parseStructuredInputQuestions(obj),
+            itemId = IncomingNotificationParsers.extractItemId(obj),
         )
     }
 

@@ -67,6 +67,7 @@ internal fun List<CodexMessage>.toTimelineListItems(
     collapseLatestTurn: Boolean = true,
     activeTurnId: String? = null,
     collapseAssistantWork: Boolean = true,
+    messageItems: (CodexMessage) -> List<TimelineListItem> = ::messageTimelineItems,
 ): List<TimelineListItem> {
     if (isEmpty()) return emptyList()
     val visibleMessages =
@@ -106,12 +107,7 @@ internal fun List<CodexMessage>.toTimelineListItems(
             }
             i = j + 1
         } else {
-            val chunks = msg.toAssistantTimelineChunks()
-            if (chunks == null) {
-                out += TimelineListItem.Single(msg)
-            } else {
-                out += chunks
-            }
+            out += messageItems(msg)
             i++
         }
     }
@@ -207,6 +203,9 @@ private fun compactTimelinePath(path: String): String {
     return normalized.substringAfterLast('/').ifBlank { normalized }
 }
 
+internal fun messageTimelineItems(message: CodexMessage): List<TimelineListItem> =
+    message.toAssistantTimelineChunks() ?: listOf(TimelineListItem.Single(message))
+
 private fun CodexMessage.toAssistantTimelineChunks(): List<TimelineListItem.MessageChunk>? {
     if (role != CodexMessageRole.assistant || kind != CodexMessageKind.chat) return null
     val chunks = splitAssistantMarkdownForTimeline(text)
@@ -292,7 +291,7 @@ private fun List<TimelineListItem>.collapseAssistantWorkGroups(
             val hiddenItems =
                 itemsForTurn.filter { item ->
                     finalAssistantMessage.id !in item.messages.map { it.id } &&
-                        item.item.isAssistantWorkItem()
+                        item.item.isAssistantWorkItem() && item.messages.none { it.structuredUserInputRequest != null || it.attachments.isNotEmpty() || it.text.contains("![") }
                 }
             if (hiddenItems.isEmpty()) return@forEach
             hiddenIndexes += hiddenItems.map { it.index }

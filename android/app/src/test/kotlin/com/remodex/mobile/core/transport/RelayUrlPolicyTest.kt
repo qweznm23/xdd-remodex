@@ -26,11 +26,21 @@ class RelayUrlPolicyTest {
     }
 
     @Test
-    fun publicCleartextRelay_isRejected() {
-        assertNull(validateRelayUrl("ws://relay.example.com/relay"))
-        assertNull(validateRelayUrl("http://relay.example.com/relay"))
-        assertNull(validateRelayUrl("ws://100.63.255.255/relay"))
-        assertNull(validateRelayUrl("ws://100.128.0.0/relay"))
+    fun publicCleartextRelay_preservesHostPortAndPath() {
+        for (url in listOf("ws://183.221.20.26:10004/relay", "ws://relay.example.com:10004/relay")) {
+            val validation = assertNotNull(validateRelayUrl(url, requireWebSocketScheme = true))
+            assertTrue(validation.cleartext)
+            assertEquals(url, validation.websocketUrl)
+            assertEquals(10004, validation.httpUrl.port)
+            assertEquals("/relay", validation.httpUrl.encodedPath)
+        }
+    }
+
+    @Test
+    fun pairingStillRequiresWebSocketSchemeAndNoCredentials() {
+        assertNull(validateRelayUrl("http://183.221.20.26:10004/relay", requireWebSocketScheme = true))
+        assertNull(validateRelayUrl("ws://user:pass@183.221.20.26:10004/relay"))
+        assertNull(validateRelayUrl("ftp://183.221.20.26/relay"))
     }
 
     @Test

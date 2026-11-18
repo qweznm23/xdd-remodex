@@ -27,8 +27,9 @@ import com.remodex.mobile.data.CodexRepository
  */
 sealed class GitActionsError(
     message: String,
-) : Exception(message) {
-    data object Disconnected : GitActionsError("Not connected to bridge.")
+    cause: Throwable? = null,
+) : Exception(message, cause) {
+    class Disconnected(cause: Throwable) : GitActionsError("Not connected to bridge.", cause)
 
     data object InvalidResponse : GitActionsError("Invalid response from bridge.")
 
@@ -38,7 +39,8 @@ sealed class GitActionsError(
     class BridgeFailure(
         val errorCode: String?,
         message: String,
-    ) : GitActionsError(message)
+        cause: Throwable? = null,
+    ) : GitActionsError(message, cause)
 }
 
 class GitActionsService(
@@ -239,18 +241,20 @@ class GitActionsService(
 
         fun mapCodexError(e: CodexServiceError): GitActionsError =
             when (e) {
-                CodexServiceError.Disconnected -> GitActionsError.Disconnected
+                CodexServiceError.Disconnected -> GitActionsError.Disconnected(e)
                 is CodexServiceError.RpcFailure -> {
                     val code = e.rpcError.data?.objectValue?.get("errorCode")?.stringValue
                     GitActionsError.BridgeFailure(
                         errorCode = code,
                         message = userMessageForGit(code, e.rpcError.message),
+                        cause = e,
                     )
                 }
                 else ->
                     GitActionsError.BridgeFailure(
                         errorCode = null,
                         message = e.message ?: "Git operation failed.",
+                        cause = e,
                     )
             }
 

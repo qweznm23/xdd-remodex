@@ -5,6 +5,9 @@ import com.remodex.mobile.core.model.UserBubbleColor
 import com.remodex.mobile.core.persistence.AIChangeSetPersistence
 import com.remodex.mobile.data.CodexRepository
 
+// Media dialogs share the existing root connection coordinator instead of opening sockets.
+val LocalReconnectForMedia = staticCompositionLocalOf<(() -> Unit)?> { null }
+
 val LocalUserBubbleColor = staticCompositionLocalOf { UserBubbleColor.defaultValue }
 
 val LocalCodexRepository = staticCompositionLocalOf<CodexRepository> {

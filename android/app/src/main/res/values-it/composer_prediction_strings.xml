@@ -1,0 +1,7 @@
+<resources>
+    <string name="prediction_heading">Risposta suggerita</string>
+    <string name="prediction_action">Suggerimento</string>
+    <string name="prediction_fill">Inserisci nel messaggio</string>
+    <string name="prediction_expand">Leggi tutto</string>
+    <string name="prediction_collapse">Comprimi suggerimento</string>
+</resources>

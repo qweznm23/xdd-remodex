@@ -3,6 +3,9 @@ package com.remodex.mobile.ui.turn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +33,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import com.remodex.mobile.data.ComposerPrediction
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,10 +84,16 @@ internal enum class TurnVoicePhase {
  * as the single Android entry point for that responsibility. [composerEnvironment] hosts the
  * Swift-style secondary row (Local / access / branch / usage ring) when the pane has room for it.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun TurnComposerBar(
     draft: String,
+    prediction: ComposerPrediction? = null,
+    predictionCollapsed: Boolean = false,
+    allowInlinePrediction: Boolean = true,
+    onCollapsePrediction: () -> Unit = {},
+    onAcceptPrediction: () -> Boolean = { false },
+    isImeVisible: Boolean = false,
     attachments: List<TurnComposerAttachment>,
     model: TurnComposerModel,
     isPlanModeEnabled: Boolean,
@@ -90,6 +110,7 @@ internal fun TurnComposerBar(
     onSelectAccessMode: (TurnComposerRuntimeOption) -> Unit = {},
     onSelectServiceTier: (TurnComposerRuntimeOption) -> Unit = {},
     onRemoveAttachment: (String) -> Unit,
+    onRetryAttachment: (String) -> Unit = {},
     onRemoveMentionChip: (ComposerMentionChipPayload) -> Unit = {},
     onSelectAutocomplete: (TurnComposerAutocompleteItem) -> Unit = {},
     onSend: () -> Unit,
@@ -127,6 +148,7 @@ internal fun TurnComposerBar(
         ComposerAttachmentStrip(
             attachments = attachments,
             onRemove = onRemoveAttachment,
+            onRetry = onRetryAttachment,
         )
         ComposerMentionChipStrip(
             chips = mentionChips,
@@ -226,6 +248,57 @@ internal fun TurnComposerBar(
                 onCancel = onCancelVoiceRecording,
             )
         }
+        val focusRequester = remember { FocusRequester() }
+        val keyboard = LocalSoftwareKeyboardController.current
+        var editing by remember { mutableStateOf(false) }
+        var imeWasOpen by remember { mutableStateOf(false) }
+        LaunchedEffect(isImeVisible) {
+            if (imeWasOpen && !isImeVisible) editing = false
+            imeWasOpen = isImeVisible
+        }
+        var fieldState by remember { mutableStateOf(TextFieldValue(draft)) }
+        var lastReportedText by remember(draft) { mutableStateOf(draft) }
+        val fieldValue = fieldState.copy(text = draft)
+        SideEffect {
+            if (fieldValue.selection != fieldState.selection || fieldValue.composition != fieldState.composition) {
+                fieldState = fieldValue
+            }
+        }
+        var focusAfterFill by remember { mutableStateOf(false) }
+        LaunchedEffect(focusAfterFill) {
+            if (focusAfterFill) {
+                focusRequester.requestFocus()
+                keyboard?.show()
+                focusAfterFill = false
+            }
+        }
+        val showPrediction = prediction != null && draft.isEmpty() && !editing && !isImeVisible && actions.textFieldEnabled
+        var showFullPrediction by remember(prediction) { mutableStateOf(false) }
+        LaunchedEffect(prediction, editing, isImeVisible, draft.isNotEmpty()) {
+            if (prediction != null && (editing || isImeVisible || draft.isNotEmpty())) onCollapsePrediction()
+        }
+        val fillPrediction = {
+            if (prediction != null && onAcceptPrediction()) {
+                fieldState = TextFieldValue(prediction.text, selection = TextRange(prediction.text.length))
+                focusAfterFill = true
+                showFullPrediction = false
+            }
+            Unit
+        }
+        val inlinePrediction = showPrediction && allowInlinePrediction && !predictionCollapsed
+        if (prediction != null && inlinePrediction) {
+            ComposerPredictionPreview(prediction.text, onCollapsePrediction, { showFullPrediction = true }, fillPrediction)
+        }
+        if (prediction != null && showPrediction && showFullPrediction) {
+            ComposerPredictionSheet(prediction.text, { showFullPrediction = false }, fillPrediction)
+        }
+        val showShortcut = showPrediction && !inlinePrediction
+        val predictionShortcut: @Composable () -> Unit = {
+            IconButton(onClick = { showFullPrediction = true }, modifier = Modifier.size(33.dp)) {
+                Icon(Icons.Outlined.ChatBubbleOutline, stringResource(R.string.prediction_action), Modifier.size(19.dp),
+                    tint = MaterialTheme.colorScheme.primary)
+            }
+        }
         composerEnvironment()
         RemodexComposerCapsuleChrome(
             modifier = Modifier.fillMaxWidth(),
@@ -234,54 +307,73 @@ internal fun TurnComposerBar(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                BasicTextField(
-                    value = draft,
-                    onValueChange = onDraftChange,
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .background(Color.Transparent),
-                    interactionSource = textInteractionSource,
-                    enabled = actions.textFieldEnabled,
-                    minLines = 1,
-                    maxLines = 4,
-                    textStyle =
-                        MaterialTheme.typography.bodyMedium.merge(
-                            TextStyle(color = MaterialTheme.colorScheme.onSurface),
-                        ),
-                    decorationBox = { innerTextField ->
-                        Box(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .background(Color.Transparent)
-                                    .padding(horizontal = 4.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            if (draft.isEmpty()) {
-                                Text(
-                                    text = stringResource(R.string.turn_composer_hint),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = composerHintColor,
-                                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    BasicTextField(
+                        value = fieldValue,
+                        onValueChange = { updated ->
+                            fieldState = updated
+                            if (updated.text != lastReportedText) {
+                                lastReportedText = updated.text
+                                onDraftChange(updated.text)
                             }
-                            innerTextField()
-                        }
-                    },
-                )
+                        },
+                        modifier =
+                            Modifier
+                                .focusRequester(focusRequester)
+                                .onFocusChanged { editing = it.isFocused }
+                                .weight(1f)
+                                .background(Color.Transparent),
+                        interactionSource = textInteractionSource,
+                        enabled = actions.textFieldEnabled,
+                        minLines = 1,
+                        maxLines = 4,
+                        textStyle =
+                            MaterialTheme.typography.bodyMedium.merge(
+                                TextStyle(color = MaterialTheme.colorScheme.onSurface),
+                            ),
+                        decorationBox = { innerTextField ->
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(Color.Transparent)
+                                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                if (draft.isEmpty()) {
+                                    Text(
+                                        text = stringResource(R.string.turn_composer_hint),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = composerHintColor,
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        },
+                    )
+                    if (showShortcut && actions.voiceIcon != TurnComposerVoiceToolbarIcon.None) predictionShortcut()
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     Box {
-                        IconButton(
-                            onClick = { isAttachmentMenuExpanded = true },
-                            enabled = !locks.runtimeControlsLocked,
-                            modifier = Modifier.size(33.dp),
+                        val photosLabel = stringResource(R.string.turn_attachment_menu_library)
+                        val filesLabel = stringResource(R.string.turn_attachment_menu_file)
+                        Box(
+                            modifier = Modifier.size(40.dp).clip(CircleShape).combinedClickable(
+                                enabled = !locks.runtimeControlsLocked,
+                                role = Role.Button,
+                                onClickLabel = photosLabel,
+                                onLongClickLabel = filesLabel,
+                                onClick = onPickImages,
+                                onLongClick = onPickFiles,
+                            ),
+                            contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                painter = painterResource(LucideR.drawable.lucide_ic_paperclip),
-                                contentDescription = stringResource(R.string.turn_add_images_cd),
+                                painter = painterResource(LucideR.drawable.lucide_ic_image_plus),
+                                contentDescription = stringResource(R.string.attachment_shortcuts),
                                 modifier = Modifier.size(19.dp),
                                 tint = neutralToolbarIconTint,
                             )
@@ -336,29 +428,45 @@ internal fun TurnComposerBar(
                             )
                         }
                     }
-                    UnifiedComposerModelRuntimeChip(
-                        runtimeControls = runtimeControls,
-                        runtimeToolbarMenu = runtimeToolbarMenu,
-                        enabled = true,
-                        onSelectModel = onSelectModel,
-                        onSelectReasoningEffort = onSelectReasoningEffort,
-                        onSelectServiceTier = onSelectServiceTier,
-                        modifier =
-                            Modifier
-                                .wrapContentWidth()
-                                .widthIn(max = 136.dp),
-                    )
-                    if (isPlanModeEnabled) {
-                        ComposerPlanModeBadge(
-                            onClick = { onSetPlanModeEnabled(false) },
+                    IconButton(
+                        onClick = { isAttachmentMenuExpanded = true },
+                        enabled = !locks.runtimeControlsLocked,
+                        modifier = Modifier.size(33.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(LucideR.drawable.lucide_ic_paperclip),
+                            contentDescription = stringResource(R.string.attachment_more_options),
+                            modifier = Modifier.size(19.dp),
+                            tint = neutralToolbarIconTint,
                         )
                     }
-                    Box(modifier = Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        UnifiedComposerModelRuntimeChip(
+                            runtimeControls = runtimeControls,
+                            runtimeToolbarMenu = runtimeToolbarMenu,
+                            enabled = true,
+                            onSelectModel = onSelectModel,
+                            onSelectReasoningEffort = onSelectReasoningEffort,
+                            onSelectServiceTier = onSelectServiceTier,
+                            modifier = Modifier.weight(1f, fill = false).widthIn(max = 136.dp),
+                        )
+                        if (isPlanModeEnabled) {
+                            ComposerPlanModeBadge(
+                                onClick = { onSetPlanModeEnabled(false) },
+                            )
+                        }
+                    }
                     Box(
                         modifier = Modifier.size(33.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (actions.voiceIcon == TurnComposerVoiceToolbarIcon.Progress) {
+                        if (showShortcut && actions.voiceIcon == TurnComposerVoiceToolbarIcon.None) {
+                            predictionShortcut()
+                        } else if (actions.voiceIcon == TurnComposerVoiceToolbarIcon.Progress) {
                             val transcribingLabel = stringResource(R.string.turn_voice_transcribing_cd)
                             CircularProgressIndicator(
                                 modifier =

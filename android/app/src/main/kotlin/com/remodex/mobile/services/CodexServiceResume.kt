@@ -4,7 +4,6 @@ import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.CodexThread
 import com.remodex.mobile.core.model.CodexThreadSyncState
 import com.remodex.mobile.core.model.JSONValue
-import com.remodex.mobile.data.ThreadHistoryDecoder
 
 /**
  * Mirrors [CodexService.ensureThreadResumed] in
@@ -23,6 +22,7 @@ internal suspend fun CodexService.ensureThreadResumedInternal(
         return _threads.value.find { it.id == tid }
     }
 
+    val generation = connectionGeneration
     val normalizedPreferred =
         CodexThread.normalizeProjectPath(preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() })
     val cwd = normalizedPreferred ?: _threads.value.find { it.id == tid }?.gitWorkingDirectory
@@ -31,6 +31,7 @@ internal suspend fun CodexService.ensureThreadResumedInternal(
     val camelParams =
         buildMap {
             put("threadId", JSONValue.Str(tid))
+            put("excludeTurns", JSONValue.Bool(true))
             cwd?.let { put("cwd", JSONValue.Str(it)) }
             model?.let { put("model", JSONValue.Str(it)) }
         }
@@ -43,6 +44,7 @@ internal suspend fun CodexService.ensureThreadResumedInternal(
                 val snake =
                     buildMap {
                         put("thread_id", JSONValue.Str(tid))
+                        put("excludeTurns", JSONValue.Bool(true))
                         cwd?.let { put("cwd", JSONValue.Str(it)) }
                         model?.let { put("model", JSONValue.Str(it)) }
                     }
@@ -52,54 +54,21 @@ internal suspend fun CodexService.ensureThreadResumedInternal(
             }
         }
 
-    val result = response.result
-    if (result == null || result !is JSONValue.Obj) {
-        resumedThreadIds.add(tid)
-        return null
+    if (!sessionReady || generation != connectionGeneration) {
+        throw kotlinx.coroutines.CancellationException("Thread resume belongs to a replaced connection")
     }
-
+    val result = response.result as? JSONValue.Obj
+        ?: throw CodexServiceError.InvalidResponse("thread/resume missing result object")
     val threadEl = result.map["thread"] as? JSONValue.Obj
-    if (threadEl != null) {
-        val decoded =
-            runCatching {
-                CodexThread.fromJsonObject(jsonObjectFromRpc(threadEl))
-            }.getOrNull()
-        if (decoded != null) {
-            var live = decoded.copy(syncState = CodexThreadSyncState.live)
-            live = applyAuthoritativeProjectPathToServerThread(live)
-            publishThreads(upsertThreadRow(_threads.value, live))
-            confirmAuthoritativeProjectPathIfNeeded(
-                tid,
-                live.normalizedProjectPath,
-                authoritativeProjectPathByThreadId,
-            )
-            val messages = ThreadHistoryDecoder.decodeFromThreadRead(tid, threadEl.map)
-            if (messages.isNotEmpty()) {
-                messageTimelineStore.mergeThreadHistory(tid, messages)
-            }
-            rehydrateRunningTurnFromThreadRead(tid, threadEl.map)
-            hydratedThreadIds.add(tid)
-            resumedThreadIds.add(tid)
-            return live
-        }
-    } else {
-        val i = _threads.value.indexOfFirst { it.id == tid }
-        if (i >= 0) {
-            publishThreads(
-                _threads.value.mapIndexed { idx, t ->
-                    if (idx == i) {
-                        t.copy(syncState = CodexThreadSyncState.live)
-                    } else {
-                        t
-                    }
-                },
-            )
-        }
-    }
-
-    hydratedThreadIds.add(tid)
+        ?: throw CodexServiceError.InvalidResponse("thread/resume missing thread object")
+    val decoded = CodexThread.fromJsonObject(jsonObjectFromRpc(threadEl))
+    val live = applyAuthoritativeProjectPathToServerThread(decoded.copy(syncState = CodexThreadSyncState.live))
+    publishThreads(upsertThreadRow(_threads.value, live))
+    confirmAuthoritativeProjectPathIfNeeded(tid, live.normalizedProjectPath, authoritativeProjectPathByThreadId)
+    rehydrateRunningTurnFromThreadRead(tid, threadEl.map)
     resumedThreadIds.add(tid)
-    return _threads.value.find { it.id == tid }
+    return live
+
 }
 
 private fun shouldRetryThreadResumeSnakeCase(e: CodexServiceError.RpcFailure): Boolean {

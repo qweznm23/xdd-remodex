@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.sidebar
 
+import com.remodex.mobile.core.config.FeatureFlags
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -63,7 +64,7 @@ fun SidebarNewWorktreeSheet(
     modifier: Modifier = Modifier,
 ) {
     val basePath = baseProjectPath?.trim().orEmpty()
-    if (!visible || basePath.isBlank()) return
+    if (!FeatureFlags.gitIntegrationEnabled || !visible || basePath.isBlank()) return
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()

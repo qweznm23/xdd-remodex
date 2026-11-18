@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.sidebar
 
+import com.remodex.mobile.core.config.FeatureFlags
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -35,6 +37,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +77,12 @@ import com.remodex.mobile.ui.draft.NewChatDraftSource
 import com.remodex.mobile.ui.shared.ThreadRenameDialog
 import com.remodex.mobile.ui.theme.RemodexDropdownMenu
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import android.util.Log
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.History
 
 private const val SIDEBAR_THREADS_PER_GROUP = 5
 private val SidebarFloatingBarHeight = 44.dp
@@ -90,16 +100,57 @@ fun SidebarScreen(
     onOpenNewChatDraft: (NewChatDraftSource, String?) -> Unit = { _, _ -> },
     onThreadSelected: suspend () -> Unit = {},
     modifier: Modifier = Modifier,
+    dotAnimationsEnabled: Boolean = true,
 ) {
     val threads by repository.threads.collectAsStateWithLifecycle()
+    val pendingQuestions by repository.pendingStructuredInputRequests.collectAsStateWithLifecycle()
+    val questionThreads by repository.questionThreadIds.collectAsStateWithLifecycle()
     val activeId by repository.activeThreadId.collectAsStateWithLifecycle()
     val conn by repository.connectionState.collectAsStateWithLifecycle()
     val ready by repository.isSessionReady.collectAsStateWithLifecycle()
     val runningTurnByThread by repository.runningTurnIdByThread.collectAsStateWithLifecycle()
     val protectedRunningFallback by repository.protectedRunningFallbackThreadIds.collectAsStateWithLifecycle()
+    val pinDeviceId by repository.currentTrustedMacDeviceId.collectAsStateWithLifecycle()
+    val activityState by repository.sidebarActivity.collectAsStateWithLifecycle()
+    val activity = activityState.takeIf { it.deviceId == pinDeviceId }
+    val recentIds = activity?.recentThreadIds.orEmpty()
+    val listState = rememberLazyListState()
+    val hasVisibleRunningThread by remember(listState, runningTurnByThread, protectedRunningFallback) {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.any { item ->
+                val threadId = (item.key as? String)?.substringAfter("/thread/", "")
+                threadId in runningTurnByThread || threadId in protectedRunningFallback
+            }
+        }
+    }
     val scope = rememberCoroutineScope()
+    var questionDialogThreadId by remember(pinDeviceId) { mutableStateOf<String?>(null) }
+    com.remodex.mobile.ui.turn.ConversationQuestionDialog(questionDialogThreadId.orEmpty(), questionDialogThreadId != null,
+        onDismiss = { questionDialogThreadId = null })
     val context = LocalContext.current
     val sidebarColors = rememberSidebarColorPalette()
+    val pinnedIds = activity?.pinnedThreadIds.orEmpty()
+    val pinsLoaded = ready && activity?.initialized == true && activity.pinnedSectionId != null
+    var pinBusy by remember(pinDeviceId) { mutableStateOf(false) }
+    var pinError by remember(pinDeviceId) { mutableStateOf<String?>(null) }
+    var readError by remember(pinDeviceId) { mutableStateOf<String?>(null) }
+    var actionsThread by remember(pinDeviceId) { mutableStateOf<CodexThread?>(null) }
+    fun togglePin(thread: CodexThread) {
+        val device = pinDeviceId ?: return
+        if (pinBusy || !pinsLoaded) return
+        val pinned = thread.id !in pinnedIds
+        actionsThread = null
+        pinBusy = true
+        pinError = null
+        scope.launch {
+            try { repository.setThreadPinned(thread.id, device, pinned) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                Log.e("RemodexSidebarPins", "operation=sidebar-pins stage=server-write thread=${thread.id} pinned=$pinned", failure)
+                pinError = failure.message ?: failure.javaClass.name
+            } finally { pinBusy = false }
+        }
+    }
 
     var query by remember { mutableStateOf("") }
     var newChatBusy by remember { mutableStateOf(false) }
@@ -134,12 +185,15 @@ fun SidebarScreen(
             filterThreadsForSidebar(threads, query)
         }
     val groups =
-        remember(filtered, expandedGroupIds, activeId) {
+        remember(filtered, expandedGroupIds, pinnedIds, recentIds, query) {
             SidebarThreadGrouping.applyGroupLimit(
-                groups = SidebarThreadGrouping.makeGroups(threads = filtered),
+                groups = SidebarThreadGrouping.makeGroups(
+                    threads = filtered, pinnedThreadIds = pinnedIds,
+                    recentThreadIds = if (query.isBlank()) recentIds else emptyList(),
+                    includeEmptyShortcuts = query.isBlank(),
+                ),
                 limit = SIDEBAR_THREADS_PER_GROUP,
                 expandedGroupIds = expandedGroupIds,
-                pinnedThreadIds = listOfNotNull(activeId).toSet(),
             )
         }
     val visibleGroups =
@@ -150,15 +204,15 @@ fun SidebarScreen(
             } else {
                 when (listTab) {
                     SidebarListTab.Projects ->
-                        nonArchived.filter { it.kind == SidebarThreadGroupKind.Project }
+                        nonArchived.filter { it.kind == SidebarThreadGroupKind.Project || it.kind == SidebarThreadGroupKind.Pinned || it.kind == SidebarThreadGroupKind.Recent }
                     SidebarListTab.Chats ->
-                        nonArchived.filter { it.kind == SidebarThreadGroupKind.Chats }
+                        nonArchived.filter { it.kind == SidebarThreadGroupKind.Chats || it.kind == SidebarThreadGroupKind.Pinned || it.kind == SidebarThreadGroupKind.Recent }
                 }
             }
         }
-    val projectGroupIds =
-        remember(groups) {
-            groups.filter { it.kind == SidebarThreadGroupKind.Project }.map { it.id }.toSet()
+    val collapsibleGroupIds =
+        remember(visibleGroups) {
+            visibleGroups.filter { it.kind.canCollapse }.map { it.id }.toSet()
         }
 
     fun openNewChatDraft(
@@ -289,15 +343,25 @@ fun SidebarScreen(
             onSelected = { listTab = it },
             onToggleCollapseAll = {
                 collapsedGroupIds =
-                    if (collapsedGroupIds.size < projectGroupIds.size) {
-                        projectGroupIds
+                    if (!collapsedGroupIds.containsAll(collapsibleGroupIds)) {
+                        collapsedGroupIds + collapsibleGroupIds
                     } else {
-                        emptySet()
+                        collapsedGroupIds - collapsibleGroupIds
                     }
+                expandedGroupIds = expandedGroupIds - collapsibleGroupIds
             },
             colors = sidebarColors,
             modifier = Modifier.padding(bottom = 10.dp),
         )
+        readError?.let { error ->
+            Text(stringResource(R.string.sidebar_mark_read_failed, error), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+        pinError?.let { error ->
+            Text(stringResource(R.string.sidebar_pin_failed, error), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            TextButton(onClick = { scope.launch { try { repository.refreshThreads(); pinError = null } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { pinError = failure.message; Log.e("RemodexSidebarPins", "operation=pin-refresh", failure) } } }, enabled = !pinBusy) { Text(stringResource(R.string.workspace_text_preview_retry)) }
+        }
         newChatError?.let { err ->
             Text(
                 text = err,
@@ -324,13 +388,15 @@ fun SidebarScreen(
                     .weight(1f)
                     .fillMaxWidth(),
         ) {
+            SidebarRunAnimation(enabled = dotAnimationsEnabled && hasVisibleRunningThread && !listState.isScrollInProgress) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = listBottomInset),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 visibleGroups.forEach { group ->
-                item(key = "hdr-${group.id}") {
+                item(key = "hdr-${group.id}", contentType = "section-header") {
                     val isCollapsed = group.id in collapsedGroupIds
                         RepoHeader(
                             group = group,
@@ -339,6 +405,8 @@ fun SidebarScreen(
                             colors = sidebarColors,
                             collapsed = isCollapsed,
                             onToggleCollapse = {
+                            // Reopening a section starts with its compact preview again.
+                            expandedGroupIds = expandedGroupIds - group.id
                             collapsedGroupIds =
                                 if (isCollapsed) {
                                     collapsedGroupIds - group.id
@@ -359,6 +427,7 @@ fun SidebarScreen(
                             },
                             onNewWorktreeInProject =
                                 if (
+                                    FeatureFlags.gitIntegrationEnabled &&
                                     group.kind == SidebarThreadGroupKind.Project &&
                                     group.projectPath != null &&
                                     ready &&
@@ -393,15 +462,38 @@ fun SidebarScreen(
                         onOpenArchivedChats = null,
                     )
                 }
+                if (group.id !in collapsedGroupIds && group.threads.isEmpty() && (group.kind == SidebarThreadGroupKind.Pinned || group.kind == SidebarThreadGroupKind.Recent)) {
+                    item(key = "empty-${group.id}", contentType = "empty-section") {
+                        Text(
+                            stringResource(if (group.kind == SidebarThreadGroupKind.Pinned) R.string.sidebar_pinned_empty else R.string.sidebar_recent_empty),
+                            style = MaterialTheme.typography.bodySmall, color = sidebarColors.mutedText,
+                            modifier = Modifier.padding(start = 30.dp, end = 12.dp, bottom = 12.dp),
+                        )
+                    }
+                }
                 items(
                     items = if (group.id in collapsedGroupIds) emptyList() else group.visibleThreads,
-                    key = { it.id },
+                    key = { "${group.id}/thread/${it.id}" },
+                    contentType = { "thread" },
                 ) { thread ->
                     val isActive = thread.id == activeId
                     val isRunning =
                         runningTurnByThread.containsKey(thread.id) ||
                             protectedRunningFallback.contains(thread.id)
                     val onSelectThread = {
+                        // The clicked row is an explicit read action; use its server revision,
+                        // not a later revision that may arrive while opening the conversation.
+                        val receipt = activity?.threads?.get(thread.id)
+                        val device = pinDeviceId
+                        readError = null
+                        if (ready && device != null && receipt?.unread == true) scope.launch {
+                            try { repository.markThreadRead(thread.id, device, receipt.revision) }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) {
+                                Log.e("RemodexSidebarActivity", "operation=mark-read stage=row-selection thread=${thread.id} revision=${receipt.revision}", failure)
+                                readError = failure.message ?: failure.javaClass.name
+                            }
+                        }
                         scope.launch {
                             repository.setActiveThreadId(thread.id)
                             onThreadSelected()
@@ -420,18 +512,28 @@ fun SidebarScreen(
                         ActiveChatRow(
                             thread = thread,
                             isRunning = isRunning,
+                            isUnread = activity?.threads?.get(thread.id)?.unread == true,
+                            needsAnswer = pendingQuestions.values.any { it.threadId == thread.id },
+                            hasQuestions = thread.id in questionThreads,
+                            onAnswerRequest = { questionDialogThreadId = thread.id },
                             activeMetadata = activeChatMetadata,
                             onSelect = onSelectThread,
                             onRenameRequest = onRenameThread,
                             onDeleteLocalRequest = onDeleteThread,
+                            onActionsRequest = { actionsThread = thread },
                         )
                     } else {
                         ChatRow(
                             thread = thread,
                             isRunning = isRunning,
+                            isUnread = activity?.threads?.get(thread.id)?.unread == true,
+                            needsAnswer = pendingQuestions.values.any { it.threadId == thread.id },
+                            hasQuestions = thread.id in questionThreads,
+                            onAnswerRequest = { questionDialogThreadId = thread.id },
                             onSelect = onSelectThread,
                             onRenameRequest = onRenameThread,
                             onDeleteLocalRequest = onDeleteThread,
+                            onActionsRequest = { actionsThread = thread },
                         )
                     }
                 }
@@ -441,7 +543,7 @@ fun SidebarScreen(
                             (group.id in expandedGroupIds && group.totalCount > SIDEBAR_THREADS_PER_GROUP)
                     )
                 ) {
-                    item(key = "more-${group.id}") {
+                    item(key = "more-${group.id}", contentType = "show-more") {
                         ShowAllRow(
                             expanded = group.id in expandedGroupIds,
                             hiddenCount = group.hiddenCount,
@@ -457,6 +559,7 @@ fun SidebarScreen(
                         )
                     }
                 }
+            }
             }
             }
             SidebarFloatingActionBar(
@@ -485,6 +588,27 @@ fun SidebarScreen(
                         .padding(bottom = SidebarFloatingBarBottomPadding),
             )
         }
+        actionsThread?.let { thread ->
+            AlertDialog(
+                onDismissRequest = { actionsThread = null },
+                title = { Text(thread.displayTitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                text = {
+                    Column {
+                        TextButton(onClick = { togglePin(thread) }, enabled = pinsLoaded && !pinBusy) {
+                            Text(stringResource(if (thread.id in pinnedIds) R.string.sidebar_unpin_thread else R.string.sidebar_pin_thread))
+                        }
+                        TextButton(onClick = { actionsThread = null; renameTarget = thread; renameError = null }) {
+                            Text(stringResource(R.string.sidebar_thread_rename))
+                        }
+                        TextButton(onClick = { actionsThread = null; deleteLocalTarget = thread; deleteLocalError = null }) {
+                            Text(stringResource(R.string.sidebar_thread_delete_local))
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { actionsThread = null }) { Text(stringResource(R.string.sidebar_pin_close)) } },
+            )
+        }
+
         ThreadRenameDialog(
             visible = renameTarget != null,
             initialName = renameTarget?.displayTitle.orEmpty(),
@@ -881,7 +1005,7 @@ private fun RepoHeader(
             onNewWorktreeInProject != null ||
             onArchiveProjectGroup != null ||
             onDeleteLocalGroup != null
-    val canCollapse = group.kind == SidebarThreadGroupKind.Project
+    val canCollapse = group.kind.canCollapse
     Row(
         modifier =
             Modifier
@@ -914,7 +1038,11 @@ private fun RepoHeader(
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                text = group.label,
+                text = when (group.kind) {
+                    SidebarThreadGroupKind.Pinned -> stringResource(R.string.sidebar_pinned_group)
+                    SidebarThreadGroupKind.Recent -> stringResource(R.string.sidebar_recent_group)
+                    else -> group.label
+                },
                 style = MaterialTheme.typography.titleMedium.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
                 color = colors.primaryText,
                 maxLines = 1,
@@ -1063,6 +1191,8 @@ private fun ShowAllRow(
 
 private fun SidebarThreadGroup.leadingIcon(): ImageVector =
     when (kind) {
+        SidebarThreadGroupKind.Pinned -> Icons.Outlined.PushPin
+        SidebarThreadGroupKind.Recent -> Icons.Outlined.History
         SidebarThreadGroupKind.Archived -> Icons.Outlined.Archive
         SidebarThreadGroupKind.Chats -> Icons.Outlined.ChatBubbleOutline
         SidebarThreadGroupKind.Project -> {
