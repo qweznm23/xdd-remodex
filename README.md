@@ -9,7 +9,9 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
 **[下载 Android 安装包（0.1.7-ws-fix73）](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/remodex-0.1.7-ws-fix73.apk)** · [查看版本说明和 SHA-256](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix73)
 
-在 Android 8.0 或更高版本的手机上打开下载的 APK。如果系统询问，允许当前浏览器或文件管理器安装此应用。已有服务端的用户可直接打开 Remodex，扫描电脑上的配对二维码。第一次部署服务端，请完成下面的第 1、2 步，然后跳到第 4 步配对。
+**[下载配套 Linux 服务端（0.1.7-ws-fix73）](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/xdd-remodex-server-0.1.7-ws-fix73-linux.tar.gz)**。在装有 Node.js 24、Python 3 和已登录 Codex CLI 的电脑上解压，按包内 README 启动。桥接和中继的 Node 生产依赖已随包附带。
+
+在 Android 8.0 或更高版本的手机上打开下载的 APK。如果系统询问，允许当前浏览器或文件管理器安装此应用。服务端启动后，打开 Remodex 扫描电脑上的配对二维码。
 
 **从源码自建**时，下面以 Linux 电脑和同一局域网内的 Android 手机为例。使用平时运行 Codex 的 Linux 用户，先确认该用户能在终端正常使用已登录的 `codex`。电脑准备 Git、Node.js 24 和 npm。
 
