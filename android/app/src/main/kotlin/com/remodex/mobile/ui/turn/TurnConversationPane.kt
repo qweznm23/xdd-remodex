@@ -793,8 +793,9 @@ fun TurnConversationPane(
             try {
                 val saved = withContext(Dispatchers.IO) { recoveryStore.read(device, threadId) }
                 if (saved != null) {
-                    val restoredText = stripMergedMentionPrefix(saved.text, saved.skills, saved.mentions)
-                    if (saved.transferred || draft.isEmpty() || draft == restoredText) restoreUnsentDraft(saved)
+                    val previousText = draft
+                    restoreUnsentDraft(saved)
+                    if (!saved.transferred && previousText.isNotEmpty()) draft = previousText
                     if (saved.transferred) {
                         repository.saveComposerDraft(threadId, draft)
                         withContext(Dispatchers.IO) { recoveryStore.clear(device, threadId) }

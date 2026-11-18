@@ -117,7 +117,8 @@ internal suspend fun CodexService.syncThreadHistoryInternal(
         if (!sessionReady || connectionGeneration != generation || !loadingHistory.isCurrent(tid, ticket)) {
             throw kotlinx.coroutines.CancellationException("Replaced history request failed at $stage").apply { initCause(e) }
         }
-        if (e is CodexServiceError.RpcFailure && e.rpcError.isExplicitServerThreadMissing()) {
+        // A concurrent history refresh must not dismiss an open composer with unsent input.
+        if (_activeThreadId.value != tid && e is CodexServiceError.RpcFailure && e.rpcError.isExplicitServerThreadMissing()) {
             handleMissingThread(tid)
         }
         recordThreadHistoryFailure(tid, stage, e)
