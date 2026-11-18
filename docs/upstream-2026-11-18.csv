@@ -1,0 +1,239 @@
+提交,日期,类别,相对第一父提交改动的区域,上游摘要,提交链接
+c06dcb16a,2026-11-03,普通,CodexMobile / phodex-bridge,Reconcile synthesized patches with native file changes (#232),https://github.com/Emanuele-web04/remodex/commit/c06dcb16a7059603a41e26a2cb4a81b6d4b5514d
+cc18b519c,2026-11-03,普通,CodexMobile,Expose code pairing in Connections (#231),https://github.com/Emanuele-web04/remodex/commit/cc18b519c4b19dbdebcae217960d376d7595686f
+be7a96c6c,2026-11-03,普通,CodexMobile,Preserve case in manual pairing tokens (#229),https://github.com/Emanuele-web04/remodex/commit/be7a96c6cd4b2c26786e46bda7ee943c766e3c80
+90ab463e5,2026-11-03,普通,CodexMobile / phodex-bridge,Sync Desktop chat renames and confirmed deletions (#228),https://github.com/Emanuele-web04/remodex/commit/90ab463e5fd2ad6fd18e2e5c318a9b26fb3c62c1
+bbbb23fba,2026-11-03,普通,CodexMobile / phodex-bridge,Keep legacy chats grouped by their current project (#225),https://github.com/Emanuele-web04/remodex/commit/bbbb23fba6a9a0d7658fe14b959a989f54501c57
+d492e01b8,2026-11-03,普通,CodexMobile,Bound detailed diff rendering on iOS (#227),https://github.com/Emanuele-web04/remodex/commit/d492e01b8fbade60e729da363ba22876fa791c31
+c7778e402,2026-11-03,普通,CodexMobile,Reconcile closed chat history after connection gaps (#224),https://github.com/Emanuele-web04/remodex/commit/c7778e4022b8671748401d93a3a2c3ec437fa511
+8fcad2505,2026-11-03,普通,phodex-bridge,Recover overlapping phone initialization on a warm Codex transport (#226),https://github.com/Emanuele-web04/remodex/commit/8fcad2505b35e522f055973cb41a91abfb85530e
+33bef3052,2026-11-03,普通,phodex-bridge,Safely hand off idle chats and preserve Desktop follow-ups (#223),https://github.com/Emanuele-web04/remodex/commit/33bef30525a57f96262a1e9ce6a64dc0ea5320a0
+b712ecd77,2026-11-03,普通,CodexMobile / phodex-bridge,Encrypt local change ledgers with failure-safe key recovery (#216),https://github.com/Emanuele-web04/remodex/commit/b712ecd77014194b1c78339bc96292ffa285ef9a
+81e0b7794,2026-11-03,普通,README.md / phodex-bridge,Support explicit app-server delegation and endpoint initialization (#221),https://github.com/Emanuele-web04/remodex/commit/81e0b7794fdf070db985741431b5c696d0981302
+a58c06c24,2026-11-03,普通,Legal,Clarify local relay and provider data flows in the privacy notice (#222),https://github.com/Emanuele-web04/remodex/commit/a58c06c248e567b33fbaf2f60b01a0279c11d773
+c36269f00,2026-11-03,普通,phodex-bridge,Recover completed text-only turns from newer rollout history (#209),https://github.com/Emanuele-web04/remodex/commit/c36269f00337843af7de1a93c21369e9e7e26d79
+b6e153c4e,2026-11-03,普通,phodex-bridge,Link npm package metadata to its source repository (#204),https://github.com/Emanuele-web04/remodex/commit/b6e153c4ee6a259185ba411e2e150e9cb9df0458
+caf787461,2026-11-03,普通,CodexMobile / phodex-bridge,Keep voice provider credentials on the bridge (#211),https://github.com/Emanuele-web04/remodex/commit/caf78746172b1fe38389792ed417a85a444edc5f
+b27ddb80d,2026-11-03,普通,CodexMobile / phodex-bridge,Recover safely when the Desktop active turn has already ended (#218),https://github.com/Emanuele-web04/remodex/commit/b27ddb80dc175a97a2e209f52888bac9ef2ab8ce
+669f6770e,2026-11-03,普通,CodexMobile / phodex-bridge,Keep failed sends on the original conversation (#217),https://github.com/Emanuele-web04/remodex/commit/669f6770e8d5c705e61587913314110d38bea30e
+4bee37097,2026-11-03,普通,CodexMobile / phodex-bridge,Keep mixed image result messages visible after turn completion (#214),https://github.com/Emanuele-web04/remodex/commit/4bee370975ce90529dd907c8521a83d17266c348
+42ed1f182,2026-11-03,普通,README.md / phodex-bridge,Resolve current Codex Desktop bundles and target the selected executable (#219),https://github.com/Emanuele-web04/remodex/commit/42ed1f182389721030ca7eae6540a845c784a2da
+834738b45,2026-11-03,普通,CONTRIBUTING.md,docs: clarify iOS Swift package dependencies (#202),https://github.com/Emanuele-web04/remodex/commit/834738b45fbe6f611feff77c5bb1a9cbe4edb38e
+bc2575f40,2026-11-03,普通,phodex-bridge,Keep late bridge-private RPC replies off the phone (#220),https://github.com/Emanuele-web04/remodex/commit/bc2575f40a15b3bcbed5cb2bc020a54804ca9c07
+b499f086c,2026-11-03,普通,phodex-bridge,Recover final output after canonical Desktop completion snapshots (#215),https://github.com/Emanuele-web04/remodex/commit/b499f086c055d95c85859b53d83ce76563cbc000
+1f7537393,2026-11-03,普通,phodex-bridge,Process fragmented desktop IPC frames in linear time (#213),https://github.com/Emanuele-web04/remodex/commit/1f7537393cb56980ad05b142bfb3dccb6012335e
+690793bb2,2026-11-03,普通,phodex-bridge,Reject expired or malformed replacement pairing handshakes (#212),https://github.com/Emanuele-web04/remodex/commit/690793bb2f3c0214b78856e4acbd8c38122b50e0
+3a84d9b65,2026-11-03,普通,relay,Return HTTP 413 for oversized relay JSON requests (#210),https://github.com/Emanuele-web04/remodex/commit/3a84d9b65d52502280b9ee47b6bfd0382473c091
+b97fcad13,2026-11-02,普通,CodexMobile / phodex-bridge,Fix Codex Desktop rendering errors for phone text input (#208),https://github.com/Emanuele-web04/remodex/commit/b97fcad13d769d8473529b4679d605a168cef7e1
+dc551898f,2026-11-02,普通,phodex-bridge,Refresh async input fixture state and error recovery checks (#206),https://github.com/Emanuele-web04/remodex/commit/dc551898fa49458bfff805113c11f88556ea15d5
+f67b1499d,2026-09-29,普通,CodexMobile,Require Remodex CLI 4.0.0 in iOS build 134,https://github.com/Emanuele-web04/remodex/commit/f67b1499dbd8ace7a23902fad3242cc88f7e9a9e
+9b3787e9c,2026-09-29,普通,phodex-bridge,Bump Remodex CLI to 4.0.0,https://github.com/Emanuele-web04/remodex/commit/9b3787e9cc938a1b9bccbbdd379026dee59f9e59
+0202b870c,2026-09-29,普通,CodexMobile,Prepare Remodex 4.0 build 133 for TestFlight,https://github.com/Emanuele-web04/remodex/commit/0202b870cbfb2da28a4a7bab3fead0b5a91459ec
+d8a483490,2026-09-29,普通,CodexMobile,Prevent historical chat outcomes from reviving Dynamic Island (#197),https://github.com/Emanuele-web04/remodex/commit/d8a4834903136de6bab04914ef6796f5b064ab51
+4c66a989b,2026-09-29,普通,CodexMobile / phodex-bridge / relay,Prevent stale and duplicate chat completion notifications (#196),https://github.com/Emanuele-web04/remodex/commit/4c66a989b5b822b7704f73df72dafe42a6c6f6e1
+00b29057c,2026-09-26,合并,CodexMobile / README.md / phodex-bridge,Merge pull request #191 from Emanuele-web04/codex/read-codex-goal-objective,https://github.com/Emanuele-web04/remodex/commit/00b29057c35794d7802b3fbc7d9a4d102d34517f
+907eeace6,2026-09-24,普通,CodexMobile,Keep hidden async input errors when dismissing other footers,https://github.com/Emanuele-web04/remodex/commit/907eeace689dea49811e4ab103fc00cbb6c8c458
+4c131cf9e,2026-09-24,普通,CodexMobile,Preserve async input errors and guard history projection,https://github.com/Emanuele-web04/remodex/commit/4c131cf9e7e5e06bfe63cb14131af929bd8aa310
+40c0b892e,2026-09-24,合并,phodex-bridge,Merge remote-tracking branch 'origin/main' into codex/read-codex-goal-objective,https://github.com/Emanuele-web04/remodex/commit/40c0b892e4286d8e210f2f4e873bfc5085d9cd14
+e0e342dac,2026-09-20,合并,phodex-bridge,Merge pull request #189 from Emanuele-web04/codex/ottimizza-batteria-del-bridge,https://github.com/Emanuele-web04/remodex/commit/e0e342dac5cddd40db661bfcf76e5ab0e3913ef8
+dc4e8c178,2026-09-20,普通,phodex-bridge,Optimize relay watchdog heartbeat probing,https://github.com/Emanuele-web04/remodex/commit/dc4e8c1781d352a3c89c50e8a3d6677bed9ff062
+c06be8173,2026-09-24,普通,CodexMobile / phodex-bridge,Fix Cursor findings in OpenCode polling and iOS state,https://github.com/Emanuele-web04/remodex/commit/c06be81730ce3d2e99a98f85cbfc436d149cb839
+043af9ccb,2026-09-24,普通,CodexMobile / phodex-bridge,Fix mirrored OpenCode titles and inactive completion alerts,https://github.com/Emanuele-web04/remodex/commit/043af9ccb7b1def2cee3e78b077de9668c76b1d7
+008659c66,2026-09-24,普通,CodexMobile / phodex-bridge,Resolve remaining OpenCode review findings,https://github.com/Emanuele-web04/remodex/commit/008659c660df33f2d570ebd71ff8c9e6247d98bb
+7c42d6161,2026-09-24,普通,CodexMobile / phodex-bridge,Finish PR review fixes for OpenCode and iOS workflows,https://github.com/Emanuele-web04/remodex/commit/7c42d61610eeefa231237d1cfe123989987cdf79
+d149fee45,2026-09-24,普通,CodexMobile / phodex-bridge,Fix OpenCode recovery and provider-specific mobile flows,https://github.com/Emanuele-web04/remodex/commit/d149fee4537d62e7498f976b0fa426fe56861258
+e4afef8b6,2026-09-23,普通,CodexMobile / README.md / phodex-bridge,Add Codex goal support across mobile and bridge runtimes,https://github.com/Emanuele-web04/remodex/commit/e4afef8b6a6491e526c742bd19124f21d792be6b
+f1c29f959,2026-09-20,普通,CodexMobile / phodex-bridge,Normalize sandbox policies in desktop IPC follower,https://github.com/Emanuele-web04/remodex/commit/f1c29f95986a0af2ac922cc77948005f06746813
+248ca969a,2026-09-20,普通,CodexMobile / phodex-bridge,Add recoverable stream failure handling and continuation UI,https://github.com/Emanuele-web04/remodex/commit/248ca969a2431ed6e21433916da31c700ba53093
+fc3aedea8,2026-09-14,普通,CodexMobile,Fix streaming markdown layout and timeline scrolling,https://github.com/Emanuele-web04/remodex/commit/fc3aedea8aade44b50ac944b4801e7a16733ee4d
+11f339498,2026-09-14,普通,CodexMobile,Filter memory citations from assistant timeline actions,https://github.com/Emanuele-web04/remodex/commit/11f339498eddbdc4ca4cc906e26b1d8b71495924
+7ca6e0f00,2026-09-11,普通,CodexMobile / phodex-bridge,Migrate Codex runtime settings and Desktop IPC synchronization (#183),https://github.com/Emanuele-web04/remodex/commit/7ca6e0f000e451a66fb5837e40cdd0d654d62ce3
+b045af6eb,2026-09-11,普通,phodex-bridge,Fix stale Desktop stream fallback and untracked diff detection,https://github.com/Emanuele-web04/remodex/commit/b045af6eb4e81e28addda5fa5241c0599da88703
+97c39895a,2026-09-11,普通,CodexMobile / phodex-bridge,Improve Codex activity tracking and sidebar run indicators (#182),https://github.com/Emanuele-web04/remodex/commit/97c39895ac955320a9a78545d69842976837d101
+3ce4513a0,2026-09-10,普通,CodexMobile / README.md / phodex-bridge,Harden Desktop IPC sync and disable automatic thread following,https://github.com/Emanuele-web04/remodex/commit/3ce4513a086043a8654dac5d21127eec3529fe8d
+a08a6dd4b,2026-08-29,普通,phodex-bridge,Synchronize bridge state with canonical Desktop history,https://github.com/Emanuele-web04/remodex/commit/a08a6dd4bbe324fd96be1b00de189cc5d771367f
+2e612b440,2026-08-29,普通,CodexMobile / phodex-bridge,Align mobile continuation routing with v3.2 desktop IPC,https://github.com/Emanuele-web04/remodex/commit/2e612b4408d69a8405daef7e823be4577abe0f2d
+8105e2503,2026-08-10,普通,CodexMobile / phodex-bridge,Bump Remodex to version 3.1,https://github.com/Emanuele-web04/remodex/commit/8105e25038ad07443da01cda6c21e5f77ec61cd5
+de1176ed3,2026-08-10,普通,CodexMobile,Preserve pairing when mobile socket is replaced,https://github.com/Emanuele-web04/remodex/commit/de1176ed36c40614c1119a413e847b0163327bea
+2849acc7f,2026-08-04,普通,phodex-bridge,Bump bridge version to 3.0.0,https://github.com/Emanuele-web04/remodex/commit/2849acc7f213a4f9319cce22f14a4e04b487640f
+4f04fddc0,2026-08-03,普通,CodexMobile,Refresh What's New content for version 3.0,https://github.com/Emanuele-web04/remodex/commit/4f04fddc0d0b8631e9f17141771165a92f617fea
+879287867,2026-08-03,普通,CodexMobile,Remove alternate app icon settings and assets,https://github.com/Emanuele-web04/remodex/commit/87928786720d452e1b17cde454b3b858ca7b7e17
+f2979a29a,2026-08-03,普通,CodexMobile,Require bridge 3.0.0 for iOS 3.0,https://github.com/Emanuele-web04/remodex/commit/f2979a29a56e8a4a4052491a710c7dbb2b1387d8
+fe33c211c,2026-08-03,普通,CodexMobile,Set iOS marketing version to 3.0,https://github.com/Emanuele-web04/remodex/commit/fe33c211cc2f6a54994eef0b916dfa71135b5ac8
+c46e4047b,2026-08-02,普通,CodexMobile / phodex-bridge,Support generic tool call history and prevent detached approval reviews,https://github.com/Emanuele-web04/remodex/commit/c46e4047b9dc32385b9bba69d733c91bc3a16f11
+7a634194c,2026-08-02,普通,CodexMobile / phodex-bridge,Fix tool activity lifecycle and collapse stale streaming rows,https://github.com/Emanuele-web04/remodex/commit/7a634194cc2ee899d944f1508d233925c15f519f
+55ae5e776,2026-08-02,普通,CodexMobile,Distinguish workspace mutations from tool results,https://github.com/Emanuele-web04/remodex/commit/55ae5e776f9d8f8415b6976e04c828e8840bed5b
+4eeb30d8d,2026-08-02,普通,CodexMobile,Hide approved auto-approval reviews from the timeline,https://github.com/Emanuele-web04/remodex/commit/4eeb30d8de4bf05ab66e56e080df9957236dda92
+223712016,2026-08-02,普通,CodexMobile,Adopt UIKit menus across settings and terminal controls,https://github.com/Emanuele-web04/remodex/commit/22371201603b7fe514f94818fba785793ba3802d
+95ff2bbac,2026-08-02,普通,phodex-bridge,Bump bridge version to 2.5.6,https://github.com/Emanuele-web04/remodex/commit/95ff2bbac71192fe166454638a5642bb23c9e2be
+5e9d7cbed,2026-08-02,普通,CodexMobile,Reconcile duplicate final answers and preserve live tool calls,https://github.com/Emanuele-web04/remodex/commit/5e9d7cbedf6390ae200fd657c3da845258fb84a0
+c85e65c90,2026-08-02,普通,CodexMobile / README.md / phodex-bridge,Improve local runtime and timeline handling,https://github.com/Emanuele-web04/remodex/commit/c85e65c900d90ce572ba172a8af95f12162ed999
+8afece3d6,2026-07-30,普通,phodex-bridge,Replay sidebar announcements after rollout materialization,https://github.com/Emanuele-web04/remodex/commit/8afece3d693c1d7bce3d76ce2b9d9c1692d042f4
+88c5838fe,2026-07-30,普通,phodex-bridge,Replay pending broadcasts when Desktop peers join fallback router,https://github.com/Emanuele-web04/remodex/commit/88c5838fed5ec5913bad634dcc38d28a461a08f0
+5af99da68,2026-07-30,普通,README.md / phodex-bridge / plans,Prevent LaunchAgent restart loops and add clean service removal,https://github.com/Emanuele-web04/remodex/commit/5af99da68e20c131c19cf3f6f17f7b47af619eed
+7c8f28e00,2026-07-30,普通,phodex-bridge,Bump bridge version to 2.5.3,https://github.com/Emanuele-web04/remodex/commit/7c8f28e00f3185067215ba26e3d3464fee6f00ea
+7692ebff2,2026-07-30,普通,CodexMobile / phodex-bridge,"Improve thread loading, timeline grouping, and relay recovery",https://github.com/Emanuele-web04/remodex/commit/7692ebff2ed383dde517fb87d2a875ae420d7514
+9c6c9fb5d,2026-07-30,普通,CodexMobile,Retry model loading when opening the runtime picker,https://github.com/Emanuele-web04/remodex/commit/9c6c9fb5d6dc7312e9c0f90fcf6be0ca76cf7beb
+9b3b087a3,2026-07-29,普通,CodexMobile,Add worktree branch selection and centered runtime picker,https://github.com/Emanuele-web04/remodex/commit/9b3b087a309753320ac10e24a570ef3bb730def4
+5a1834047,2026-07-28,普通,CodexMobile / phodex-bridge,Consolidate managed worktree creation,https://github.com/Emanuele-web04/remodex/commit/5a1834047ee5510a7beeefd80ffdaa046f975ec5
+99308ec22,2026-07-28,普通,phodex-bridge,Copy .worktreeinclude files into new and reused worktrees,https://github.com/Emanuele-web04/remodex/commit/99308ec22adf6ce454040da9804eea444bdae1ef
+0818e7d86,2026-07-28,普通,CodexMobile,Relax runtime config validation and redesign sidebar controls,https://github.com/Emanuele-web04/remodex/commit/0818e7d866b060c7f4bf393fc88eefd72af59a82
+dcdc5ddf6,2026-07-28,普通,phodex-bridge,Bump bridge version to 2.5.2,https://github.com/Emanuele-web04/remodex/commit/dcdc5ddf6d1c87ceb6c4a1401dcc8e2692e9a8fa
+1fe140559,2026-07-28,普通,CodexMobile,Prioritize active and unread threads in sidebar grouping,https://github.com/Emanuele-web04/remodex/commit/1fe1405599d73d34a696670f6e1bccb2c4ac9ca3
+1ec1e0a6e,2026-07-28,普通,phodex-bridge,Bump bridge version to 2.5.1,https://github.com/Emanuele-web04/remodex/commit/1ec1e0a6efe545c4413a7678aef30a36cb915572
+fae3a0b54,2026-07-28,普通,CodexMobile / phodex-bridge,Improve approval badges and connection recovery,https://github.com/Emanuele-web04/remodex/commit/fae3a0b544901d2fe891c0dab8baa92632337d59
+85f856b59,2026-07-28,普通,CodexMobile / phodex-bridge,Refresh Remodex branding assets,https://github.com/Emanuele-web04/remodex/commit/85f856b59844e7fafb8eef514eaaedcb5ec824fe
+16523d4d3,2026-07-27,普通,phodex-bridge,Bump bridge version to 2.4.1,https://github.com/Emanuele-web04/remodex/commit/16523d4d3051628b249b619b325191b8950c7872
+350e5a706,2026-07-27,普通,CodexMobile / phodex-bridge,Group managed worktree chats under their origin project,https://github.com/Emanuele-web04/remodex/commit/350e5a706a8d9593671d3f39272e1b33879a2411
+ddf0408d5,2026-07-25,普通,phodex-bridge,Bump bridge version to 2.4.0,https://github.com/Emanuele-web04/remodex/commit/ddf0408d5c7974384743da85fe3fc87a3c32cd36
+5ba27e53c,2026-07-25,普通,CodexMobile / phodex-bridge,Improve local relay recovery and timeline synchronization,https://github.com/Emanuele-web04/remodex/commit/5ba27e53c7a1f1d3703efd6cc44989ffec83c33e
+59ecd8854,2026-07-20,普通,CodexMobile / phodex-bridge,Add rounded system font and improve dismiss tap target,https://github.com/Emanuele-web04/remodex/commit/59ecd8854f08805d0e51baaba7df36f67a23b86d
+a256f8d46,2026-07-20,普通,CodexMobile / phodex-bridge,Refactor local runtime and timeline synchronization,https://github.com/Emanuele-web04/remodex/commit/a256f8d460b3ad46e4e57a93e2e2ee2f0f433f3b
+0ed45fb76,2026-07-18,普通,CodexMobile,"Adopt the new Remodex mark across app icon, widgets, and glyphs",https://github.com/Emanuele-web04/remodex/commit/0ed45fb767137a92061ec2efc4a5b52155eb2d4b
+0038d8970,2026-07-17,普通,CodexMobile / phodex-bridge,Add approve-for-me auto-review with tool-call row and access popover,https://github.com/Emanuele-web04/remodex/commit/0038d89701adf76c796acded347657f06e9cf1a9
+4e5622182,2026-07-13,普通,phodex-bridge,Bump remodex to 2.3.3 and mark CLI executable,https://github.com/Emanuele-web04/remodex/commit/4e562218223486e8315d33ae604fcfb1dd47a442
+3e2d86089,2026-07-13,普通,phodex-bridge,Fix Desktop turn fallback and collab item compatibility,https://github.com/Emanuele-web04/remodex/commit/3e2d860896703e986c7357c705014f491349132d
+9780428c5,2026-07-13,普通,CodexMobile,Fold completed command groups into history,https://github.com/Emanuele-web04/remodex/commit/9780428c52f9dfd7126e675ee7896dc0d96b567f
+94c50f484,2026-07-13,普通,CodexMobile,Match command summary icon size,https://github.com/Emanuele-web04/remodex/commit/94c50f4844431544c1ef594a6bea63eef233b657
+1805c4b9b,2026-07-13,普通,CodexMobile,Restore light icon material,https://github.com/Emanuele-web04/remodex/commit/1805c4b9bd00f3cfe287fe07f56c2dba069439b6
+1c037e01a,2026-07-13,普通,CodexMobile,Keep per-appearance icon materials,https://github.com/Emanuele-web04/remodex/commit/1c037e01ab25fc8322aa3cd220b4d4c9364aa9b1
+839140786,2026-07-13,普通,CodexMobile,Keep failed command groups neutral,https://github.com/Emanuele-web04/remodex/commit/8391407866b32536c0feef4c0b5a0e400b27c249
+895b7dde4,2026-07-13,普通,CodexMobile,Preserve supplied Icon Composer styling,https://github.com/Emanuele-web04/remodex/commit/895b7dde47db07bf5ae577dbf3bc33111ce18798
+f3f99e983,2026-07-13,普通,CodexMobile,Use adaptive Remodex app icon by default,https://github.com/Emanuele-web04/remodex/commit/f3f99e983a03718a65594f76f7ec07f22ad225c0
+d4d8e2156,2026-07-13,合并,CodexMobile,Merge pull request #166 from Emanuele-web04/codex/pr163-tool-call-groups,https://github.com/Emanuele-web04/remodex/commit/d4d8e215678b1fb698edb2c58d1fcfe501b6adb0
+fa0f52717,2026-07-13,普通,CodexMobile,Close command traces across hidden commentary,https://github.com/Emanuele-web04/remodex/commit/fa0f527172b9ae0d852706f3dc0ee85ce3998255
+7a8a953ef,2026-07-13,普通,CodexMobile,Keep file changes inside command traces,https://github.com/Emanuele-web04/remodex/commit/7a8a953ef708348fbe43fb70f07a270cab6c0e23
+ad0fc7a25,2026-07-13,普通,CodexMobile,Refresh app icon and symbol SVG assets,https://github.com/Emanuele-web04/remodex/commit/ad0fc7a25db4da11cdb2f100e7e1163281bfe414
+5264f8060,2026-07-12,普通,CodexMobile,Preserve trailing command reasoning traces,https://github.com/Emanuele-web04/remodex/commit/5264f8060e12d6de89198b010b256d4d41a2a6b9
+74a6926a5,2026-07-12,普通,CodexMobile,Preserve hidden command boundaries after completion,https://github.com/Emanuele-web04/remodex/commit/74a6926a5d618f4e6fcbfe3144072835f085e681
+73a290adc,2026-07-12,普通,CodexMobile,Keep command traces and actions visible after completion,https://github.com/Emanuele-web04/remodex/commit/73a290adc4bfa7997f2580daa24ba316b161c4a8
+6bc43444f,2026-07-12,普通,CodexMobile,Preserve command trace order through timeline projection,https://github.com/Emanuele-web04/remodex/commit/6bc43444f5a7550cff5333b934b9cd0135b8befb
+c3e7923f8,2026-07-12,普通,CodexMobile,Preserve command trace order and surface failures,https://github.com/Emanuele-web04/remodex/commit/c3e7923f894560fb9bb715bf695fc04d233cc4cd
+a2e282732,2026-07-12,普通,CodexMobile,Keep command groups across reasoning traces,https://github.com/Emanuele-web04/remodex/commit/a2e2827320f51c34872003064a13ca191afecacb
+5fe2eb9be,2026-07-12,合并,.plan / CodexMobile / phodex-bridge / relay,Merge main and align command tool grouping,https://github.com/Emanuele-web04/remodex/commit/5fe2eb9bea3d738071be77f9d11ae9e5bad85643
+0430907cc,2026-07-08,普通,CodexMobile,Collapse finished command execution rows,https://github.com/Emanuele-web04/remodex/commit/0430907ccfb59e8a75e83bd9a43e39f843e0b16b
+94fac0342,2026-07-13,普通,CodexMobile,Add optimistic send reveal animation to user bubbles,https://github.com/Emanuele-web04/remodex/commit/94fac03423589672d3f785194f2ab249670f8b5c
+314d04516,2026-07-12,普通,CodexMobile,Add goal pause and resume controls,https://github.com/Emanuele-web04/remodex/commit/314d045168f370b3b7a47953a9a82103e44398bf
+8368728f2,2026-07-12,普通,CodexMobile,Add goal chip to composer secondary bar,https://github.com/Emanuele-web04/remodex/commit/8368728f2f90d4902199b738136df9058da319e1
+16bbd3b47,2026-07-12,普通,.plan / CodexMobile,Render inline skill tokens in composer text,https://github.com/Emanuele-web04/remodex/commit/16bbd3b47ee9342cac67a3c7b8ae2044dd056e36
+8f3a5b069,2026-07-12,合并,CodexMobile / phodex-bridge / relay,Merge pull request #158 from Emanuele-web04/feature/codex-thread-goals,https://github.com/Emanuele-web04/remodex/commit/8f3a5b069dad0e254fb034244e3586ef98395d66
+b42c31fac,2026-07-12,普通,relay,Fix secure relay simulation for protocol v2,https://github.com/Emanuele-web04/remodex/commit/b42c31fac1d6aa2c34c3b3b83139e2a27e0de3f2
+442ab717a,2026-07-12,合并,.gitignore / AGENTS.md / CLAUDE.md / CodexMobile / README.md / deeplinks-D8FzxbSB.js / main-Bw7nouYH.js / phodex-bridge / preload.js / relay / tmp-vps-live,Merge main and add native goal live sync,https://github.com/Emanuele-web04/remodex/commit/442ab717abc8932044830b1ce0dd006add81e108
+6368f14f1,2026-07-12,普通,phodex-bridge,Bump version to 2.3.0,https://github.com/Emanuele-web04/remodex/commit/6368f14f1bcacd7b7ad6a0cb8e6f27c9d2ee9f48
+f177244a7,2026-07-12,普通,CodexMobile / phodex-bridge,Refine local relay recovery and timeline handling,https://github.com/Emanuele-web04/remodex/commit/f177244a7dd770fbe676e7e09168eddfab42b010
+239284792,2026-07-12,普通,CodexMobile,Rename assistant response tracking and refine plan highlighting,https://github.com/Emanuele-web04/remodex/commit/23928479263abf35c2559be3dd620f8ab1cd9e33
+e9ad6bd5b,2026-07-12,普通,CodexMobile,Refactor local relay pairing and timeline recovery flows,https://github.com/Emanuele-web04/remodex/commit/e9ad6bd5b16232f1e0251ce545b66411593e907c
+0f5ed9404,2026-07-11,普通,CodexMobile / phodex-bridge,Fix live-turn history reconciliation and timeline recovery,https://github.com/Emanuele-web04/remodex/commit/0f5ed9404fb7b1da97d8abba0fb8c72ef9bcdae6
+200c9385f,2026-07-11,普通,CodexMobile,Refine history repair and stabilize voice waveform scrolling,https://github.com/Emanuele-web04/remodex/commit/200c9385fbaa4fe624107bed525bbb4397a38230
+f03bee838,2026-07-11,普通,CodexMobile,Repair canonical assistant identity rotations in history merge,https://github.com/Emanuele-web04/remodex/commit/f03bee83824d423e9575defeb922ff62d3134642
+c7c19aea7,2026-07-11,普通,CodexMobile,Reconnect replayed assistant deltas to persisted provider items,https://github.com/Emanuele-web04/remodex/commit/c7c19aea7cd07f3ee48a175fcc870aaa1eba00a0
+e08d0411b,2026-07-11,普通,CodexMobile,Make voice recording waveform scroll smoothly,https://github.com/Emanuele-web04/remodex/commit/e08d0411b4df088571a9f0330b9fdc3ac2246712
+403092f54,2026-07-11,普通,CodexMobile / phodex-bridge,Refine composer sizing and stabilize timeline bottom tracking,https://github.com/Emanuele-web04/remodex/commit/403092f544b89d5b6b36847b187aaf63081c58c0
+fb4ee01a6,2026-07-11,普通,CodexMobile / phodex-bridge,Improve local relay recovery and thread state reconciliation,https://github.com/Emanuele-web04/remodex/commit/fb4ee01a61f7ba70627f0937d6a68d91d58139ac
+c548215dc,2026-07-10,普通,CodexMobile,Refactor local relay and thread recovery flows,https://github.com/Emanuele-web04/remodex/commit/c548215dc41f9e19c594962e2524c334a7d9efef
+c70d77f3e,2026-07-10,普通,phodex-bridge,Bump version to 2.2.7,https://github.com/Emanuele-web04/remodex/commit/c70d77f3ee8dfe80ee7dcbf1c9ab638769252fd2
+1662e2d5d,2026-07-10,普通,CodexMobile / phodex-bridge,Preserve reasoning summary boundaries in streamed timelines,https://github.com/Emanuele-web04/remodex/commit/1662e2d5d7b7f171e7c1033c70948cb34c2f411f
+7c61f470c,2026-07-10,普通,phodex-bridge,Bump bridge version to 2.2.6,https://github.com/Emanuele-web04/remodex/commit/7c61f470c6df76d8c22728fa7d9321941f602515
+c634629de,2026-07-10,普通,CodexMobile / phodex-bridge,Refactor local bridge state recovery and thread handling,https://github.com/Emanuele-web04/remodex/commit/c634629de9e8db302f47e00e4a59ad0affceed4d
+a808c13d0,2026-07-10,普通,CodexMobile / phodex-bridge,Improve local relay recovery and thread state handling,https://github.com/Emanuele-web04/remodex/commit/a808c13d05741b8ab17098c3d6b24e9543bf17a5
+53c32ce76,2026-07-10,普通,phodex-bridge,Bump bridge version to 2.2.4,https://github.com/Emanuele-web04/remodex/commit/53c32ce76fd5f99a7f8da06ed5f79e58086ab938
+fd4a8aff8,2026-07-10,普通,CodexMobile / phodex-bridge,Refine local relay recovery and timeline reconciliation,https://github.com/Emanuele-web04/remodex/commit/fd4a8aff81a4c67683abaa41d4df2edc5bf1bc6c
+6d5a76cdc,2026-07-09,普通,CodexMobile / phodex-bridge,Refine local relay pairing and timeline recovery,https://github.com/Emanuele-web04/remodex/commit/6d5a76cdc5a57f042abebaf15a7d648a0aee3f89
+2d4ce8473,2026-07-08,普通,CodexMobile / phodex-bridge,Refine local relay recovery and thread state handling,https://github.com/Emanuele-web04/remodex/commit/2d4ce84731861ff3ddbcadbdafd4132b73f3a611
+73e5bc5bd,2026-07-08,普通,AGENTS.md / CLAUDE.md / CodexMobile / phodex-bridge,Improve local relay reconnect handling,https://github.com/Emanuele-web04/remodex/commit/73e5bc5bd34f7dc0e895e6f5882529ac71f998ad
+5e8f9e0d1,2026-07-07,普通,CodexMobile / phodex-bridge,Fix turn recovery and timeline file-change merging,https://github.com/Emanuele-web04/remodex/commit/5e8f9e0d1a1f27bc40eab2bf6ec05c9348063576
+1a5b0eb57,2026-07-07,普通,.gitignore / CodexMobile / deeplinks-D8FzxbSB.js / main-Bw7nouYH.js / phodex-bridge / preload.js / relay / tmp-vps-live,Harden bridge and mobile runtime error handling (#162),https://github.com/Emanuele-web04/remodex/commit/1a5b0eb572bced976831193ca7522877ee48af9f
+c2f0030d5,2026-07-07,普通,CodexMobile / phodex-bridge,Refine local relay pairing and thread recovery,https://github.com/Emanuele-web04/remodex/commit/c2f0030d54fc0f8b936ecbc8b1467d6b91fd785e
+6f27902d4,2026-07-07,普通,phodex-bridge,Bump bridge version to 2.1.9,https://github.com/Emanuele-web04/remodex/commit/6f27902d413a8ed48a0de2e01072d7d519fc1130
+f81b62ca0,2026-07-07,普通,CodexMobile,Redesign composer accessories into a capsule carousel,https://github.com/Emanuele-web04/remodex/commit/f81b62ca088efe8cabeb14cce577e8c20f954373
+fdd3dad95,2026-07-07,普通,CodexMobile,Dedupe reasoning rows across Desktop mirror sources,https://github.com/Emanuele-web04/remodex/commit/fdd3dad952aeb9c37927db66f1c37670c4426b52
+f91e710fb,2026-07-07,普通,phodex-bridge,Fortify Desktop reconnect mirroring against stalls and dropped queues,https://github.com/Emanuele-web04/remodex/commit/f91e710fbd1eab6049aa9d30126a450f211a20d9
+a83e1ff76,2026-07-06,普通,CodexMobile / phodex-bridge,Merge desktop mirror identities and stabilize refresh handling,https://github.com/Emanuele-web04/remodex/commit/a83e1ff760ab1659d82688c3f3576871005cf4d0
+2cc8d8c9d,2026-07-06,普通,CodexMobile,Handle mirrored user prompts on item/completed and todoList items,https://github.com/Emanuele-web04/remodex/commit/2cc8d8c9d2d133975215b9e918ac418046825dc6
+b88bfabd9,2026-07-06,普通,CodexMobile,Show mirrored Desktop user messages immediately,https://github.com/Emanuele-web04/remodex/commit/b88bfabd9c92adade7fbaf501699b02a1b3cbae7
+18a448c0c,2026-07-06,普通,phodex-bridge,Keep locally-streamed threads authoritative against Desktop IPC takeover,https://github.com/Emanuele-web04/remodex/commit/18a448c0c38ad5b10ff75998dfe9fff3fd2ea39f
+e4b58a532,2026-07-06,普通,CodexMobile,Support markdown rendering in user message bubbles (#161),https://github.com/Emanuele-web04/remodex/commit/e4b58a5327758b808bf362b992351638fb5ab63c
+6c3235322,2026-07-06,普通,CodexMobile,Restore terminal Copy menu and selectable text sheet (#160),https://github.com/Emanuele-web04/remodex/commit/6c3235322814724f1f999de7af2c9b23b5a6f98a
+c1a4c25e8,2026-07-06,普通,CodexMobile / phodex-bridge,Fix Desktop follower start-turn error and first-turn context leak (#159),https://github.com/Emanuele-web04/remodex/commit/c1a4c25e816f1e5bff2bb141e54c955b8a312791
+a937877eb,2026-07-06,普通,phodex-bridge,Unify user-item helpers and close remaining context filter edges,https://github.com/Emanuele-web04/remodex/commit/a937877eb32dff52cd37c6474dcd4bbf17a7cbb1
+3233e4534,2026-07-06,普通,phodex-bridge,Filter injected context user items from every history and live path,https://github.com/Emanuele-web04/remodex/commit/3233e4534b54caec1ae943d8dae375b26fbc5453
+5e857d1a9,2026-07-06,普通,CodexMobile,Tighten collapsed composer spacing and neutralize run badge,https://github.com/Emanuele-web04/remodex/commit/5e857d1a95490876c7943989240737192b8b445a
+9ac61cde3,2026-07-06,普通,phodex-bridge,Harden queue semantics and split the live owner into focused modules,https://github.com/Emanuele-web04/remodex/commit/9ac61cde31cf8582d0e894cebedaebc9587c11e4
+f889192ea,2026-07-06,普通,phodex-bridge,Close remaining phone-to-Desktop sync gaps,https://github.com/Emanuele-web04/remodex/commit/f889192ea3d672db78c2c51c3bdc7f9b24834281
+1e2673ce5,2026-07-06,普通,phodex-bridge,Keep the initial prompt in turn params so Desktop stops labeling it steered,https://github.com/Emanuele-web04/remodex/commit/1e2673ce5f871e26d8caa0faaa251ad5107f5fbb
+3eeec7c7c,2026-07-06,普通,phodex-bridge,Propagate phone turn model and effort to Desktop's composer fields,https://github.com/Emanuele-web04/remodex/commit/3eeec7c7ce608ac22dbe2770e8167760886ec245
+648aebc0f,2026-07-06,普通,phodex-bridge,Speak Codex Desktop's real follower dialect for live phone threads,https://github.com/Emanuele-web04/remodex/commit/648aebc0f420529a9a6f0867d7746be26ea5ae67
+4ba1362d8,2026-07-06,普通,phodex-bridge,Announce phone threads to the Desktop sidebar via thread-unarchived,https://github.com/Emanuele-web04/remodex/commit/4ba1362d8e68907702e261a1900f3c1da1e35e30
+57b645614,2026-07-06,普通,README.md / phodex-bridge,Fix live sync mirroring against real Codex Desktop behavior,https://github.com/Emanuele-web04/remodex/commit/57b64561405170637418c061f56dcd5e424c2a45
+c9aee445f,2026-07-06,普通,CodexMobile,Fix invalid empty switch case in sidebar run badge state,https://github.com/Emanuele-web04/remodex/commit/c9aee445f0f8e6180413a3b65f4a54ccab725101
+c54e3d877,2026-07-06,合并,CodexMobile / README.md / phodex-bridge,Merge pull request #157 from Emanuele-web04/codex/pr153-ipc-live-sync-fixes,https://github.com/Emanuele-web04/remodex/commit/c54e3d877cf74b99f4c2c33949b117840fd0eb6f
+982cf0644,2026-07-06,普通,phodex-bridge,Optimize IPC live sync hot paths to O(delta) per event,https://github.com/Emanuele-web04/remodex/commit/982cf0644bbd2783c839e8f500a0059a90b78b89
+7c04f4427,2026-07-06,普通,CodexMobile / phodex-bridge,Fix thread replacement rebuild and evicted mirror recovery,https://github.com/Emanuele-web04/remodex/commit/7c04f44276a69c0f1ae63f7cd587d06f6eb4ba33
+d9be5bece,2026-07-06,普通,CodexMobile / phodex-bridge,"Close projector mirror gaps for full replace, running items, and metadata",https://github.com/Emanuele-web04/remodex/commit/d9be5bece7c6afdeb345f63191f03d7c93c5ff27
+b39cb40c8,2026-07-06,普通,phodex-bridge,Sync phone archive metadata for list threads,https://github.com/Emanuele-web04/remodex/commit/b39cb40c89775bb78c4f09468a474c86bb464444
+4c75b7461,2026-07-05,普通,CodexMobile / phodex-bridge,Complete IPC archive metadata sync,https://github.com/Emanuele-web04/remodex/commit/4c75b7461acdeda8e2f93e8c73fa245376a0b588
+8c2aa37f2,2026-07-05,普通,phodex-bridge,Normalize Desktop IPC tool aliases for mobile,https://github.com/Emanuele-web04/remodex/commit/8c2aa37f2d5bcedc0ffd5834eb127d39ae3c7ddc
+d0763a7d9,2026-07-05,普通,CodexMobile / phodex-bridge,Add Desktop IPC conversation projection,https://github.com/Emanuele-web04/remodex/commit/d0763a7d95f58d013c18f789189232702d9ecebe
+592a24503,2026-07-05,普通,phodex-bridge,Harden desktop IPC live sync edge cases,https://github.com/Emanuele-web04/remodex/commit/592a24503f4202b59e0789d401ce2e99f063d274
+1131cc14a,2026-07-05,合并,CodexMobile / phodex-bridge,Merge remote-tracking branch 'origin/main' into codex/pr153-ipc-live-sync-fixes,https://github.com/Emanuele-web04/remodex/commit/1131cc14a14a9564e0b017640bdec00595c5ebee
+00dae5301,2026-07-05,普通,phodex-bridge,Handle live owner removal broadcasts in IPC follower,https://github.com/Emanuele-web04/remodex/commit/00dae53015ac0ede0ea8667b0dd957a0fee4391e
+bde186c35,2026-07-05,普通,phodex-bridge,Avoid live-owner claims for held IPC turns,https://github.com/Emanuele-web04/remodex/commit/bde186c352227a393700b1cade0459bf3b68296d
+ae1d1d9ad,2026-07-05,普通,phodex-bridge,Include the IPC method version in ownership probes,https://github.com/Emanuele-web04/remodex/commit/ae1d1d9ad917fdb7941a7fb87e956aa85a160e3f
+d12e7ac4d,2026-07-05,普通,phodex-bridge,Fix live owner pending turn dedupe and archive release,https://github.com/Emanuele-web04/remodex/commit/d12e7ac4da53cbcaa1d028016d0559b9e65054bf
+c4612e90a,2026-07-05,普通,phodex-bridge,Fix live owner cache and held turn observation,https://github.com/Emanuele-web04/remodex/commit/c4612e90a48067eaa446b5abf62c0dcf3b6a928e
+c39785ea8,2026-07-05,普通,phodex-bridge,Keep held IPC turns queued across disconnects,https://github.com/Emanuele-web04/remodex/commit/c39785ea8626c0214b86c7672795b087a4d502c6
+7c81f15d5,2026-07-05,普通,phodex-bridge,Fix desktop IPC ownership guard edge cases,https://github.com/Emanuele-web04/remodex/commit/7c81f15d51c8e9cc6682eeef7c585a780ae9ba8a
+197eed2aa,2026-07-05,普通,phodex-bridge,Coalesce held desktop IPC turn starts,https://github.com/Emanuele-web04/remodex/commit/197eed2aa5f31be76c9e07966f09d65da921e04e
+1dba104ee,2026-07-05,普通,phodex-bridge,Route expired held turns through the IPC bus and stream fileChange deltas,https://github.com/Emanuele-web04/remodex/commit/1dba104eec7352e2cf2859188e580a8ffde62d5d
+b0f5560f9,2026-07-05,普通,phodex-bridge,Fix desktop IPC ownership review follow-ups,https://github.com/Emanuele-web04/remodex/commit/b0f5560f96b9bbbd582f82b6ca9af78a89dde6f7
+d23062262,2026-07-05,普通,phodex-bridge,Fix desktop IPC stale probe ownership,https://github.com/Emanuele-web04/remodex/commit/d23062262aa8fd47cafb5931b8c7213daa7e0853
+9189dcd65,2026-07-05,普通,phodex-bridge,Harden desktop IPC routing against double execution and prompt loss,https://github.com/Emanuele-web04/remodex/commit/9189dcd65c158b0501c95c829efee40784924289
+b7569be31,2026-07-05,普通,phodex-bridge,Resolve held phone turns via IPC discovery and clear yielded owner state,https://github.com/Emanuele-web04/remodex/commit/b7569be31ec783a2a9d063792a68c0e0976a7171
+763796b3c,2026-07-05,普通,phodex-bridge,Convert desktop permission approvals into app-server grant payloads,https://github.com/Emanuele-web04/remodex/commit/763796b3c69288b3b863576a968b5e28fd2c178f
+6b0a06db9,2026-07-05,普通,phodex-bridge,Fix desktop IPC ownership handoff follow-ups,https://github.com/Emanuele-web04/remodex/commit/6b0a06db9dc22927a2e1b76e8ea8983d91eea708
+c6fe51ae9,2026-07-05,普通,phodex-bridge,"Fix desktop IPC review findings on ownership, routing, and snapshots",https://github.com/Emanuele-web04/remodex/commit/c6fe51ae9368e576351ae573c4f5e4e6f3af4239
+76a662b7c,2026-07-04,普通,phodex-bridge,Fix desktop IPC live sync regressions,https://github.com/Emanuele-web04/remodex/commit/76a662b7c3aa5b7236efe70096663dcbb85f0eb3
+c0718de99,2026-06-01,普通,phodex-bridge,Fix desktop IPC live snapshot hydration,https://github.com/Emanuele-web04/remodex/commit/c0718de9931e15d4c4dd037d8c88f3b8298df19b
+be6734989,2026-06-01,普通,README.md / phodex-bridge,Add Codex Desktop IPC live sync,https://github.com/Emanuele-web04/remodex/commit/be673498972d3a326fee2bab0d3e5736a9ef83b5
+3681adfa3,2026-07-06,普通,CodexMobile,Use shared worktree and GitHub icons,https://github.com/Emanuele-web04/remodex/commit/3681adfa395fcfbc06f9696404eb11d4a4f4ce59
+fb34cbbd1,2026-07-05,普通,CodexMobile,Improve collapsed composer tap targets and menu order,https://github.com/Emanuele-web04/remodex/commit/fb34cbbd19cf8ecb9714bca0ed842b1812b62996
+1b5fe78bc,2026-07-05,普通,CodexMobile / phodex-bridge,Refine local relay and iOS runtime behavior,https://github.com/Emanuele-web04/remodex/commit/1b5fe78bc768757bb37ef34eae68bbfa6108dec5
+c987076f8,2026-07-04,普通,CodexMobile / phodex-bridge,Add native Codex thread goal support (/goal),https://github.com/Emanuele-web04/remodex/commit/c987076f852c77969487fa5bbb86887d29f3fcaa
+14a825746,2026-07-03,普通,CodexMobile / phodex-bridge,Stabilize replayed activity and widget state,https://github.com/Emanuele-web04/remodex/commit/14a8257469f1526b8866266bd112602925da4bd8
+7f7b7cc01,2026-07-02,普通,CodexMobile,Use octocat icon for GitHub tool calls,https://github.com/Emanuele-web04/remodex/commit/7f7b7cc013ae5f2912d782f6e02fd1945b6bd1c8
+d12b253c2,2026-07-02,普通,CodexMobile,Simplify command execution status display,https://github.com/Emanuele-web04/remodex/commit/d12b253c206c2134d503732347b2d174d955f28b
+0a374c73a,2026-07-01,普通,CodexMobile,Refactor streaming markdown into modular vsync reveal pipeline,https://github.com/Emanuele-web04/remodex/commit/0a374c73a2a036dc1123fae84092fa5c431aeed5
+4387129d7,2026-07-01,普通,CodexMobile,Optimize streaming markdown rendering and message ordering,https://github.com/Emanuele-web04/remodex/commit/4387129d7ff7de463074a6cb4feffb0dddcd880f
+4bb517e4c,2026-06-30,普通,CodexMobile,Add central icons for tool activity and command rows,https://github.com/Emanuele-web04/remodex/commit/4bb517e4c99eabb4221762f21f858dfa8ddc5da6
+7efa7dffb,2026-06-02,合并,CodexMobile,Merge pull request #149 from ImSakushi/dynamic-island,https://github.com/Emanuele-web04/remodex/commit/7efa7dffb51ef84d761702c8d6d278488e664429
+924880a7c,2026-06-02,普通,CodexMobile,Keep Dynamic Island outcomes off active chat,https://github.com/Emanuele-web04/remodex/commit/924880a7c1ff0b028d8005ec144cffbad10d80d1
+0c5ab32be,2026-06-02,普通,CodexMobile,Fix Dynamic Island terminal state handling,https://github.com/Emanuele-web04/remodex/commit/0c5ab32be9e610a1b7b16f8437fd13d78000000e
+00a4e92a1,2026-05-26,普通,CodexMobile,Improve Dynamic Island live activity sync,https://github.com/Emanuele-web04/remodex/commit/00a4e92a180692f5f1ca3809c813e61f394b4984
+ec61c09b0,2026-05-26,普通,CodexMobile,Add Dynamic Island quick actions,https://github.com/Emanuele-web04/remodex/commit/ec61c09b0b6fac755128265c47e26d262eac1a82
+c4adab316,2026-05-25,普通,CodexMobile,Fix deep link routing and stale island state,https://github.com/Emanuele-web04/remodex/commit/c4adab316bc5b57a6489989b53390feff69cee8c
+59c66bf71,2026-05-25,普通,CodexMobile,Fix Dynamic Island completion persistence,https://github.com/Emanuele-web04/remodex/commit/59c66bf7194d8082876734ebb1664ac21802bef6
+c11bf3da8,2026-05-25,普通,CodexMobile,Polish Dynamic Island conversation states,https://github.com/Emanuele-web04/remodex/commit/c11bf3da88deb61ea6fd706e6f15335100c419bf
+fd561e963,2026-05-25,普通,CodexMobile,Add Dynamic Island conversation status,https://github.com/Emanuele-web04/remodex/commit/fd561e96376f0c20cde3a2e583d9129f4443d77a
+e800402bc,2026-06-02,普通,CodexMobile,"Summary: I reviewed the full current diff again, including the stale-Run",https://github.com/Emanuele-web04/remodex/commit/e800402bc8abd7f30efd3d517dd64071199a5b58
+28f7d3c81,2026-05-27,普通,CodexMobile,Update in-app What's New for Remodex 2.0,https://github.com/Emanuele-web04/remodex/commit/28f7d3c817129d77e5ece4fbe950e8b85ee0ae48
+e5bc38a9a,2026-05-27,普通,CodexMobile / README.md / phodex-bridge,Release Remodex CLI 2.0 compatibility,https://github.com/Emanuele-web04/remodex/commit/e5bc38a9a1865c4fe4b245d19ea02f9df1013847
+b5c3824bb,2026-05-27,普通,CodexMobile,Add app review prompting after successful runs,https://github.com/Emanuele-web04/remodex/commit/b5c3824bb2a3017de6d326f96a5cfa258796f6db
+6d2a13858,2026-05-27,普通,CodexMobile / README.md,Add SSH terminal setup help and route handling,https://github.com/Emanuele-web04/remodex/commit/6d2a1385827a5e138b602ce552baf5623709ce2d
+13d3e07e6,2026-05-27,普通,phodex-bridge,Bump remodex beta version to 1.5.9,https://github.com/Emanuele-web04/remodex/commit/13d3e07e68159dbcb76991fd96ef181d541fab15
+db5bb695f,2026-05-27,普通,CodexMobile,Defer timeline observers and tighten composer spacing,https://github.com/Emanuele-web04/remodex/commit/db5bb695fb599c72fd17ba1e5ca9c2cd54248023
+7a18c59f6,2026-05-27,普通,CodexMobile,Fix timestamp formatting and settings picker typography,https://github.com/Emanuele-web04/remodex/commit/7a18c59f67373c6d2b264e41f6cabfe280910e2b
+07029dcc0,2026-05-27,普通,CodexMobile / phodex-bridge,Fix session timestamp formatting and settings picker styling,https://github.com/Emanuele-web04/remodex/commit/07029dcc0e1421b3dd384aea6ac50e56112782d2
+8b7c07fa4,2026-05-27,普通,CodexMobile,Refine queued turn mirroring and timeline rendering,https://github.com/Emanuele-web04/remodex/commit/8b7c07fa41e24b6eb1bc6591a143cbb75bc891da
+b00dc3d6c,2026-05-26,普通,CodexMobile / phodex-bridge,Keep Git actions visible for repo-bound root chats,https://github.com/Emanuele-web04/remodex/commit/b00dc3d6c2b48f3d8724fe8b67c48d7b7736d80c
+deb342eb0,2026-05-26,普通,CodexMobile / phodex-bridge,Fix voice transcription cap and bridge base64 validation,https://github.com/Emanuele-web04/remodex/commit/deb342eb0aecd6d113dca28812822c4f721227b9
+7968103f8,2026-05-26,普通,CodexMobile,Refine pairing code and composer UI,https://github.com/Emanuele-web04/remodex/commit/7968103f878e9b5c2cd3f47d4b1b59612904379b
+b00fdfdfa,2026-05-25,普通,CodexMobile / phodex-bridge,Refine app icon picker previews and contrast variant,https://github.com/Emanuele-web04/remodex/commit/b00fdfdfa29e8e79774d58cfdc60de8d4f554e31
+b010c7fd4,2026-05-25,合并,CodexMobile / MacDano.md / phodex-bridge,Merge pull request #146 from CarmineSgariglia/codex/menu-bar-device-status-cli-audit,https://github.com/Emanuele-web04/remodex/commit/b010c7fd49f47772c96778ed3148303284a73ac9
+7359e28b4,2026-05-22,普通,CodexMobile / MacDano.md / phodex-bridge,Improve menu bar bridge device status,https://github.com/Emanuele-web04/remodex/commit/7359e28b4ebc89113615537badf5811d777f5345
+29c6d2a48,2026-05-25,普通,CodexMobile,Use rem-outline for widget icons without lock screen padding,https://github.com/Emanuele-web04/remodex/commit/29c6d2a48f74c7506dd57d83203f1268808e5c62
+360216867,2026-05-25,普通,phodex-bridge,Bump bridge package to 1.5.7,https://github.com/Emanuele-web04/remodex/commit/360216867627c76f08dc7a2ddaa33583ff463dd6
+0f5052fa6,2026-05-25,普通,CodexMobile,Fix SwiftUI timeline feedback loop,https://github.com/Emanuele-web04/remodex/commit/0f5052fa64918689950e1845f24ba3bee17e0511
+2263aa23a,2026-05-25,普通,CodexMobile / phodex-bridge,Preserve slash skill tokens in turn input payload,https://github.com/Emanuele-web04/remodex/commit/2263aa23a1129fdcb415f699215017f8f36b28c4
+2e82c9e7a,2026-05-24,合并,.github / CodexMobile / phodex-bridge / relay,Merge pull request #145 from kartikkabadi/upstream/perf-bridge-low-network-efficiency,https://github.com/Emanuele-web04/remodex/commit/2e82c9e7abaa179d35c78d881e4408e6de216d28
+06601968d,2026-05-22,普通,.github / CodexMobile / phodex-bridge / relay,perf: improve bridge memory and low-network efficiency,https://github.com/Emanuele-web04/remodex/commit/06601968d1af75054b3d79927a6541be3fc7415e
+107fd418f,2026-05-24,普通,CodexMobile / Docs / phodex-bridge,Fix composer input scrolling and thumbnail sizing,https://github.com/Emanuele-web04/remodex/commit/107fd418f2bfe02a18900a608c2e7e5f1683d94f
