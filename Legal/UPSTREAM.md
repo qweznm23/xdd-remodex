@@ -13,3 +13,8 @@ history. The original remote is retained as `upstream`; a new maintenance remote
 is configured as `origin`: https://github.com/qweznm23/xdd-remodex (public fork).
 Original metadata backups and unmaintained platform sources are in the private
 host archive, outside the current tracked working tree.
+
+Starting with fix74, the bridge and relay incorporate the original author’s
+[Remodex](https://github.com/Emanuele-web04/remodex) through commit
+`c06dcb16a7059603a41e26a2cb4a81b6d4b5514d`. The Android client continues
+from the XDD fork.
