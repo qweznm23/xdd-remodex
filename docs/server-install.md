@@ -1,0 +1,43 @@
+# 安装 Remodex 服务端（Linux / macOS）
+
+把服务端装在平时运行 Codex 的电脑上，Android 手机上安装同一 Release 的 APK。下面以手机和电脑连接同一个局域网为例。
+
+## 准备电脑
+
+1. 从 [fix73 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix73) 下载 `xdd-remodex-server-0.1.7-ws-fix73.tar.gz`，解压到长期使用的目录。中继和桥接所需的 Node 依赖已包含在包里。
+2. 安装适合电脑芯片的 [Node.js 24](https://nodejs.org/en/download)。用平时使用 Codex 的账户打开终端，运行 `node -v` 确认显示 v24，再运行 `codex` 确认能正常进入已登录的会话，然后退出 Codex。
+3. 查电脑的局域网 IPv4 地址。Linux 可以用 `ip -brief -4 address` 查看当前网卡，Mac 可以在「系统设置 → 网络 → 当前连接 → 详细信息 → TCP/IP」查看。下面所有 `192.168.1.20` 都换成这个地址。
+
+## 启动中继（两种系统相同）
+
+打开两个终端，**分别进入解压后含有 relay 和 phodex-bridge 的目录**。在第一个终端运行：
+
+```sh
+RELAY_BIND_HOST=192.168.1.20 PORT=10004 node relay/server.js
+```
+
+用手机浏览器访问 `http://192.168.1.20:10004/health`。能打开表示手机可以访问中继。如果打不开，检查两台设备是否在同一局域网，以及电脑防火墙是否允许该局域网访问 TCP 10004。
+
+## 启动桥接并配对（选择电脑系统）
+
+**Linux**：在第二个终端运行以下命令，再在电脑浏览器打开 `http://127.0.0.1:19092/` 查看二维码。无桌面的服务器可以在自己的电脑运行 `ssh -L 19092:127.0.0.1:19092 用户名@服务器地址`，再用本机浏览器打开配对页。
+
+```sh
+install -d -m 700 .local/runtime/workspace
+cd .local/runtime/workspace
+REMODEX_RELAY=ws://192.168.1.20:10004/relay node ../../../scripts/launch-bridge.cjs
+```
+
+**macOS**：在第二个终端运行以下命令，二维码会直接显示在终端中。此方式用于连接和聊天。fix73 的账号切换依赖 Linux 的 systemd-run，Mac 示例关闭了自动授权维护。macOS 真机配对尚未验证。
+
+```sh
+REMODEX_AUTH_SCHEDULE_ENABLED=0 REMODEX_RELAY=ws://192.168.1.20:10004/relay node phodex-bridge/bin/remodex.js run
+```
+
+在 Android 手机上打开 **Remodex 的扫码配对**，扫描电脑上的二维码，连接后打开一个会话。使用期间保持这两个终端运行。局域网 IP 改变后，按新地址重新启动并扫码。
+
+## 已有部署和可选功能
+
+- 升级时，下载同一个 Release 的服务端包和 APK。先停止旧服务，把新包解压到新目录。沿用原运行账户、环境配置、配对状态路径和工作目录；使用包内默认路径的 Linux 用户应先将旧目录的 `.local` 保留到新目录。启动新服务并确认连接后，再安装新版 APK。
+- 桥接默认启动当前账户的 `codex app-server`。要连接已有 Codex 桌面服务，可在启动桥接前设置 `REMODEX_CODEX_ENDPOINT`。地址格式见包内 `ops/runtime.env.example`。
+- Linux 的 systemd 自启模板位于 `ops/systemd/`。图片处理和账号管理所需的 Python 依赖列在 `phodex-bridge/requirements.txt`。授权管理调用 `/usr/bin/python3`。

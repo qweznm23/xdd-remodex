@@ -1,6 +1,6 @@
 # XDD Remodex 维护规范
 
-AGENTS.md 与 CLAUDE.md 保持一致。本仓库独立维护 Android 客户端和 Linux 服务端。
+AGENTS.md 与 CLAUDE.md 保持一致。本仓库独立维护 Android 客户端和服务端（Linux / macOS）。
 
 ## 工作区与 Git
 

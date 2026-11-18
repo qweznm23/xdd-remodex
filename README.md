@@ -7,85 +7,54 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
 ## 首次安装
 
-**[下载 Android 安装包（0.1.7-ws-fix73）](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/remodex-0.1.7-ws-fix73.apk)** · [查看版本说明和 SHA-256](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix73)
+手机和电脑分别安装一个文件，两个文件取自[同一版本 fix73](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix73)。
 
-**[下载配套 Linux 服务端（0.1.7-ws-fix73）](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/xdd-remodex-server-0.1.7-ws-fix73-linux.tar.gz)**。在装有 Node.js 24、Python 3 和已登录 Codex CLI 的电脑上解压，按包内 README 启动。桥接和中继的 Node 生产依赖已随包附带。
+| 在哪里安装 | 下载 | 安装后做什么 |
+| --- | --- | --- |
+| 运行 Codex 的电脑（Linux / macOS） | [下载服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/xdd-remodex-server-0.1.7-ws-fix73.tar.gz) | 解压，按[服务端安装指南](docs/server-install.md)启动中继和桥接，显示配对二维码 |
+| Android 手机（8.0 及以上） | [下载 Android APK](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/remodex-0.1.7-ws-fix73.apk) | 打开 APK 安装，按系统提示允许安装，再用 Remodex 扫描电脑上的二维码 |
 
-在 Android 8.0 或更高版本的手机上打开下载的 APK。如果系统询问，允许当前浏览器或文件管理器安装此应用。服务端启动后，打开 Remodex 扫描电脑上的配对二维码。
+两个系统使用同一个服务端包。解压后的 README 也包含完整安装步骤。
 
-### 在 Mac 上运行服务端
+**网络与端口**：按指南部署时，手机和电脑桥接都通过 WebSocket 连接中继。聊天、配对后的连接和重连共用一个 TCP 入口，无需放行 UDP。
 
-Mac 可以复用[同版服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix73/xdd-remodex-server-0.1.7-ws-fix73-linux.tar.gz)。虽然文件名含 `linux`，下面用到的中继和桥接都是 JavaScript，包内已附带所需的 Node 模块。先安装适合本机芯片的 Node.js 24，确认终端里的 `node -v` 和已登录的 `codex` 可用。
+| TCP 端口 | 用途 | 谁需要访问 |
+| --- | --- | --- |
+| 10004 | WebSocket 中继、HTTP 健康检查 | 手机需要能访问电脑的这个端口 |
+| 19092 | Linux 启动器的二维码网页 | 仅电脑本机。macOS 指南直接在终端显示二维码 |
+| 19093 | 可选的 APK 下载和更新服务 | 手机使用独立下载直链时需要可达；配置中继转发时可仅供中继访问 |
+| 19094 | 可选的文件传输服务 | 仅电脑本机，通过中继转发给手机 |
 
-将 Mac 和手机连到同一局域网，在 macOS「系统设置 → 网络」中查看正在使用的网卡的 IPv4 地址。解压后，打开两个终端，分别进入含 `relay/` 和 `phodex-bridge/` 的解压目录。两条命令中的 `192.168.1.20` 都换成 Mac 的地址。
+<details>
+<summary>开发者：从源码部署或编译 Android 测试包</summary>
 
-第一个终端运行中继：
+从 Release 对应标签检出源码，并安装两个服务的 Node 依赖：
 
 ```bash
-RELAY_BIND_HOST=192.168.1.20 PORT=10004 node relay/server.js
+git clone --branch v0.1.7-ws-fix73 https://github.com/qweznm23/xdd-remodex.git
+cd xdd-remodex
+npm --prefix phodex-bridge ci --ignore-scripts
+npm --prefix relay ci --ignore-scripts
 ```
 
-第二个终端运行桥接并显示配对二维码：
+然后按[安装指南](docs/server-install.md)启动中继，并选用对应系统的桥接命令。
+
+**可选：从源码构建测试 APK。** 在装有 JDK 21、Android SDK Platform 36、Build Tools 35.0.0 的 Linux 电脑上，从仓库根目录执行：
 
 ```bash
-REMODEX_AUTH_SCHEDULE_ENABLED=0 REMODEX_RELAY=ws://192.168.1.20:10004/relay node phodex-bridge/bin/remodex.js run
+install -d -m 700 .local/config
+cp ops/build.env.example .local/config/build.env
 ```
 
-用 Android 上的 Remodex 扫描第二个终端里的二维码，使用期间保持两个终端打开。若手机连不上，先用手机浏览器访问 `http://192.168.1.20:10004/health`，检查 Mac 防火墙是否允许 Node 接收入站连接。
+编辑刚复制的文件，把 `JAVA_HOME` 和 `ANDROID_HOME` 改为本机路径。直接联网时删除示例里的两行 `GRADLE_PROXY_*`，自测时可留空 `APP_UPDATE_URL`。然后执行：
 
-这套启动方式用于连接和聊天。fix73 的部分账号切换恢复流程依赖 Linux 的 `systemd-run`，示例关闭了自动授权维护。macOS 真机配对尚未验证。
+```bash
+./scripts/build-android.sh :app:assembleDebug
+```
 
-### 从源码在 Linux 上部署
+把生成的 `android/app/build/outputs/apk/debug/app-debug.apk` 发到手机安装。测试包使用本机调试签名，已有其他签名的同包名应用时 Android 会拒绝覆盖安装。需要保留原应用数据时请使用同签名的更新包。
 
-**从源码自建**时，下面以 Linux 电脑和同一局域网内的 Android 手机为例。使用平时运行 Codex 的 Linux 用户，先确认该用户能在终端正常使用已登录的 `codex`。电脑准备 Git、Node.js 24 和 npm。
-
-1. **下载源码并安装服务端依赖。**
-
-   ```bash
-   git clone --branch v0.1.7-ws-fix73 https://github.com/qweznm23/xdd-remodex.git
-   cd xdd-remodex
-   npm --prefix phodex-bridge ci --ignore-scripts
-   npm --prefix relay ci --ignore-scripts
-   install -d -m 700 .local/config .local/runtime/workspace
-   ```
-
-   这个标签包含上方 APK 对应的桥接和中继。也可以直接下载[同版服务端源码](https://github.com/qweznm23/xdd-remodex/archive/refs/tags/v0.1.7-ws-fix73.tar.gz)，解压后进入源码目录，从两条 npm 命令继续。
-
-2. **在电脑上启动中继和桥接。** 打开两个终端，都进入刚克隆的仓库。下面的 `192.168.1.20` 代表电脑的局域网 IP，两处都替换成手机能访问的实际地址。
-
-   第一个终端启动中继并保持运行：
-
-   ```bash
-   RELAY_BIND_HOST=192.168.1.20 PORT=10004 node relay/server.js
-   ```
-
-   第二个终端启动桥接并保持运行：
-
-   ```bash
-   cd .local/runtime/workspace
-   REMODEX_RELAY=ws://192.168.1.20:10004/relay node ../../../scripts/launch-bridge.cjs
-   ```
-
-   桥接默认从当前用户的 PATH 启动 `codex app-server`。如果要连接已经运行的 Codex 桌面服务，把 `REMODEX_CODEX_ENDPOINT` 设为该用户实际的控制套接字地址，格式见 [运行配置示例](ops/runtime.env.example)。在手机浏览器打开 `http://192.168.1.20:10004/health` 可以检查手机到中继的连通性。
-
-3. **可选：从源码构建测试 APK。** 在装有 JDK 21、Android SDK Platform 36、Build Tools 35.0.0 的 Linux 电脑上，从仓库根目录执行：
-
-   ```bash
-   install -d -m 700 .local/config
-   cp ops/build.env.example .local/config/build.env
-   ```
-
-   编辑刚复制的文件，把 `JAVA_HOME` 和 `ANDROID_HOME` 改为本机路径。直接联网时删除示例里的两行 `GRADLE_PROXY_*`，自测时可留空 `APP_UPDATE_URL`。然后执行：
-
-   ```bash
-   ./scripts/build-android.sh :app:assembleDebug
-   ```
-
-   把生成的 `android/app/build/outputs/apk/debug/app-debug.apk` 发到手机安装。测试包使用本机调试签名，已有其他签名的同包名应用时 Android 会拒绝覆盖安装。需要保留原应用数据时请使用同签名的更新包。
-
-4. **扫码配对。** 在运行桥接的电脑浏览器打开 `http://127.0.0.1:19092/`，用手机 Remodex 扫描页面上的二维码。使用无桌面服务器时，可在自己的电脑运行 `ssh -L 19092:127.0.0.1:19092 用户名@服务器地址`，再在自己电脑的浏览器打开同一地址。
-
-需要开机自启时使用 [systemd 模板](ops/systemd/) 和 [运行配置示例](ops/runtime.env.example)。额外的授权管理与图片处理功能使用 [Python 依赖清单](phodex-bridge/requirements.txt)。配对页中的下载入口需要管理员另外部署更新服务并放入 APK，首次自建可直接使用第 3 步的产物。
+</details>
 
 ## 目录
 
@@ -145,7 +114,7 @@ Codex 当前授权及编号库仍由 Codex home 管理，不搬入源码或 Git�
 授权维护规则、接口及诊断见 [AUTHORIZATION.md](phodex-bridge/AUTHORIZATION.md)。
 配对凭据、真实授权、签名密钥、运行状态和 APK 均不得加入 Git。
 
-首次在其他电脑部署，先安装 Android SDK/JDK、Node 和 Python 依赖，并按包锁文件安装两个服务的依赖；
+从源码开发时，按包锁文件安装服务端依赖；编译 Android 时准备 Android SDK 和 JDK。
 不要直接复用本机 `.local` 的凭据或配对身份。仓库本身不包含这些内容。
 服务目前调用 `/usr/bin/python3`，对应依赖清单是 `phodex-bridge/requirements.txt`，不要只安装到其他 Python 环境。
 Node 依赖可用 `npm --prefix phodex-bridge ci --ignore-scripts` 和 `npm --prefix relay ci --ignore-scripts` 安装；Codex 运行时另行管理。
