@@ -139,6 +139,9 @@ internal fun resolvedTrustedRelaySnapshot(
     relayMacDeviceId = resolved.macDeviceId,
     relayMacIdentityPublicKey = resolved.macIdentityPublicKey,
     lastTrustedMacDeviceId = resolved.macDeviceId,
+    relayBridgeReplayEpoch = previous.relayBridgeReplayEpoch.takeIf {
+        previous.relaySessionId == resolved.sessionId && previous.relayMacDeviceId == resolved.macDeviceId
+    },
     // Sequence numbers belong to one bridge run. An old cursor would discard new replies.
     relayLastAppliedBridgeOutboundSeq =
         if (previous.relaySessionId == resolved.sessionId && previous.relayMacDeviceId == resolved.macDeviceId) {

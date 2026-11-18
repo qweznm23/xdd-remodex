@@ -55,7 +55,7 @@ class TrustedDeviceHelpersTest {
         assertEquals("mac-a", snapshot.relayMacDeviceId)
         assertEquals("key-a", snapshot.relayMacIdentityPublicKey)
         assertEquals("mac-a", snapshot.lastTrustedMacDeviceId)
-        assertEquals("1", snapshot.relayProtocolVersion)
+        assertEquals("2", snapshot.relayProtocolVersion)
         assertEquals("0", snapshot.relayLastAppliedBridgeOutboundSeq)
     }
 }

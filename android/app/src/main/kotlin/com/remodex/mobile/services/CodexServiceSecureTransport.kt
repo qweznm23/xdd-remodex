@@ -26,7 +26,7 @@ import com.remodex.mobile.core.security.PhoneIdentityStore
 import com.remodex.mobile.core.transport.CodexSecureTransportErrorEvent
 import java.time.Instant
 import java.util.Base64
-import kotlinx.coroutines.channels.ClosedReceiveChannelException
+
 
 /**
  * Protocol label for phone→Mac encrypted envelopes (nonce + SecureEnvelope.sender).
@@ -76,6 +76,7 @@ internal fun CodexService.secureWireText(plaintext: String): String {
 internal fun CodexService.handleEncryptedEnvelope(raw: String) {
     val sess = secureSession ?: return
     val envelope = runCatching { json.decodeFromString<SecureEnvelope>(raw) }.getOrNull() ?: return
+    if (envelope.v != CODEX_SECURE_PROTOCOL_VERSION) return
     if (envelope.sessionId != sess.sessionId || envelope.keyEpoch != sess.keyEpoch) return
     if (envelope.sender != "mac") return
     if (envelope.counter < 0) return
@@ -122,29 +123,34 @@ internal fun CodexService.handleEncryptedEnvelope(raw: String) {
             json.decodeFromString<SecureApplicationPayload>(plaintext.decodeToString())
         }.getOrNull() ?: return
 
+    val innerRpc = jsonRpc.decodeMessage(payload.payloadText) ?: return
+    val replay = bridgeReplayEvent(innerRpc)
     synchronized(secureSessionLock) {
         val current = secureSession ?: return
+        if (current.macToPhoneKey !== sess.macToPhoneKey) return
         if (current.sessionId != envelope.sessionId || current.keyEpoch != envelope.keyEpoch) return
         if (envelope.counter <= current.lastInboundCounter) return
-        val nextBridgeSeq =
-            payload.bridgeOutboundSeq?.let { seq ->
-                if (seq <= current.lastInboundBridgeOutboundSeq) {
-                    return
-                }
-                seq
-            } ?: current.lastInboundBridgeOutboundSeq
+        val previousSeq = current.lastInboundBridgeOutboundSeq
+        val seq = payload.bridgeOutboundSeq
+        if (seq != null && seq <= previousSeq) return
+        val nextBridgeSeq = when (replay) {
+            is BridgeReplayEvent.Reset -> replay.sequence
+            is BridgeReplayEvent.Gap -> maxOf(previousSeq, replay.through)
+            else -> seq ?: previousSeq
+        }
+        val epoch = (replay as? BridgeReplayEvent.Reset)?.epoch ?: current.bridgeReplayEpoch
         secureSession =
             current.copy(
                 lastInboundCounter = envelope.counter,
                 lastInboundBridgeOutboundSeq = nextBridgeSeq,
+                bridgeReplayEpoch = epoch,
             )
-        payload.bridgeOutboundSeq?.let { seq ->
-            secureStore.writeString(CodexSecureKeys.relayLastAppliedBridgeOutboundSeq, seq.toString())
+        if (nextBridgeSeq != previousSeq || epoch != current.bridgeReplayEpoch) {
+            secureStore.writeRelayReplayCursor(epoch, nextBridgeSeq.toString())
         }
     }
 
-    val innerRpc = jsonRpc.decodeMessage(payload.payloadText) ?: return
-    dispatchIncomingRpc(innerRpc)
+    if (!handleBridgeReplay(replay)) dispatchIncomingRpc(innerRpc)
 }
 
 internal suspend fun CodexService.performSecureHandshake() {
@@ -184,7 +190,10 @@ internal suspend fun CodexService.performSecureHandshake() {
                     )
         }
 
-    val lastSeq = snapshot.relayLastAppliedBridgeOutboundSeq?.toIntOrNull() ?: 0
+    // A fix73 cursor has no process identity. Let the authenticated reset from
+    // the bridge establish the new epoch before accepting its sequence numbers.
+    val savedEpoch = snapshot.relayBridgeReplayEpoch.takeUnless { handshakeMode == CodexSecureHandshakeMode.qrBootstrap }
+    val lastSeq = if (savedEpoch == null) 0 else snapshot.relayLastAppliedBridgeOutboundSeq?.toIntOrNull() ?: 0
 
     val clientNonceBytes = RemodexNativeCrypto.randomBytes(32)
     val clientNonceB64 = Base64.getEncoder().encodeToString(clientNonceBytes)
@@ -305,6 +314,7 @@ internal suspend fun CodexService.performSecureHandshake() {
             macIdentityPublicKey = serverHello.macIdentityPublicKey,
             phoneToMacKey = phoneToMac,
             macToPhoneKey = macToPhone,
+            bridgeReplayEpoch = savedEpoch,
             lastInboundBridgeOutboundSeq = lastSeq,
             lastInboundCounter = -1,
             nextOutboundCounter = 0,
@@ -326,11 +336,13 @@ internal suspend fun CodexService.performSecureHandshake() {
 
     sessionPersistence.setForceQrBootstrapOnNextHandshake(false)
 
+    secureStore.writeString(CodexSecureKeys.relayProtocolVersion, CODEX_SECURE_PROTOCOL_VERSION.toString())
     val resume =
         SecureResumeState(
             sessionId = sessionId,
             keyEpoch = serverHello.keyEpoch,
             lastAppliedBridgeOutboundSeq = lastSeq,
+            bridgeReplayEpoch = savedEpoch,
         )
     sendRawText(json.encodeToString(SecureResumeState.serializer(), resume))
 }
@@ -463,11 +475,10 @@ private suspend fun CodexService.receiveSecureControl(kind: String): String {
     val mux = controlMux ?: throw CodexSecureTransportError.InvalidHandshake("Secure transport is not initialized.")
     try {
         return mux.receive(kind)
-    } catch (e: ClosedReceiveChannelException) {
-        val c = e.cause
-        if (c is CodexSecureTransportErrorEvent) {
-            throw CodexSecureTransportError.SecureError(c.message)
+    } catch (error: CodexSecureTransportErrorEvent) {
+        if (error.payload?.code == "update_required") {
+            throw CodexSecureTransportError.IncompatibleVersion("此版本需要 V2 桥接，请更新电脑端 Remodex。").apply { initCause(error) }
         }
-        throw e
+        throw error
     }
 }

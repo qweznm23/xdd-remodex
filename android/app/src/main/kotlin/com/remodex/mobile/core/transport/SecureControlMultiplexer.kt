@@ -36,16 +36,7 @@ internal class SecureControlMultiplexer(
     ) {
         if (kind == "secureError") {
             val parsed = runCatching { json.decodeFromString<SecureErrorMessage>(raw) }.getOrNull()
-            synchronized(lock) {
-                val existing = channels.values.toList()
-                channels.clear()
-                val err =
-                    CodexSecureTransportErrorEvent(
-                        parsed?.message ?: "Secure relay error",
-                        parsed,
-                    )
-                existing.forEach { ch -> ch.close(err) }
-            }
+            fail(CodexSecureTransportErrorEvent(parsed?.message ?: "Secure relay error", parsed))
             if (parsed != null) {
                 onSecureError(parsed)
             }

@@ -8,6 +8,7 @@ object CodexSecureKeys {
     const val relayUrl = "codex.relay.url"
     const val relayMacDeviceId = "codex.relay.macDeviceId"
     const val relayMacIdentityPublicKey = "codex.relay.macIdentityPublicKey"
+    const val relayBridgeReplayEpoch = "codex.relay.bridgeReplayEpoch"
     const val relayProtocolVersion = "codex.relay.protocolVersion"
     const val relayLastAppliedBridgeOutboundSeq = "codex.relay.lastAppliedBridgeOutboundSeq"
     const val pushDeviceToken = "codex.push.deviceToken"

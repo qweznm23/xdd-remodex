@@ -28,17 +28,19 @@ class SessionPersistence(
             Context.MODE_PRIVATE,
         )
 
-    fun loadRelaySnapshot(): RelaySessionSnapshot =
-        RelaySessionSnapshot(
+    fun loadRelaySnapshot(): RelaySessionSnapshot {
+        val (epoch, sequence) = secureStore.readRelayReplayCursor()
+        return RelaySessionSnapshot(
             relaySessionId = secureStore.readString(CodexSecureKeys.relaySessionId),
             relayUrl = secureStore.readString(CodexSecureKeys.relayUrl),
             relayMacDeviceId = secureStore.readString(CodexSecureKeys.relayMacDeviceId),
             relayMacIdentityPublicKey = secureStore.readString(CodexSecureKeys.relayMacIdentityPublicKey),
+            relayBridgeReplayEpoch = epoch,
             relayProtocolVersion = secureStore.readString(CodexSecureKeys.relayProtocolVersion),
-            relayLastAppliedBridgeOutboundSeq =
-                secureStore.readString(CodexSecureKeys.relayLastAppliedBridgeOutboundSeq),
+            relayLastAppliedBridgeOutboundSeq = sequence,
             lastTrustedMacDeviceId = secureStore.readString(CodexSecureKeys.lastTrustedMacDeviceId),
         )
+    }
 
     fun saveRelaySnapshot(snapshot: RelaySessionSnapshot) {
         writeOrRemove(CodexSecureKeys.relaySessionId, snapshot.relaySessionId)
@@ -46,10 +48,7 @@ class SessionPersistence(
         writeOrRemove(CodexSecureKeys.relayMacDeviceId, snapshot.relayMacDeviceId)
         writeOrRemove(CodexSecureKeys.relayMacIdentityPublicKey, snapshot.relayMacIdentityPublicKey)
         writeOrRemove(CodexSecureKeys.relayProtocolVersion, snapshot.relayProtocolVersion)
-        writeOrRemove(
-            CodexSecureKeys.relayLastAppliedBridgeOutboundSeq,
-            snapshot.relayLastAppliedBridgeOutboundSeq,
-        )
+        secureStore.writeRelayReplayCursor(snapshot.relayBridgeReplayEpoch, snapshot.relayLastAppliedBridgeOutboundSeq)
         writeOrRemove(CodexSecureKeys.lastTrustedMacDeviceId, snapshot.lastTrustedMacDeviceId)
     }
 
@@ -59,7 +58,7 @@ class SessionPersistence(
         secureStore.deleteValue(CodexSecureKeys.relayMacDeviceId)
         secureStore.deleteValue(CodexSecureKeys.relayMacIdentityPublicKey)
         secureStore.deleteValue(CodexSecureKeys.relayProtocolVersion)
-        secureStore.deleteValue(CodexSecureKeys.relayLastAppliedBridgeOutboundSeq)
+        secureStore.writeRelayReplayCursor(null, null)
         setForceQrBootstrapOnNextHandshake(false)
     }
 
@@ -87,7 +86,7 @@ class SessionPersistence(
             CodexSecureKeys.relayProtocolVersion,
             CODEX_SECURE_PROTOCOL_VERSION.toString(),
         )
-        secureStore.writeString(CodexSecureKeys.relayLastAppliedBridgeOutboundSeq, "0")
+        secureStore.writeRelayReplayCursor(null, "0")
         setForceQrBootstrapOnNextHandshake(true)
     }
 
@@ -416,5 +415,6 @@ data class RelaySessionSnapshot(
     val relayMacIdentityPublicKey: String? = null,
     val relayProtocolVersion: String? = null,
     val relayLastAppliedBridgeOutboundSeq: String? = null,
+    val relayBridgeReplayEpoch: String? = null,
     val lastTrustedMacDeviceId: String? = null,
 )

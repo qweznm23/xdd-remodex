@@ -116,6 +116,7 @@ class CodexService(
     @Volatile
     internal var secureSession: CodexSecureSession? = null
     internal val secureSessionLock = Any()
+    internal var replayHistoryInvalidated = false
 
     @Volatile
     internal var sessionReady = false

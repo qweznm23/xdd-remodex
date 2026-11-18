@@ -12,6 +12,14 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ConnectionStageTimeoutTest {
+    @Test fun oldBridgeRejectionIsAvailableEvenBeforeHelloWaits() = runTest {
+        val mux = SecureControlMultiplexer(Json) { }
+        mux.offer("secureError", """{"kind":"secureError","code":"update_required","message":"Different secure transport version"}""")
+        val error = assertFailsWith<CodexSecureTransportErrorEvent> { mux.receive("serverHello") }
+        assertEquals("update_required", error.payload?.code)
+        assertEquals("Different secure transport version", error.message)
+    }
+
     @Test fun silentHandshakeBecomesRetryableFailureNotCancellation() = runTest {
         val mux = SecureControlMultiplexer(Json) { }
         val error = assertFailsWith<ConnectionStageTimeout> { mux.receive("serverHello", timeoutMs = 100) }

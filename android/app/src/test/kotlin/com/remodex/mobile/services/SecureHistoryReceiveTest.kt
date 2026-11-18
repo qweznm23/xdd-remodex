@@ -20,6 +20,7 @@ import okio.ByteString
 import kotlin.test.assertSame
 import kotlin.test.assertNotNull
 import kotlin.test.assertIs
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
@@ -201,7 +202,7 @@ class SecureHistoryReceiveTest {
         val pending = pendingRequest(service)
         val plaintext = applicationBytes("{\"id\":\"history\",\"result\":true}")
         val valid = json.decodeFromString<SecureEnvelope>(envelope(plaintext))
-        listOf(valid.copy(sessionId = "other-session"), valid.copy(keyEpoch = 2), valid.copy(sender = "iphone"), valid.copy(counter = -1)).forEach {
+        listOf(valid.copy(v = 1), valid.copy(sessionId = "other-session"), valid.copy(keyEpoch = 2), valid.copy(sender = "iphone"), valid.copy(counter = -1)).forEach {
             service.handleEncryptedEnvelope(json.encodeToString(SecureEnvelope.serializer(), it))
             assertFalse(pending.isCompleted)
             assertEquals(-1, service.secureSession?.lastInboundCounter)
@@ -334,6 +335,95 @@ class SecureHistoryReceiveTest {
         return failure
     }
 
+    @Test fun androidHandshakesWithNodeBridgeAndRecoversOverlappingSequencesAndTruncatedHistory() = runBlocking {
+        val node = System.getenv("REMODEX_TEST_NODE")
+        org.junit.Assume.assumeTrue("Cross-language test requires REMODEX_TEST_NODE and installed bridge dependencies", node != null)
+        val fixture = generateSequence(java.io.File(System.getProperty("user.dir"))) { it.parentFile }
+            .map { it.resolve("phodex-bridge/test/fixtures/android-v2-peer.cjs") }.first { it.isFile }
+        val peer = ProcessBuilder(node, fixture.path).redirectError(ProcessBuilder.Redirect.INHERIT).start()
+        try {
+            val reader = peer.inputStream.bufferedReader()
+            val writer = peer.outputStream.bufferedWriter()
+            val qr = json.decodeFromString<com.remodex.mobile.core.model.CodexPairingQRPayload>(reader.readLine())
+            val service = receiveService()
+            val (store, persistence) = replayTestStores()
+            service.setReplayTestField("secureStore", store)
+            service.setReplayTestField("sessionPersistence", persistence)
+            service.setReplayTestField("hydratedThreadIds", mutableSetOf("old"))
+            service.setReplayTestField("loadingHistory", ThreadHistoryRequests())
+            service.setReplayTestField("_threadHistoryPaginationByThread", kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, Any>()))
+            service.controlMux = com.remodex.mobile.core.transport.SecureControlMultiplexer(json) { }
+            persistence.applyPairingPayload(qr, store)
+            val client = okhttp3.OkHttpClient()
+            service.setReplayTestField("httpClient", client)
+            service.closingByClient = true
+            val inbound = Channel<String>(64)
+            service.wireInbound = inbound
+            val consumer = launch { for (frame in inbound) service.processWireText(frame) }
+            suspend fun connect() {
+                kotlinx.coroutines.withTimeout(5000) {
+                    service.openWebSocketAwaitOpen(parseRelayHttpUrl("${qr.relay}/${qr.sessionId}"), "", null)
+                    service.performSecureHandshake()
+                }
+            }
+            fun offlineCommand(line: String) {
+                service.connectionGeneration++
+                service.webSocket?.cancel()
+                service.webSocket = null
+                writer.write(line)
+                writer.newLine()
+                writer.flush()
+                assertEquals("ready", reader.readLine())
+            }
+            suspend fun echo() {
+                val delayed = pendingRequest(service)
+                service.sendMessage(RPCMessage.request(JSONValue.Str("history"), "echo", JSONValue.Str("ping"), false))
+                assertEquals("ping", kotlinx.coroutines.withTimeout(3000) { delayed.await() }.result?.stringValue)
+            }
+            try {
+                connect()
+                repeat(3) { echo() }
+                val firstEpoch = assertNotNull(service.secureSession?.bridgeReplayEpoch)
+                assertEquals(3, service.secureSession?.lastInboundBridgeOutboundSeq)
+                offlineCommand("""{"fixture":"backlog","count":2}""")
+                service.hydratedThreadIds.add("old")
+                connect()
+                echo()
+                assertTrue("old" !in service.hydratedThreadIds)
+                assertEquals(6, service.secureSession?.lastInboundBridgeOutboundSeq)
+                offlineCommand("""{"fixture":"backlog","count":510}""")
+                service.hydratedThreadIds.add("old")
+                connect()
+                echo()
+                assertTrue("old" !in service.hydratedThreadIds)
+                assertEquals(517, service.secureSession?.lastInboundBridgeOutboundSeq)
+                offlineCommand("""{"fixture":"restart"}""")
+                connect()
+                echo()
+                assertTrue(firstEpoch != service.secureSession?.bridgeReplayEpoch)
+                assertEquals("1", persistence.loadRelaySnapshot().relayLastAppliedBridgeOutboundSeq)
+                // New process has already used numbers 1..3. Numeric comparison
+                // alone would incorrectly accept the old process's cursor 1.
+                offlineCommand("""{"fixture":"restart","count":3}""")
+                service.hydratedThreadIds.add("old")
+                connect()
+                echo()
+                assertTrue("old" !in service.hydratedThreadIds)
+                val saved = persistence.loadRelaySnapshot()
+                assertEquals(service.secureSession?.bridgeReplayEpoch, saved.relayBridgeReplayEpoch)
+                assertEquals("4", saved.relayLastAppliedBridgeOutboundSeq)
+            } finally {
+                service.connectionGeneration++
+                service.webSocket?.cancel()
+                inbound.close()
+                consumer.cancel()
+                client.dispatcher.executorService.shutdown()
+                client.connectionPool.evictAll()
+            }
+        } finally { peer.destroyForcibly() }
+        Unit
+    }
+
     private fun applicationOfSize(size: Int): ByteArray {
         val prefix = "{\"id\":\"history\",\"result\":\""
         val suffix = "\"}"
@@ -356,7 +446,7 @@ class SecureHistoryReceiveTest {
     private fun envelope(plaintext: ByteArray): String {
         val (ciphertext, tag) = SecureEnvelopeCipher.seal(key, codexSecureNonce("mac", 0), plaintext)
         return json.encodeToString(SecureEnvelope.serializer(), SecureEnvelope(
-            kind = "encryptedEnvelope", v = 1, sessionId = "test-session", keyEpoch = 1,
+            kind = "encryptedEnvelope", v = com.remodex.mobile.core.model.CODEX_SECURE_PROTOCOL_VERSION, sessionId = "test-session", keyEpoch = 1,
             sender = "mac", counter = 0, ciphertext = Base64.getEncoder().encodeToString(ciphertext),
             tag = Base64.getEncoder().encodeToString(tag),
         ))

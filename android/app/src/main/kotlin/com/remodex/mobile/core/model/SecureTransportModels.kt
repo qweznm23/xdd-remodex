@@ -8,7 +8,7 @@ import java.util.Base64
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-const val CODEX_SECURE_PROTOCOL_VERSION = 1
+const val CODEX_SECURE_PROTOCOL_VERSION = 2
 const val CODEX_PAIRING_QR_VERSION = 2
 const val CODEX_SECURE_HANDSHAKE_TAG = "remodex-e2ee-v1"
 const val CODEX_SECURE_HANDSHAKE_LABEL = "client-auth"
@@ -144,6 +144,7 @@ data class SecureResumeState(
     val sessionId: String,
     val keyEpoch: Int,
     val lastAppliedBridgeOutboundSeq: Int,
+    val bridgeReplayEpoch: String? = null,
 )
 
 @Serializable
@@ -182,6 +183,7 @@ data class CodexSecureSession(
     val lastInboundBridgeOutboundSeq: Int,
     val lastInboundCounter: Int,
     val nextOutboundCounter: Int,
+    val bridgeReplayEpoch: String? = null,
 )
 
 /** Handshake state between hello and ready (ephemeral key material as raw bytes until crypto layer lands). */

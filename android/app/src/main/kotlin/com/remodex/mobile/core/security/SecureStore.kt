@@ -33,6 +33,20 @@ class SecureStore(
         prefs.edit().putString(key, value).apply()
     }
 
+    @Synchronized
+    fun readRelayReplayCursor() = Pair(
+        readString(CodexSecureKeys.relayBridgeReplayEpoch),
+        readString(CodexSecureKeys.relayLastAppliedBridgeOutboundSeq),
+    )
+
+    @Synchronized
+    fun writeRelayReplayCursor(epoch: String?, sequence: String?) {
+        prefs.edit()
+            .putString(CodexSecureKeys.relayBridgeReplayEpoch, epoch)
+            .putString(CodexSecureKeys.relayLastAppliedBridgeOutboundSeq, sequence)
+            .apply()
+    }
+
     fun readData(key: String): ByteArray? {
         val b64 = readString(key) ?: return null
         return try {

@@ -65,8 +65,7 @@ internal fun CodexService.processWireText(raw: String) {
         }
         return
     }
-    val message = jsonRpc.decodeMessage(raw) ?: return
-    dispatchIncomingRpc(message)
+    // Application RPCs and replay controls are accepted only inside an authenticated envelope.
 }
 
 private fun CodexService.isSecureWirePreClassification(text: String): Boolean {

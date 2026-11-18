@@ -164,6 +164,7 @@ internal suspend fun CodexService.resetBridgeSession(preservePresentationState: 
     }
     wireJob?.cancelAndJoin()
     wireJob = null
+    replayHistoryInvalidated = false
     wireInbound?.cancel(CancellationException("Connection generation replaced"))
     wireInbound = null
     secureSession = null
