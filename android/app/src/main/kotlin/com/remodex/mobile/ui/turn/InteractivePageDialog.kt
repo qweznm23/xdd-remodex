@@ -4,7 +4,11 @@ import android.annotation.SuppressLint
 import android.webkit.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.outlined.WebAsset
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -13,7 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
+import com.remodex.mobile.ui.theme.RemodexPreviewDialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -30,15 +34,14 @@ import java.nio.ByteBuffer
 
 @Composable
 internal fun InteractivePageCard(reference: InteractivePageReference, onOpen: () -> Unit) {
-    OutlinedCard(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(Icons.Default.OpenInFull, null, tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f)) {
-                Text(reference.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
-                Text(stringResource(R.string.interactive_page_open), style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary)
-            }
+    TimelineActionRow(
+        onClick = onOpen,
+        leading = { Icon(Icons.Outlined.WebAsset, null, Modifier.size(22.dp)) },
+        trailing = { Icon(Icons.Rounded.ChevronRight, null, Modifier.size(18.dp)) },
+    ) {
+        Column {
+            Text(reference.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(stringResource(R.string.interactive_page_open), style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -90,13 +93,13 @@ internal fun InteractivePageDialog(reference: InteractivePageReference, cwd: Str
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    RemodexPreviewDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(reference.title, Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.titleSmall)
-                    TextButton(onClick = { attempt++ }) { Text(stringResource(R.string.interactive_page_reload)) }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.turn_preview_close)) }
+                    Text(reference.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                    IconButton(onClick = { attempt++ }) { Icon(Icons.Default.Refresh, stringResource(R.string.interactive_page_reload)) }
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, stringResource(R.string.turn_preview_close)) }
                 }
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     val router = pageRouter

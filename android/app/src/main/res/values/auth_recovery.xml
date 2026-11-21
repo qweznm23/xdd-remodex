@@ -1,0 +1,21 @@
+<resources>
+    <string name="auth_recovery_busy">Maintenance is running. Wait for it to finish before trying again.</string>
+    <string name="auth_recovery_changed">Refresh the list and check which file is in use before making changes.</string>
+    <string name="auth_recovery_host">Check the bridge diagnostics on the computer before changing any authorization files.</string>
+    <string name="auth_recovery_input">Check the selected file and name, then choose the file again.</string>
+    <string name="auth_recovery_token">Read the file status before attempting another token refresh.</string>
+    <string name="auth_recovery_denied">The service denied access. Check account permissions or access restrictions.</string>
+    <string name="auth_recovery_authentication">The service rejected authentication. Check this authorization on the computer.</string>
+    <string name="auth_recovery_connection">Reconnect to the bridge, then check the latest result.</string>
+    <string name="auth_recovery_switch">Check which account Codex is using before deciding whether to restart or switch again.</string>
+    <string name="auth_recovery_read">The cause is unknown. Check the details or request the result again.</string>
+    <string name="auth_recovery_unknown_write">The outcome is unconfirmed. Check the file state and error details before repeating the operation.</string>
+    <string name="auth_recovery_maintenance">A scheduled check failed. Inspect its details before taking manual action.</string>
+    <string name="auth_recovery_query">Retry query</string>
+    <string name="auth_recovery_verify">Check running account</string>
+    <string name="auth_runtime_matches">Codex reports the same email as the file. If this is the expected login and workspace, you can continue. The earlier restart result is kept in diagnostics.</string>
+    <string name="auth_runtime_differs">Codex reports a different email. Save any work, check the login on the computer, then verify again.</string>
+    <string name="auth_runtime_unknown">There is insufficient account information to compare. Check the active login on the computer.</string>
+    <string name="auth_runtime_signed_out">Codex reports that it is signed out. Sign in on the computer, then check again.</string>
+    <string name="auth_recovery_timeout">The request timed out. You can request the result again.</string>
+</resources>

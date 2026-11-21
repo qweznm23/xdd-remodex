@@ -12,6 +12,14 @@ import org.junit.Test
 
 class TurnDraftQueueStoreTest {
     @Test
+    fun imageOnlyDraftQueuesTheUploadedPath() = runTest {
+        val store = TurnDraftQueueStore()
+        val image = CodexImageAttachment(thumbnailBase64JPEG = "", remotePath = "/computer/screen.png")
+        store.enqueue("t1", "", listOf(image), emptyList(), emptyList(), null)
+        assertEquals(listOf(image), store.poll("t1")?.attachments)
+    }
+
+    @Test
     fun enqueue_updates_depth_and_preview() = runTest {
         val store = TurnDraftQueueStore()
         store.enqueue(

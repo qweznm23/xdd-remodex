@@ -11,7 +11,8 @@ from websockets.sync.server import unix_serve
 
 os.umask(0o077)
 home = Path(sys.argv[1]).resolve()
-assert home.name.startswith('remodex-auth-runtime-') and (home / '.fixture').is_file()
+restart_fixture = home.name.startswith('remodex-auth-service-')
+assert (home.name.startswith('remodex-auth-runtime-') or restart_fixture) and (home / '.fixture').is_file()
 def serve(ws):
     for message in ws:
         request = json.loads(message)
@@ -19,7 +20,7 @@ def serve(ws):
             continue
         result = {}
         if request['method'] == 'getAuthStatus':
-            path = home / 'auth.json'
+            path = home / ('runtime-auth.json' if restart_fixture else 'auth.json')
             auth = json.loads(path.read_text())
             if request['params'].get('refreshToken'):
                 now = time.time()
@@ -35,6 +36,8 @@ def serve(ws):
                 result['authToken'] = auth['tokens']['access_token']
         ws.send(json.dumps({'id': request['id'], 'result': result}))
 
-with unix_serve(serve, str(home / 'control.sock')) as server:
+socket = home / ('app-server-control/app-server-control.sock' if restart_fixture else 'control.sock')
+socket.parent.mkdir(exist_ok=True)
+with unix_serve(serve, str(socket)) as server:
     print('ready', flush=True)
     server.serve_forever()

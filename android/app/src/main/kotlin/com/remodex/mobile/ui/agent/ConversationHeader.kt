@@ -1,18 +1,23 @@
 package com.remodex.mobile.ui.agent
 
-import androidx.compose.foundation.Canvas
+import com.remodex.mobile.ui.turn.ConversationQuestionAction
+import com.remodex.mobile.ui.turn.WeeklyQuotaMoreMenu
+import com.remodex.mobile.ui.theme.conversationColors
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.annotation.DrawableRes
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
@@ -20,17 +25,14 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -41,17 +43,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
+import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.core.model.GitDiffTotals
 import com.remodex.mobile.core.model.TurnGitActionKind
-import com.remodex.mobile.ui.theme.AgentLightColors
 import com.remodex.mobile.ui.theme.RemodexGitAddition
 import com.remodex.mobile.ui.theme.RemodexDropdownMenu
 import com.remodex.mobile.ui.sidebar.RemodexCircleIconButton
 import com.remodex.mobile.ui.sidebar.rememberSidebarColorPalette
-import com.remodex.mobile.ui.theme.isAgentLightChrome
 
 /** Truncate long filesystem paths for the header subtitle (middle ellipsis). */
 fun truncatePathMiddle(
@@ -68,16 +67,16 @@ fun truncatePathMiddle(
 
 /**
  * Main turn toolbar: title, repo path, running pill, git actions menu (incl. repository diff),
- * overflow (handoff / stop).
+ * session information and handoff actions.
  * SwiftUI reference: [TurnToolbarContent](CodexMobile/CodexMobile/Views/Turn/TurnToolbarContent.swift).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationHeader(
     title: String,
+    threadId: String?,
     pathSubtitle: String?,
     onPathClick: (() -> Unit)?,
-    showRunningPill: Boolean,
     repoDiffTotals: GitDiffTotals?,
     isLoadingRepoDiff: Boolean,
     canViewRepoDiff: Boolean,
@@ -91,102 +90,48 @@ fun ConversationHeader(
     showWorktreeHandoff: Boolean,
     handingOffWorktree: Boolean,
     isWorktreeProject: Boolean,
-    showTurnStop: Boolean,
+    running: Boolean,
     onOpenDrawer: () -> Unit,
+    onOpenSettings: () -> Unit,
     onContinueDesktop: () -> Unit,
     onWorktreeHandoff: () -> Unit,
-    onStopTurn: () -> Unit,
     onRefreshConversation: (() -> Unit)? = null,
+    environment: (@Composable () -> Unit)? = null,
     refreshingConversation: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var overflowExpanded by remember { mutableStateOf(false) }
     var gitMenuExpanded by remember { mutableStateOf(false) }
-    val showOverflow = onRefreshConversation != null || showDesktopHandoff || showWorktreeHandoff || showTurnStop
     val gitMenuCd = stringResource(R.string.cd_git_actions_menu)
-    val chrome = isAgentLightChrome()
-    val pathColor =
-        if (chrome) {
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.84f)
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f)
-        }
-    Box(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .height(108.dp),
-    ) {
-        HeaderAtmosphere(
-            lightChrome = chrome,
-            modifier =
-                Modifier
-                    .matchParentSize()
-                    .statusBarsPadding(),
-        )
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            HeaderMenuButton(onOpenDrawer = onOpenDrawer)
-            Box(
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .then(
-                            if (pathSubtitle != null && onPathClick != null) {
-                                Modifier
-                                    .clickable(onClick = onPathClick)
-                                    .semantics {
-                                        contentDescription = pathSubtitle
-                                        role = Role.Button
-                                    }
-                            } else {
-                                Modifier
-                            },
-                        ),
+    val reading = MaterialTheme.colorScheme.conversationColors().reading
+    TopAppBar(
+        modifier = modifier,
+        expandedHeight = 56.dp,
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = reading, scrolledContainerColor = reading),
+        navigationIcon = { HeaderMenuButton(onOpenDrawer) },
+        title = {
+            val pathAction = if (pathSubtitle != null && onPathClick != null) {
+                Modifier.clickable(role = Role.Button, onClick = onPathClick)
+            } else Modifier
+            Column(
+                modifier = Modifier.fillMaxWidth().then(pathAction).heightIn(min = 48.dp),
+                verticalArrangement = Arrangement.Center,
             ) {
-                Column {
-                    Text(
-                        text = title,
-                        style =
-                            MaterialTheme.typography.titleLarge.copy(
-                                lineHeight = 22.sp,
-                            ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (pathSubtitle != null) {
-                        Text(
-                            text = pathSubtitle,
-                            style =
-                                MaterialTheme.typography.labelSmall.copy(
-                                    lineHeight = 13.sp,
-                                ),
-                            fontFamily = FontFamily.Monospace,
-                            color = pathColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.MiddleEllipsis,
-                        )
-                    }
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (pathSubtitle != null) {
+                    Text(pathSubtitle, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
                 }
             }
-            if (showRunningPill) {
-                Surface(
-                    shape = MaterialTheme.shapes.large,
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                ) {
-                    Text(
-                        text = stringResource(R.string.turn_top_bar_thinking),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+        },
+        actions = {
+            ConversationQuestionAction(threadId) {
+                if (running) {
+                    val thinking = stringResource(R.string.turn_top_bar_thinking)
+                    CircularProgressIndicator(
+                        modifier = Modifier.padding(end = 6.dp).size(16.dp).semantics { contentDescription = thinking },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        strokeWidth = 2.dp,
                     )
                 }
             }
@@ -200,9 +145,9 @@ fun ConversationHeader(
                 showsDiscardRuntimeRecovery = showsDiscardRuntimeRecovery,
                 isGitActionEnabled = isGitActionEnabled,
                 gitMenuCd = gitMenuCd,
-                showOverflow = showOverflow,
                 overflowExpanded = overflowExpanded,
                 onSetOverflowExpanded = { overflowExpanded = it },
+                onOpenSettings = onOpenSettings,
                 gitMenuExpanded = gitMenuExpanded,
                 onSetGitMenuExpanded = { gitMenuExpanded = it },
                 showDesktopHandoff = showDesktopHandoff,
@@ -210,62 +155,27 @@ fun ConversationHeader(
                 showWorktreeHandoff = showWorktreeHandoff,
                 handingOffWorktree = handingOffWorktree,
                 isWorktreeProject = isWorktreeProject,
-                showTurnStop = showTurnStop,
+                running = running,
                 onContinueDesktop = onContinueDesktop,
                 onWorktreeHandoff = onWorktreeHandoff,
-                onStopTurn = onStopTurn,
                 onRefreshConversation = onRefreshConversation,
+                environment = environment,
                 refreshingConversation = refreshingConversation,
             )
-        }
-    }
-}
-
-@Composable
-private fun HeaderAtmosphere(
-    lightChrome: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val base = if (lightChrome) AgentLightColors.ScreenBg else MaterialTheme.colorScheme.background
-    val topAlpha = if (lightChrome) 0.86f else 0.74f
-    Box(
-        modifier =
-            modifier
-                .clipToBounds(),
-    ) {
-        Canvas(
-            modifier =
-                Modifier
-                    .matchParentSize(),
-        ) {
-            drawRect(
-                brush =
-                    Brush.verticalGradient(
-                        colorStops =
-                            arrayOf(
-                                0f to base.copy(alpha = topAlpha),
-                                0.62f to base.copy(alpha = topAlpha * 0.44f),
-                                1f to base.copy(alpha = 0f),
-                            ),
-                    ),
-            )
-        }
-    }
+        },
+    )
 }
 
 @Composable
 private fun HeaderMenuButton(onOpenDrawer: () -> Unit) {
-    val colors = rememberSidebarColorPalette()
     RemodexCircleIconButton(
         onClick = onOpenDrawer,
         contentDescription = stringResource(R.string.cd_open_navigation_drawer),
-        colors = colors,
     ) {
         Icon(
             painter = painterResource(LucideR.drawable.lucide_ic_menu),
             contentDescription = null,
             modifier = Modifier.size(20.dp),
-            tint = colors.primaryText,
         )
     }
 }
@@ -281,9 +191,9 @@ private fun HeaderActions(
     showsDiscardRuntimeRecovery: Boolean,
     isGitActionEnabled: Boolean,
     gitMenuCd: String,
-    showOverflow: Boolean,
     overflowExpanded: Boolean,
     onSetOverflowExpanded: (Boolean) -> Unit,
+    onOpenSettings: () -> Unit,
     gitMenuExpanded: Boolean,
     onSetGitMenuExpanded: (Boolean) -> Unit,
     showDesktopHandoff: Boolean,
@@ -291,11 +201,11 @@ private fun HeaderActions(
     showWorktreeHandoff: Boolean,
     handingOffWorktree: Boolean,
     isWorktreeProject: Boolean,
-    showTurnStop: Boolean,
+    running: Boolean,
     onContinueDesktop: () -> Unit,
     onWorktreeHandoff: () -> Unit,
-    onStopTurn: () -> Unit,
     onRefreshConversation: (() -> Unit)?,
+    environment: (@Composable () -> Unit)?,
     refreshingConversation: Boolean,
 ) {
     val colors = rememberSidebarColorPalette()
@@ -309,9 +219,8 @@ private fun HeaderActions(
                     onClick = { onSetGitMenuExpanded(true) },
                     enabled = (canViewRepoDiff || isGitActionEnabled) && !gitActionsBusy,
                     contentDescription = gitMenuCd,
-                    colors = colors,
                 ) {
-                    val tint = colors.primaryText.copy(alpha = if ((canViewRepoDiff || isGitActionEnabled) && !gitActionsBusy) 1f else 0.42f)
+                    val tint = androidx.compose.material3.LocalContentColor.current
                     if (gitActionsBusy) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
@@ -343,104 +252,69 @@ private fun HeaderActions(
             }
         }
 
-        if (showOverflow) {
-            Box {
-                RemodexCircleIconButton(
-                    onClick = { onSetOverflowExpanded(true) },
-                    contentDescription = stringResource(
-                        if (refreshingConversation) R.string.conversation_refreshing else R.string.turn_top_bar_thread_actions_cd,
-                    ),
-                    colors = colors,
-                ) {
-                    if (refreshingConversation) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            painter = painterResource(LucideR.drawable.lucide_ic_ellipsis_vertical),
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                            tint = colors.primaryText,
-                        )
-                    }
-                }
-                RemodexDropdownMenu(
-                    expanded = overflowExpanded,
-                    onDismissRequest = { onSetOverflowExpanded(false) },
-                ) {
+        WeeklyQuotaMoreMenu(
+            expanded = overflowExpanded,
+            setExpanded = onSetOverflowExpanded,
+            description = stringResource(
+                if (refreshingConversation) R.string.conversation_refreshing else R.string.session_info_title,
+            ),
+            onOpenSettings = onOpenSettings,
+            sessionPanel = true,
+            running = running,
+            environment = environment,
+        ) {
+            if (onRefreshConversation != null || showDesktopHandoff) {
+                val actions: @Composable (Modifier) -> Unit = { item ->
                     if (onRefreshConversation != null) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(
-                                if (refreshingConversation) R.string.conversation_refreshing else R.string.conversation_refresh,
-                            )) },
-                            leadingIcon = {
-                                Icon(
-                                    painter = painterResource(LucideR.drawable.lucide_ic_refresh_cw),
-                                    contentDescription = null,
-                                )
-                            },
-                            enabled = !refreshingConversation,
-                            onClick = {
-                                onSetOverflowExpanded(false)
-                                onRefreshConversation()
-                            },
-                        )
-                        if (showDesktopHandoff || showWorktreeHandoff || showTurnStop) HorizontalDivider()
+                        SessionFooterAction(
+                            stringResource(if (refreshingConversation) R.string.conversation_refreshing else R.string.session_info_refresh),
+                            LucideR.drawable.lucide_ic_refresh_cw, item, enabled = !refreshingConversation,
+                        ) { onSetOverflowExpanded(false); onRefreshConversation() }
                     }
                     if (showDesktopHandoff) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (handingOffToDesktop) {
-                                        stringResource(R.string.turn_open_desktop_opening)
-                                    } else {
-                                        stringResource(R.string.turn_open_desktop)
-                                    },
-                                )
-                            },
-                            onClick = {
-                                onSetOverflowExpanded(false)
-                                if (!handingOffToDesktop) onContinueDesktop()
-                            },
-                            enabled = !handingOffToDesktop,
-                        )
-                    }
-                    if (showWorktreeHandoff) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (handingOffWorktree) {
-                                        stringResource(R.string.composer_worktree_preparing)
-                                    } else if (isWorktreeProject) {
-                                        stringResource(R.string.composer_runtime_menu_handoff_local)
-                                    } else {
-                                        stringResource(R.string.composer_runtime_menu_worktree_handoff)
-                                    },
-                                )
-                            },
-                            onClick = {
-                                onSetOverflowExpanded(false)
-                                if (!handingOffWorktree) onWorktreeHandoff()
-                            },
-                            enabled = !handingOffWorktree,
-                        )
-                    }
-                    if (showTurnStop) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    stringResource(R.string.turn_stop),
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                            onClick = {
-                                onSetOverflowExpanded(false)
-                                onStopTurn()
-                            },
-                        )
+                        SessionFooterAction(
+                            stringResource(if (handingOffToDesktop) R.string.turn_open_desktop_opening else R.string.session_info_continue_desktop),
+                            LucideR.drawable.lucide_ic_laptop, item, enabled = !handingOffToDesktop,
+                        ) { onSetOverflowExpanded(false); onContinueDesktop() }
                     }
                 }
+                if (androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.35f) {
+                    Column { actions(Modifier.fillMaxWidth()) }
+                } else {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) { actions(Modifier.weight(1f)) }
+                }
+            }
+            if (showWorktreeHandoff) {
+                DropdownMenuItem(
+                    leadingIcon = { Icon(painterResource(LucideR.drawable.lucide_ic_git_branch), null, Modifier.size(20.dp)) },
+                    text = {
+                        Text(
+                            if (handingOffWorktree) {
+                                stringResource(R.string.composer_worktree_preparing)
+                            } else if (isWorktreeProject) {
+                                stringResource(R.string.composer_runtime_menu_handoff_local)
+                            } else {
+                                stringResource(R.string.composer_runtime_menu_worktree_handoff)
+                            },
+                        )
+                    },
+                    onClick = {
+                        onSetOverflowExpanded(false)
+                        if (!handingOffWorktree) onWorktreeHandoff()
+                    },
+                    enabled = !handingOffWorktree,
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun SessionFooterAction(label: String, @DrawableRes icon: Int, modifier: Modifier, enabled: Boolean, onClick: () -> Unit) {
+    TextButton(onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = 48.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp)) {
+        Icon(painterResource(icon), null, Modifier.size(16.dp))
+        Text(label, Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelMedium)
     }
 }
 

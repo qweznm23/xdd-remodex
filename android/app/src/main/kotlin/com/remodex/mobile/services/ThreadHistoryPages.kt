@@ -15,6 +15,31 @@ internal data class ThreadHistoryPage(val turns: List<JSONValue>, val nextCursor
         metadata + ("turns" to JSONValue.Arr(turns))
 }
 
+/**
+ * The host can allocate a thread id before it exposes the first page. Carry the original
+ * RPC and method separately from an empty page, which would establish a history boundary.
+ */
+internal class ThreadAwaitingFirstMessage(val method: String, val failure: CodexServiceError.RpcFailure) :
+    Exception(failure.message, failure)
+
+internal suspend fun readInitialThreadRpc(
+    threadId: String, method: String, params: JSONValue.Obj,
+    request: suspend (String, JSONValue.Obj) -> RPCMessage,
+): RPCMessage = try {
+    request(method, params)
+} catch (failure: CodexServiceError.RpcFailure) {
+    val rpc = failure.rpcError
+    val description = rpc.message.substringBefore(';').trim()
+    val initialRead = params.map["cursor"].let { it == null || it == JSONValue.Null }
+    if (initialRead && rpc.code == -32600 &&
+        (description == "thread $threadId is not materialized yet" ||
+            description == "thread $threadId is not yet materialized") &&
+        rpc.message.substringAfter(';', "").contains("before first user message", ignoreCase = true)) {
+        throw ThreadAwaitingFirstMessage(method, failure)
+    }
+    throw failure
+}
+
 /** Skip invisible-only pages, with a strict bound; never scan an entire conversation on open. */
 internal suspend fun fetchRecentThreadHistory(
     threadId: String,

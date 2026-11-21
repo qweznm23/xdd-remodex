@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.onboarding
 
+import com.remodex.mobile.ui.theme.conversationColors
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -45,7 +46,7 @@ fun OnboardingFlow(
 
     Surface(
         modifier = modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background,
+        color = MaterialTheme.colorScheme.conversationColors().reading,
     ) {
         Column(
             modifier =
@@ -56,6 +57,11 @@ fun OnboardingFlow(
                     .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
+            OnboardingPageIndicator(
+                currentPage = currentPage,
+                pageCount = ONBOARDING_PAGE_COUNT,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.weight(1f),
@@ -68,11 +74,6 @@ fun OnboardingFlow(
                     4 -> OnboardingPairingIntroPage(modifier = Modifier.fillMaxSize())
                 }
             }
-            OnboardingPageIndicator(
-                currentPage = currentPage,
-                pageCount = ONBOARDING_PAGE_COUNT,
-                modifier = Modifier.padding(top = 8.dp),
-            )
             Spacer(modifier = Modifier.height(16.dp))
             OnboardingPrimaryButton(
                 labelRes = OnboardingFlowLogic.ctaLabelRes(currentPage),

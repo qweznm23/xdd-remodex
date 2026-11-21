@@ -37,4 +37,10 @@ class ThreadHistoryVideoTest {
         val attachment=decode(mapOf("type" to JSONValue.Str("local_video"),"path" to JSONValue.Str("/repo/asset"))).single().attachments.single()
         assertEquals("/repo/asset",ConversationMediaType.videoSource(attachment))
     }
+    @Test fun nativeImageHistoryKeepsTheExactHostPath() {
+        val path = "/host/image #2.png "
+        val attachment = decode(mapOf("type" to JSONValue.Str("localImage"), "path" to JSONValue.Str(path))).single().attachments.single()
+        assertEquals(path, attachment.sourceURL)
+        assertNull(attachment.payloadDataURL)
+    }
 }

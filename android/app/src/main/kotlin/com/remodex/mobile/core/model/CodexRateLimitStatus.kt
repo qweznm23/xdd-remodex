@@ -66,7 +66,10 @@ data class CodexRateLimitBucket(
 
     companion object {
         fun visibleDisplayRows(buckets: List<CodexRateLimitBucket>): List<CodexRateLimitDisplayRow> {
-            val rows = buckets.flatMap { it.displayRows }
+            val accountWeek = accountWeeklyQuota(buckets)
+            val rows = buckets.flatMap { it.displayRows }.filter {
+                accountWeek == null || it.window.windowDurationMins != 10080 || it.window == accountWeek
+            }
             val deduped = LinkedHashMap<String, CodexRateLimitDisplayRow>()
             for (row in rows) {
                 val existing = deduped[row.label]
@@ -125,4 +128,14 @@ data class CodexRateLimitBucket(
             }
         }
     }
+}
+
+/** Prefer the account pool. A model-specific weekly allowance is a separate quota. */
+internal fun accountWeeklyQuota(buckets: List<CodexRateLimitBucket>): CodexRateLimitWindow? {
+    val account = buckets.firstOrNull { it.limitId.equals("codex", ignoreCase = true) }
+    val candidates = if (account != null) listOf(account) else buckets.filter {
+        it.limitId in setOf("primary", "secondary", "codex_weekly", "codex_week") || it.limitId.startsWith("unnamed-")
+    }
+    return candidates.flatMap { listOfNotNull(it.primary, it.secondary) }
+        .firstOrNull { it.windowDurationMins == 7 * 24 * 60 }
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import com.remodex.mobile.ui.theme.CodeFontFamily
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -144,7 +145,7 @@ internal fun GitPatchHighlightedBlock(
                                     .background(gutterBg)
                                     .padding(horizontal = linePadH, vertical = linePadV),
                             style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = CodeFontFamily,
                             color = lineNumberColor,
                             textAlign = TextAlign.End,
                             softWrap = false,
@@ -153,7 +154,7 @@ internal fun GitPatchHighlightedBlock(
                             text = line.ifEmpty { " " },
                             modifier = Modifier.padding(horizontal = linePadH, vertical = linePadV),
                             style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = CodeFontFamily,
                             color = fg,
                             softWrap = false,
                         )

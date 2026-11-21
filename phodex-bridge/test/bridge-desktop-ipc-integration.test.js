@@ -1282,12 +1282,18 @@ test("endpoint routing delegates only selected extensions and passes through Cod
   const relayServer = new WebSocket.Server({ port: 0 });
   const relayMessages = [];
   const fakeCodex = createFakeCodexTransport();
+  const uploadHome = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-endpoint-upload-"));
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = uploadHome;
   let relaySocket;
   let bridge;
   t.after(() => {
     bridge?.stop();
     relaySocket?.close();
     relayServer.close();
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    fs.rmSync(uploadHome, { recursive: true, force: true });
   });
   await new Promise((resolve) => relayServer.once("listening", resolve));
   relayServer.on("connection", (socket) => {
@@ -1350,11 +1356,22 @@ test("endpoint routing delegates only selected extensions and passes through Cod
   });
   assert.equal((await request("project/validatePath")).error?.data?.errorCode, "missing_path");
   assert.equal((await request("workspace/readFile")).error?.data?.errorCode, "missing_file_path");
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==', 'base64');
+  const uploadPath = path.join(uploadHome, "remodex_uploads", "12345678-1234-1234-1234-123456789abc", "test.png");
+  fs.mkdirSync(path.dirname(uploadPath), { recursive: true });
+  fs.writeFileSync(uploadPath, image);
+  const imageReply = await request("workspace/readImage", { path: uploadPath });
+  assert.equal(imageReply.result?.dataBase64, image.toString("base64"));
+  const originalInput = { type: "localImage", path: uploadPath };
+  relaySocket.send(JSON.stringify({ id: "uploaded-image", method: "turn/start", params: { threadId: "thread-1", input: [originalInput] } }));
+  await waitFor(() => fakeCodex.sent.some((message) => message.id === "uploaded-image"));
+  assert.deepEqual(fakeCodex.sent.find((message) => message.id === "uploaded-image").params.input,
+    [{ type: "image", url: `data:image/png;base64,${image.toString("base64")}` }]);
   fakeCodex.emitMessage({ id: "untracked-image", result: { dataBase64: "a".repeat(12 * 1024 * 1024) } });
   const oversized = await waitForMessage(relayMessages, (message) => message.id === "untracked-image");
   assert.equal(oversized.error?.data?.errorCode, "relay_response_too_large");
   assert.deepEqual(fakeCodex.sent.map((message) => message.method), [
-    "project/list", "thread/list", "project/createDirectory", "workspace/readImage", "workspace/readImage",
+    "project/list", "thread/list", "project/createDirectory", "workspace/readImage", "workspace/readImage", "turn/start",
   ]);
 });
 

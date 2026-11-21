@@ -45,6 +45,7 @@ internal suspend fun CodexService.answerConversationQuestionsInternal(
         val generation = connectionGeneration
         val text = ConversationQuestionCodec.submissionText(current, answers, allowHistorical)
         val clientId = UUID.nameUUIDFromBytes((threadId + "\n" + text).toByteArray()).toString()
+        val pendingId = if (current.source == "async") messageTimelineStore.appendPendingUserMessage(threadId, text) else null
         var stage = "question_reply_send"
         try {
             val response = questionReplyDeadline { sendRequestImpl("turn/start", JSONValue.Obj(mapOf(
@@ -64,8 +65,12 @@ internal suspend fun CodexService.answerConversationQuestionsInternal(
                 if (connectionGeneration != generation) throw CancellationException("Question reply record belongs to a replaced connection")
             })
             bumpThreadActivityAfterTurn(threadId)
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) {
+        } catch (error: Exception) {
+            if (pendingId != null) withContext(kotlinx.coroutines.NonCancellable) {
+                try { messageTimelineStore.discardUnconfirmedQuestionReply(threadId, pendingId) }
+                catch (cleanup: Exception) { error.addSuppressed(cleanup) }
+            }
+            if (error is CancellationException) throw error
             android.util.Log.e("RemodexQuestions", "operation=answer thread=$threadId request=${request.requestID.stringValue} stage=$stage attempt=1", error)
             throw error
         }

@@ -7,6 +7,7 @@ const path = require("path");
 const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
 const {
   expandExecWrapperToolCall,
+  asyncQuestionItem,
   isOrchestrationWaitCall,
 } = require("./codex-tool-wrapper");
 const { terminalEventClosesTrackedTurn } = require("./rollout-turn-semantics");
@@ -455,6 +456,7 @@ function parseSessionJsonlTurns(content, {
   const skippedCallIds = new Set();
   const toolCallsByCallId = new Map();
   const pendingUserMessages = [];
+  const userSources = new WeakMap();
   const assistantAliasOccurrencesByBaseKey = new Map();
   const pendingPatchFallbacksByTurn = new WeakMap();
 
@@ -533,7 +535,7 @@ function parseSessionJsonlTurns(content, {
           || `turn-line-${sourceLineNumber}`;
         const turn = ensureTurn(turns, turnsById, activeTurnId, sessionThreadId, entry.timestamp);
         applyHistoryTimeZone(turn, sessionTimeZone);
-        flushPendingUserMessagesToTurn(turn, pendingUserMessages);
+        flushPendingUserMessagesToTurn(turn, pendingUserMessages, userSources);
         continue;
       }
 
@@ -592,6 +594,10 @@ function parseSessionJsonlTurns(content, {
         });
         if (item) {
           applyHistoryTimeZone(item, sessionTimeZone);
+          if (isUserHistoryItem(item)) {
+            addHistoryItemToTurn(turn, item, "completed", userSources);
+            continue;
+          }
           const pendingPatches = pendingPatchFallbacksByTurn.get(turn);
           const patchKey = pendingPatches && fileChangePatchKey(item, sessionCwd);
           const fallbackIndex = patchKey ? pendingPatches.get(patchKey)?.shift() : undefined;
@@ -631,7 +637,7 @@ function parseSessionJsonlTurns(content, {
           entry.timestamp
         );
         applyHistoryTimeZone(turn, sessionTimeZone);
-        addHistoryItemToTurn(turn, item);
+        addHistoryItemToTurn(turn, item, "event", userSources);
         continue;
       }
 
@@ -687,7 +693,7 @@ function parseSessionJsonlTurns(content, {
               pendingPatchFallbacksByTurn.set(turn, pendingPatches);
             }
           }
-          addHistoryItemToTurn(turn, item);
+          addHistoryItemToTurn(turn, item, "response", userSources);
         }
       }
     }
@@ -780,26 +786,38 @@ function pushPendingUserMessage(pendingUserMessages, item) {
   if (!item || !historyUserItemText(item)) {
     return;
   }
-  if (pendingUserMessages.some((candidate) => areDuplicateUserHistoryItems(candidate, item))) {
+  if (pendingUserMessages.some((candidate) => candidate.id === item.id)) {
     return;
   }
   pendingUserMessages.push(item);
 }
 
-function addHistoryItemToTurn(turn, item) {
-  if (!turn || !item) {
+function addHistoryItemToTurn(turn, item, source, userSources) {
+  if (!isUserHistoryItem(item)) {
+    turn.items.push(item);
     return;
   }
-
-  if (isUserHistoryItem(item)) {
-    const duplicateIndex = turn.items.findIndex((candidate) => areDuplicateUserHistoryItems(candidate, item));
-    if (duplicateIndex !== -1) {
-      turn.items[duplicateIndex] = mergeDuplicateUserHistoryItems(turn.items[duplicateIndex], item);
-      return;
-    }
+  // One input can appear as a raw response, a legacy event and a canonical
+  // completion, each with its own ID. Match each representation only once.
+  let index = turn.items.findIndex((row) => userSources.get(row)?.get(source) === item.id);
+  if (index < 0) {
+    index = turn.items.findIndex((row) => {
+      const seen = userSources.get(row);
+      return seen && !seen.has(source) && areDuplicateUserHistoryItems(row, item);
+    });
   }
-
-  turn.items.push(item);
+  if (index < 0) {
+    userSources.set(item, new Map([[source, item.id]]));
+    turn.items.push(item);
+    return;
+  }
+  const previous = turn.items[index];
+  const seen = userSources.get(previous);
+  seen.set(source, item.id);
+  const merged = mergeDuplicateUserHistoryItems(previous, item);
+  if (seen.has("completed")) merged.id = seen.get("completed");
+  userSources.set(merged, seen);
+  turn.items[index] = merged;
 }
 
 function mergeDuplicateUserHistoryItems(existing, incoming) {
@@ -913,14 +931,14 @@ function shouldSkipDuplicateProposedPlanMessage(turn, item) {
   ));
 }
 
-function flushPendingUserMessagesToTurn(turn, pendingUserMessages) {
+function flushPendingUserMessagesToTurn(turn, pendingUserMessages, userSources) {
   if (!turn || pendingUserMessages.length === 0) {
     return;
   }
 
   for (const item of pendingUserMessages.splice(0)) {
     applyHistoryTimeZone(item, normalizeString(turn.timeZone) || normalizeString(turn.timezone));
-    addHistoryItemToTurn(turn, item);
+    addHistoryItemToTurn(turn, item, "event", userSources);
   }
 }
 
@@ -1077,13 +1095,8 @@ function normalizeReadableToolItemForHistory(payload, lineNumber, { cwd = "" } =
   const id = callId || normalizeString(payload.id) || `tool-call-line-${lineNumber}`;
   const status = normalizeString(payload.status) || "completed";
 
-  if (toolName.split(".").at(-1) === "request_user_input_async" && Array.isArray(argumentsObject.questions)) {
-    // Match native app-server agentMessage.questions; preserve the original call ID and indices.
-    return {
-      ...payload, id, type: "agentMessage", text: "", phase: "commentary",
-      questions: argumentsObject.questions,
-    };
-  }
+  const question = asyncQuestionItem(toolName, argumentsObject, id);
+  if (question) return { ...payload, ...question };
 
   if (isCommandToolName(toolName)) {
     return {

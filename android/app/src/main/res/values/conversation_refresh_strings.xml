@@ -4,6 +4,6 @@
     <string name="conversation_refreshing">Refreshing conversation…</string>
     <string name="conversation_refreshed">Conversation refreshed</string>
     <string name="conversation_refresh_failed">Could not refresh conversation</string>
-    <string name="attachment_shortcuts">Tap to select photos; long press to select files</string>
+    <string name="attachment_shortcuts">Add attachment</string>
     <string name="attachment_more_options">More attachment and composer options</string>
 </resources>

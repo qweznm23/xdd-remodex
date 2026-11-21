@@ -140,7 +140,7 @@ internal class MessageTimelineStore(
         mutex.withLock {
             requireCurrentRequest()
             val map = _messagesByThread.value.toMutableMap()
-            val existing = map[threadId].orEmpty()
+            val existing = reconcileDesktopTurnAliases(map[threadId].orEmpty(), incoming)
             rebuildSubagentIdentityDirectory(existing + incoming)
             map[threadId] =
                 (if (isItemPage) {
@@ -393,15 +393,38 @@ internal class MessageTimelineStore(
         }
     }
 
+    suspend fun appendPublicSummary(
+        threadId: String, turnId: String?, itemId: String?, index: Int, delta: String, active: Boolean,
+    ) {
+        if (itemId == null && turnId == null) return
+        mutex.withLock {
+            val list = _messagesByThread.value[threadId].orEmpty().toMutableList()
+            val pos = list.indexOfLast {
+                it.kind == CodexMessageKind.thinking && it.turnId == turnId && it.itemId == itemId
+            }
+            // A completed snapshot already contains the final text. A delayed delta cannot extend it.
+            if (!active || list.getOrNull(pos)?.reasoningSummaryFinal == true) return
+            val row = list.getOrNull(pos) ?: CodexMessage(threadId = threadId, turnId = turnId,
+                itemId = itemId, role = CodexMessageRole.system, kind = CodexMessageKind.thinking,
+                text = "", createdAt = Instant.now(), isStreaming = active)
+            val updated = row.copy(reasoningSummary = row.reasoningSummary +
+                (index to (row.reasoningSummary[index].orEmpty() + delta)))
+            if (pos >= 0) list[pos] = updated else list.add(updated)
+            publishMessages(_messagesByThread.value + (threadId to list))
+        }
+    }
+
     suspend fun completeSystemItem(
         threadId: String,
         turnId: String?,
         itemId: String?,
         kind: CodexMessageKind,
         text: String,
+        reasoningSummary: Map<Int, String> = emptyMap(),
+        summaryFinal: Boolean = false,
     ) {
         val finalText = text.trim()
-        if (finalText.isEmpty()) return
+        if (finalText.isEmpty() && reasoningSummary.isEmpty()) return
         mutex.withLock {
             val map = _messagesByThread.value.toMutableMap()
             val list = map[threadId].orEmpty().toMutableList()
@@ -442,6 +465,8 @@ internal class MessageTimelineStore(
                 list[idx] =
                     m.copy(
                         text = merged,
+                        reasoningSummary = m.reasoningSummary + reasoningSummary,
+                        reasoningSummaryFinal = m.reasoningSummaryFinal || summaryFinal,
                         isStreaming = false,
                         turnId = turnId ?: m.turnId,
                         itemId = itemId ?: m.itemId,
@@ -461,6 +486,8 @@ internal class MessageTimelineStore(
                         role = CodexMessageRole.system,
                         kind = kind,
                         text = finalText,
+                        reasoningSummary = reasoningSummary,
+                        reasoningSummaryFinal = summaryFinal,
                         createdAt = Instant.now(),
                         turnId = turnId,
                         itemId = itemId,
@@ -1065,6 +1092,7 @@ internal class MessageTimelineStore(
                     text = trimmed,
                     createdAt = Instant.now(),
                     deliveryState = CodexMessageDeliveryState.pending,
+                    localSendNanos = System.nanoTime(),
                     isStreaming = false,
                     attachments = attachments,
                 ),
@@ -1073,6 +1101,18 @@ internal class MessageTimelineStore(
             publishMessages(map)
         }
         return id
+    }
+
+    /** A server echo may already have confirmed this row while the submit request was in flight. */
+    suspend fun discardUnconfirmedQuestionReply(threadId: String, id: String) {
+        mutex.withLock {
+            val map = _messagesByThread.value.toMutableMap()
+            val rows = map[threadId].orEmpty()
+            val retained = rows.filterNot { it.id == id && it.deliveryState == CodexMessageDeliveryState.pending }
+            if (retained.size == rows.size) return@withLock
+            map[threadId] = retained
+            publishQuestionMessages(map, threadId)
+        }
     }
 
     suspend fun markUserMessageOutcome(
@@ -1104,30 +1144,36 @@ internal class MessageTimelineStore(
         text: String,
         attachments: List<CodexImageAttachment> = emptyList(),
         createdAt: Instant? = null,
+        itemId: String? = null,
+        mirrorId: String? = null,
         requireCurrentRequest: () -> Unit = {},
     ) {
         val t = text.trim()
-        val normalizedText = normalizedMessageText(t)
         if (t.isEmpty() && attachments.isEmpty()) return
-        val messageCreatedAt = createdAt ?: Instant.now()
+        val incoming = CodexMessage(
+            threadId = threadId, role = CodexMessageRole.user, text = t,
+            turnId = turnId, itemId = itemId, userMirrorId = mirrorId,
+            createdAt = createdAt ?: Instant.now(), attachments = attachments,
+        )
         mutex.withLock {
             requireCurrentRequest()
             val map = _messagesByThread.value.toMutableMap()
             val list = map[threadId].orEmpty().toMutableList()
-            val existingIdx =
-                list.indexOfLast { m ->
-                    m.role == CodexMessageRole.user &&
-                        normalizedMessageText(m.text) == normalizedText &&
-                        compatibleUserAttachments(m.attachments, attachments) &&
-                        (
-                            (turnId != null && (m.turnId == null || m.turnId == turnId)) ||
-                                (turnId == null && m.turnId == null)
-                        )
-                }
+            val exact = list.indexOfFirst { m ->
+                m.role == CodexMessageRole.user && m.turnId == turnId &&
+                    ((itemId != null && m.itemId == itemId) || (mirrorId != null && m.userMirrorId == mirrorId))
+            }
+            val existingIdx = if (exact >= 0) exact else list.indexOfFirst { m ->
+                HistoryMessageMerge.isCompatibleUserChatDuplicate(m, incoming) ||
+                    (turnId == null && m.turnId == null && m.userMirrorId == null && mirrorId == null &&
+                        m.text == t && m.createdAt == createdAt && compatibleUserAttachments(m.attachments, attachments))
+            }
             if (existingIdx >= 0) {
                 val existing = list[existingIdx]
                 val next =
                     existing.copy(
+                        itemId = if (itemId == "$turnId:input") existing.itemId ?: itemId else itemId ?: existing.itemId,
+                        userMirrorId = mirrorId ?: existing.userMirrorId,
                         deliveryState = CodexMessageDeliveryState.confirmed,
                         turnId = turnId ?: existing.turnId,
                         attachments = UserChatAttachmentMatcher.merge(existing.attachments, attachments),
@@ -1143,20 +1189,7 @@ internal class MessageTimelineStore(
                         createdAt = createdAt,
                     )
                         ?: list.size
-                list.add(
-                    insertionIndex,
-                    CodexMessage(
-                        threadId = threadId,
-                        role = CodexMessageRole.user,
-                        kind = CodexMessageKind.chat,
-                        text = t,
-                        createdAt = messageCreatedAt,
-                        turnId = turnId,
-                        deliveryState = CodexMessageDeliveryState.confirmed,
-                        isStreaming = false,
-                        attachments = attachments,
-                    ),
-                )
+                list.add(insertionIndex, incoming)
                 if (insertionIndex < list.lastIndex) {
                     reassignOrderIndexesInCurrentOrder(list)
                 }
@@ -1170,11 +1203,25 @@ internal class MessageTimelineStore(
         mutex.withLock {
             requireCurrentRequest()
             val map = _messagesByThread.value.toMutableMap()
-            map[threadId] = map[threadId].orEmpty().map { message ->
+            val rows = map[threadId].orEmpty().toMutableList()
+            val index = rows.indexOfFirst { message ->
                 val request = message.structuredUserInputRequest
-                if (request?.requestID?.stringValue != requestId || expectedRequest != null && (request.identity != expectedRequest.identity || request.questions != expectedRequest.questions)) message
-                else message.copy(structuredUserInputRequest = request.copy(answers = answers, submitted = true))
+                request?.source == "rpc" && request.requestID.stringValue == requestId &&
+                    (expectedRequest == null || request.identity == expectedRequest.identity && request.questions == expectedRequest.questions)
             }
+            val request = rows.getOrNull(index)?.structuredUserInputRequest ?: expectedRequest ?: return@withLock
+            if (index >= 0) rows[index] = rows[index].copy(structuredUserInputRequest = request.copy(answers = answers, submitted = true))
+            if (answers.isNotEmpty()) {
+                val receiptId = "rpc-answer:" + UUID.nameUUIDFromBytes((threadId + "\n" + request.identity).toByteArray())
+                if (rows.none { it.id == receiptId }) {
+                    val values = request.questions.mapNotNull { question ->
+                        answers[question.id]?.let { if (question.isSecret) "••••" else it.joinToString("\n") }
+                    }
+                    rows.add(CodexMessage(id = receiptId, itemId = receiptId, threadId = threadId, turnId = request.turnId,
+                        role = CodexMessageRole.user, text = ConversationQuestionCodec.displayAnswers(values), createdAt = Instant.now()))
+                }
+            }
+            map[threadId] = rows
             publishQuestionMessages(map, threadId)
         }
     }
@@ -1188,9 +1235,21 @@ internal class MessageTimelineStore(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.let { resolvedTurnId ->
-                list.indexOfFirst { message ->
-                    message.turnId == resolvedTurnId && message.role != CodexMessageRole.user
-                }.takeIf { it >= 0 }?.let { return it }
+                val first = list.indexOfFirst { it.turnId == resolvedTurnId }
+                if (first >= 0) {
+                    val last = list.indexOfLast { it.turnId == resolvedTurnId }
+                    if ((first..last).none {
+                            list[it].turnId == resolvedTurnId && list[it].role == CodexMessageRole.user
+                        }) return first
+                    // Live assistant rows use the device clock. A server timestamp cannot
+                    // order a steer against them reliably. History supplies authoritative order.
+                    val tail = list[last]
+                    if (tail.role == CodexMessageRole.assistant && tail.isStreaming && tail.itemId == null &&
+                        tail.text.isEmpty() && tail.attachments.isEmpty()) return last
+                    return last + 1
+                }
+                // A turn with an explicit id must never inherit a sibling's active position.
+                return createdAt?.let { time -> list.indexOfFirst { it.createdAt > time }.takeIf { it >= 0 } }
             }
         createdAt?.let { eventTime ->
             list.indexOfFirst { message ->

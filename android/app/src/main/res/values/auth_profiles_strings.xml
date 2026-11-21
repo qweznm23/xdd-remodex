@@ -1,9 +1,9 @@
 <resources>
     <string name="auth_profiles_switch_ready">Codex is using the selected account</string>
-    <string name="auth_profiles_title">Other authorizations</string>
+    <string name="auth_profiles_title">Authorization files</string>
     <string name="auth_profiles_hint">Only accounts not selected by Codex are listed. Queries use an isolated process.</string>
     <string name="auth_profiles_refresh">Refresh list</string>
-    <string name="auth_profiles_empty">No other saved accounts</string>
+    <string name="auth_profiles_empty">No saved authorizations</string>
     <string name="auth_profiles_unavailable">This host has no compatible authorization manager.</string>
     <string name="auth_profiles_number">Authorization %1$s</string>
     <string name="auth_profiles_expiry">Access token expires: %1$s</string>
@@ -18,7 +18,20 @@
     <string name="auth_profiles_queried">Last query: %1$s</string>
     <string name="auth_profiles_switch">Switch</string>
     <string name="auth_profiles_switch_title">Switch to authorization %1$s?</string>
-    <string name="auth_profiles_switch_body">The server saves newer current credentials and selects this account. Codex restarts in 10 seconds; active tasks may be interrupted and Remodex will reconnect.</string>
+    <string name="auth_profiles_switch_body">The server checks that it can restart Codex before applying this authorization. Restart is scheduled in 10 seconds and can interrupt active tasks.</string>
+    <string name="auth_restart_action">Restart Codex</string>
+    <string name="auth_restart_history">Restart history</string>
+    <string name="auth_restart_confirm_body">The server will restart the local Codex daemon using the current authorization. Active tasks may be interrupted while Remodex reconnects.</string>
+    <string name="auth_restart_empty">No restart records yet</string>
+    <string name="auth_restart_details">Details</string>
+    <string name="auth_restart_summary">%1$s · %2$s</string>
+    <string name="auth_restart_ready">Restarted and verified</string>
+    <string name="auth_restart_recovered">Account confirmed after an error</string>
+    <string name="auth_restart_pending">In progress</string>
+    <string name="auth_restart_superseded">Superseded by a newer selection</string>
+    <string name="auth_restart_unverified">Runtime confirmation pending</string>
+    <string name="auth_restart_rolled_back">Failed · previous authorization retained</string>
+    <string name="auth_restart_failed">Failed</string>
     <string name="auth_profiles_switch_confirm">Switch account</string>
     <string name="auth_profiles_cancel">Cancel</string>
     <string name="auth_profiles_restart_failed">The host could not verify the restart. Check maintenance/last-restart.json on the computer.</string>
@@ -34,4 +47,19 @@
     <string name="auth_progress_restored">Reconnected to the computer</string>
     <string name="auth_progress_verify">Verifying the account in Codex</string>
     <string name="auth_progress_confirmed">Codex confirmed profile %1$s</string>
+    <string name="auth_library_add">Add authorization</string>
+    <string name="auth_library_rename">Rename</string>
+    <string name="auth_library_name">Display name (optional)</string>
+    <string name="auth_library_replace">Replace file</string>
+    <string name="auth_library_remove">Remove from library</string>
+    <string name="auth_library_remove_confirm">Remove %1$s from the library and stop its scheduled checks? A recovery copy stays on this host.</string>
+    <string name="auth_library_save">Save</string>
+    <string name="auth_library_in_use">In use</string>
+    <string name="auth_library_unknown">No account name or email in this file</string>
+    <string name="auth_library_account">File account</string>
+    <string name="auth_profile_account_line">Account: %1$s</string>
+    <string name="auth_library_switch">Switch to %1$s?</string>
+    <string name="auth_action_renamed">Rename saved</string>
+    <string name="auth_action_removed">Authorization %1$s removed</string>
+    <string name="auth_action_reason">%1$s: %2$s</string>
 </resources>

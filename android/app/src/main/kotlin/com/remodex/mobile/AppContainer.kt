@@ -133,6 +133,7 @@ object AppContainer {
                 secureStore = secureStore,
                 sessionPersistence = sessionPersistence,
                 messagePersistence = messagePersistence,
+                changeLedger = aiChangeSetPersistence,
             )
         val betaStore = BetaTesterStore(SharedPreferencesBetaKeyValueStore(app))
         val betaApi =

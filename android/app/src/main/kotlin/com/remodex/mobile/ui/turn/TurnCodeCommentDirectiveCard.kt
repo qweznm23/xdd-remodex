@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.ui.theme.CodeFontFamily
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -154,7 +155,7 @@ private fun TurnCodeCommentDirectiveCard(
                 text = meta,
                 style = MaterialTheme.typography.labelSmall,
                 color = contentColor.copy(alpha = 0.76f),
-                fontFamily = FontFamily.Monospace,
+                fontFamily = CodeFontFamily,
                 modifier = Modifier.widthIn(max = 560.dp),
             )
         }

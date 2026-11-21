@@ -108,7 +108,17 @@ class RootViewModel(
         autoReconnectJob?.cancel()
         autoReconnectJob = viewModelScope.launch {
             restoreActiveThreadIfNeeded(allowBeforeSessionReady = true)
-            attemptAutoConnectIfNeeded(minIntervalMs = 0L)
+            if (repository.isSessionReady.value) {
+                // Android can recreate the activity while the paired service remains in memory.
+                refreshAfterBackground(repository) { stage, error -> android.util.Log.e("RemodexForeground", stage, error) }
+            } else attemptAutoConnectIfNeeded(minIntervalMs = 0L)
+        }
+    }
+
+    fun catchUpAfterBackground() {
+        viewModelScope.launch {
+            restoreActiveThreadIfNeeded()
+            refreshAfterBackground(repository) { stage, error -> android.util.Log.e("RemodexForeground", stage, error) }
         }
     }
 
@@ -393,5 +403,23 @@ class RootViewModel(
                     throw IllegalArgumentException("Unknown ViewModel: $modelClass")
                 }
             }
+    }
+}
+
+internal suspend fun refreshAfterBackground(repository: CodexRepository, onFailure: (String, Exception) -> Unit) {
+    if (!repository.isSessionReady.value) return
+    val device = repository.currentTrustedMacDeviceId.value
+    val thread = repository.activeThreadId.value
+    kotlinx.coroutines.coroutineScope {
+        fun refresh(stage: String, read: suspend () -> Unit) = launch {
+            if (!repository.isSessionReady.value || repository.currentTrustedMacDeviceId.value != device) return@launch
+            try { read() }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (failure: Exception) { onFailure(stage, failure) }
+        }
+        refresh("thread/list after background") { repository.refreshThreads() }
+        if (thread != null) refresh("history after background") {
+            if (repository.activeThreadId.value == thread) repository.syncThreadHistory(thread, force = true)
+        }
     }
 }

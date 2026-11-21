@@ -1,75 +1,80 @@
 package com.remodex.mobile.ui.settings
 
+import com.remodex.mobile.ui.theme.RemodexPageStack
+import com.remodex.mobile.ui.theme.LocalSheetClose
+import com.remodex.mobile.ui.theme.conversationColors
+import com.remodex.mobile.ui.theme.RemodexModalBottomSheet
+import com.composables.icons.lucide.R as LucideR
+import androidx.compose.ui.res.painterResource
+import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.Manifest
 import android.net.Uri
-import android.provider.Settings
 import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import kotlinx.coroutines.launch
-import com.remodex.mobile.R
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remodex.mobile.AppContainer
+import com.remodex.mobile.BuildConfig
+import com.remodex.mobile.R
+import com.remodex.mobile.update.UpdatePhase
 import com.remodex.mobile.core.config.FeatureFlags
 import com.remodex.mobile.core.model.AppFontStyle
 import com.remodex.mobile.core.model.AppLanguagePreference
 import com.remodex.mobile.core.model.AppThemePreference
+import com.remodex.mobile.core.model.RelayHealthSnapshot
 import com.remodex.mobile.core.model.UserBubbleColor
 import com.remodex.mobile.core.notification.LocalNotificationSettings
 import com.remodex.mobile.core.readRemodexAppVersionName
-import com.remodex.mobile.core.model.RelayHealthSnapshot
 import com.remodex.mobile.core.transport.ConnectionState
 import com.remodex.mobile.data.AppFontPreferences
 import com.remodex.mobile.data.CodexRepository
@@ -77,36 +82,79 @@ import com.remodex.mobile.data.LanguagePreferences
 import com.remodex.mobile.data.PetCompanionStore
 import com.remodex.mobile.data.ThemePreferences
 import com.remodex.mobile.data.UserBubblePreferences
+import com.remodex.mobile.services.CodexService
 import com.remodex.mobile.services.RelayHealthClient
 import com.remodex.mobile.services.SubscriptionService
-import com.remodex.mobile.services.CodexService
-import com.remodex.mobile.ui.theme.remodexScreenTopAppBarColors
 import com.remodex.mobile.terminal.TerminalWindowsSetupGuide
+import com.remodex.mobile.ui.theme.RemodexPageHeader
+import com.remodex.mobile.ui.turn.currentWeeklyQuota
+import com.remodex.mobile.ui.turn.weeklyQuotaCountdown
+import com.remodex.mobile.ui.turn.weeklyQuotaLabel
+import kotlinx.coroutines.launch
 
 private enum class SettingsPage(val title: Int) {
     HOME(R.string.nav_settings), APPEARANCE(R.string.settings_section_appearance),
     NOTIFICATIONS(R.string.settings_section_notifications), CONNECTION(R.string.settings_section_connection),
-    COMPONENTS(R.string.settings_components), TERMINAL(R.string.terminal_windows_guide_title),
+    APP(R.string.settings_app_hub), COMPONENTS(R.string.settings_components), TERMINAL(R.string.terminal_windows_guide_title),
     PETS(R.string.settings_section_pet), UPDATES(R.string.app_update_title),
     ACCOUNT(R.string.settings_accounts_auth), SUBSCRIPTION(R.string.settings_section_subscription),
 }
 
+@Composable
+internal fun rememberSettingsProfiles(repository: CodexRepository): AuthProfilesState {
+    val device by repository.currentTrustedMacDeviceId.collectAsStateWithLifecycle()
+    return remember(repository, device) { AuthProfilesState(repository) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     repository: CodexRepository,
     onNavigateBack: () -> Unit,
     onNavigateToAbout: () -> Unit,
     onNavigateToWhatsNew: () -> Unit,
     onNavigateToTesterHq: () -> Unit = {},
     modifier: Modifier = Modifier,
+    authProfiles: AuthProfilesState = rememberSettingsProfiles(repository),
+) {
+    val base = MaterialTheme.colorScheme
+    val mode = com.remodex.mobile.ui.theme.LocalAppPalette.current.mode
+    val colors = remember(base, mode) { settingsColorScheme(base, mode) }
+    MaterialTheme(colorScheme = colors) {
+        SettingsContent(repository, onNavigateBack, onNavigateToAbout, onNavigateToWhatsNew, onNavigateToTesterHq, modifier, authProfiles)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsContent(
+    repository: CodexRepository,
+    onNavigateBack: () -> Unit,
+    onNavigateToAbout: () -> Unit,
+    onNavigateToWhatsNew: () -> Unit,
+    onNavigateToTesterHq: () -> Unit,
+    modifier: Modifier,
+    authProfiles: AuthProfilesState,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var page by rememberSaveable { mutableStateOf(SettingsPage.HOME) }
+    var updateOpen by rememberSaveable { mutableStateOf(false) }
+    // Restore an update page saved by an earlier build into the new dialog.
+    LaunchedEffect(page) {
+        if (page == SettingsPage.UPDATES) {
+            page = SettingsPage.APP
+            updateOpen = true
+        }
+    }
+    if (updateOpen) AppUpdateDialog(onDismiss = { updateOpen = false })
     var usageOpen by rememberSaveable { mutableStateOf(false) }
     val pageStates = rememberSaveableStateHolder()
-    fun back() { page = if (page == SettingsPage.TERMINAL) SettingsPage.COMPONENTS else SettingsPage.HOME }
+    fun back() { page = when (page) {
+        SettingsPage.TERMINAL -> SettingsPage.COMPONENTS
+        SettingsPage.COMPONENTS, SettingsPage.UPDATES -> SettingsPage.APP
+        else -> SettingsPage.HOME
+    } }
     val navigateBack = { if (page == SettingsPage.HOME) onNavigateBack() else back() }
     BackHandler(onBack = navigateBack)
     val conn by repository.connectionState.collectAsStateWithLifecycle()
@@ -118,19 +166,24 @@ fun SettingsScreen(
     var themePreference by remember { mutableStateOf(ThemePreferences.read(context)) }
     var userBubbleColor by remember { mutableStateOf(UserBubblePreferences.read(context)) }
     var localRelayHostOverride by remember { mutableStateOf(AppContainer.sessionPersistence.loadLocalRelayHostOverride().orEmpty()) }
+    LaunchedEffect(page, deviceId, ready, localRelayHostOverride) {
+        if (page == SettingsPage.HOME) AppContainer.appUpdates.checkOnSettingsEntry()
+    }
     val versionName = remember { readRemodexAppVersionName(context) }
     var host by remember(repository, deviceId) { mutableStateOf<SettingsHostStatus?>(null) }
-    val authProfiles = remember(repository, deviceId) { AuthProfilesState(repository) }
     var hostError by remember(repository, deviceId) { mutableStateOf<Exception?>(null) }
     var hostLoading by remember(repository, deviceId) { mutableStateOf(false) }
     var hostRequestRevision by remember(repository, deviceId) { mutableStateOf(0L) }
-    suspend fun refreshHost() {
-        if (hostLoading || authProfiles.switching || !ready || conn !is ConnectionState.Connected) return
+    suspend fun refreshHost(forceNew: Boolean = false) {
+        if ((hostLoading && !forceNew) || authProfiles.switching || !ready || conn !is ConnectionState.Connected) return
         hostLoading = true
         val requestRevision = ++hostRequestRevision
         var stage = "request"
         try {
-            val response = repository.sendRequest("account/status/read", com.remodex.mobile.core.model.JSONValue.Obj(emptyMap()))
+            val response = kotlinx.coroutines.withTimeoutOrNull(30_000L) {
+                repository.sendRequest("account/status/read", com.remodex.mobile.core.model.JSONValue.Obj(emptyMap()))
+            } ?: throw java.util.concurrent.TimeoutException("account/status/read stage=request timeout=30s")
+            response.error?.let { throw com.remodex.mobile.core.error.CodexServiceError.RpcFailure(it) }
             stage = "decode"
             val decoded = SettingsHostStatus.decode(response.result)
             if (requestRevision == hostRequestRevision) {
@@ -143,8 +196,10 @@ fun SettingsScreen(
             android.util.Log.e("RemodexSettings", "operation=account/status/read stage=$stage attempt=1", error)
         } finally { if (requestRevision == hostRequestRevision) hostLoading = false }
     }
+    val connected = ready && conn is ConnectionState.Connected
+    ObserveAuthProfiles(authProfiles, connected)
     LaunchedEffect(page, deviceId, ready, conn) {
-        if (page in setOf(SettingsPage.ACCOUNT, SettingsPage.COMPONENTS) && host == null && hostError == null) refreshHost()
+        if (page in setOf(SettingsPage.HOME, SettingsPage.ACCOUNT, SettingsPage.COMPONENTS) && host == null && hostError == null) refreshHost()
     }
     LaunchedEffect(authProfiles.restartStatus) {
         if (authProfiles.restartStatus == "restart_scheduled" || authProfiles.restartStatus == "ready") {
@@ -157,129 +212,246 @@ fun SettingsScreen(
             refreshHost()
         }
     }
+    val currentFiles = authProfiles.currentLibraryProfiles
+    val currentFile = authProfiles.currentProfile ?: authProfiles.management?.current
+    val readingAccount = connected && !authProfiles.initialListSettled && !authProfiles.verifyingIdentity
+    val identity = if (readingAccount) null else currentFile?.accountIdentity() ?: host?.email?.takeUnless { authProfiles.verifyingIdentity }
+    val currentName = if (readingAccount) "—" else (currentFiles.firstOrNull() ?: currentFile)?.let { profileTitle(it) } ?: identity
+        ?: stringResource(R.string.settings_current_account)
+    val verification = when {
+        authProfiles.switching -> stringResource(R.string.settings_checking_authorization)
+        authProfiles.verifyingIdentity -> stringResource(R.string.settings_verifying_identity)
+        else -> null
+    }
+    var checkingRuntime by remember(deviceId) { mutableStateOf(false) }
+    var currentDetailId by rememberSaveable(deviceId) { mutableStateOf<String?>(null) }
+    val files = androidx.compose.runtime.key(deviceId) { rememberAuthFileActions(authProfiles) }
+    var addOpen by rememberSaveable(deviceId) { mutableStateOf(false) }
+    val authScope = androidx.compose.runtime.key(authProfiles) { rememberCoroutineScope() }
     if (usageOpen) com.remodex.mobile.ui.turn.ThreadUsageStatusBottomSheet(true, { usageOpen = false }, activeThread.orEmpty(), repository)
-    Scaffold(modifier = modifier, topBar = {
-        TopAppBar(title = { Text(stringResource(page.title)) }, colors = remodexScreenTopAppBarColors(),
-            navigationIcon = { IconButton(onClick = navigateBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.cd_navigate_back))
-            } })
+    Scaffold(modifier = modifier, containerColor = MaterialTheme.colorScheme.conversationColors().reading, topBar = {
+        RemodexPageHeader(stringResource(page.title), navigateBack, actions = {
+            if (page == SettingsPage.HOME) SettingsPaletteButton()
+            if (page == SettingsPage.ACCOUNT) {
+                androidx.compose.material3.IconButton(onClick = { authScope.launch { authProfiles.refresh() } },
+                    enabled = connected && authProfiles.busy == null) {
+                    Icon(painterResource(LucideR.drawable.lucide_ic_refresh_cw), stringResource(R.string.auth_profiles_refresh))
+                }
+            }
+            if (page == SettingsPage.ACCOUNT && authProfiles.supportsManagement) {
+                androidx.compose.material3.IconButton(onClick = { addOpen = true },
+                    enabled = connected && !authProfiles.switching && authProfiles.busy == null && authProfiles.management != null) {
+                    Icon(painterResource(LucideR.drawable.lucide_ic_plus), stringResource(R.string.auth_library_add))
+                }
+            }
+        })
     }) { innerPadding ->
-        pageStates.SaveableStateProvider(page.name) {
-            Column(Modifier.fillMaxSize().padding(innerPadding).navigationBarsPadding()
-                .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                when (page) {
-                    SettingsPage.HOME -> {
-                        SettingsGroup(stringResource(R.string.settings_group_preferences)) {
-                            SettingsNavigationRow(stringResource(R.string.settings_section_appearance),
-                                stringResource(R.string.settings_appearance_summary, stringResource(settingsThemeTitleRes(themePreference)), stringResource(settingsLanguageTitleRes(languagePreference))),
-                                { page = SettingsPage.APPEARANCE })
-                            SettingsNavigationRow(stringResource(R.string.settings_section_notifications), stringResource(R.string.settings_notifications_run_completion_title),
-                                { page = SettingsPage.NOTIFICATIONS })
-                            SettingsNavigationRow(stringResource(R.string.settings_section_pet), stringResource(R.string.settings_pet_summary), { page = SettingsPage.PETS })
-                        }
-                        SettingsGroup(stringResource(R.string.settings_group_account_connection)) {
-                            SettingsNavigationRow(stringResource(R.string.settings_accounts_auth), stringResource(R.string.settings_accounts_summary), { page = SettingsPage.ACCOUNT })
-                            SettingsNavigationRow(stringResource(R.string.settings_section_usage), stringResource(R.string.settings_usage_summary), { usageOpen = true })
-                            SettingsNavigationRow(stringResource(R.string.settings_section_connection), stringResource(if (conn is ConnectionState.Connected) R.string.sidebar_bridge_connected else R.string.settings_connection_summary), { page = SettingsPage.CONNECTION })
-                            if (AppContainer.subscriptionService.isConfigured) SettingsNavigationRow(stringResource(R.string.settings_section_subscription), "", { page = SettingsPage.SUBSCRIPTION })
-                        }
-                        SettingsGroup(stringResource(R.string.settings_group_application)) {
-                            SettingsNavigationRow(stringResource(R.string.app_update_title), versionName, { page = SettingsPage.UPDATES })
-                            SettingsNavigationRow(stringResource(R.string.settings_components), stringResource(R.string.settings_components_summary), { page = SettingsPage.COMPONENTS })
-                            SettingsNavigationRow(stringResource(R.string.nav_about_remodex), stringResource(R.string.settings_about_remodex_hint), {
-                                scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("about_screen_opened", "settings") }
-                                onNavigateToAbout()
-                            })
-                            SettingsNavigationRow(stringResource(R.string.nav_whats_new), "", {
-                                scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("settings_whats_new_opened", "settings") }
-                                onNavigateToWhatsNew()
-                            })
-                            if (FeatureFlags.betaEngagementEnabled) SettingsNavigationRow(stringResource(R.string.nav_tester_hq), "", {
-                                scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("settings_tester_hq_entry_opened", "settings") }
-                                onNavigateToTesterHq()
-                            })
-                        }
-                    }
-                    SettingsPage.APPEARANCE -> SettingsGroup {
-                        SettingsPickerRow(stringResource(R.string.settings_theme_title), AppThemePreference.entries, themePreference,
-                            { stringResource(settingsThemeTitleRes(it)) }, { stringResource(settingsThemeSubtitleRes(it)) }) {
-                            themePreference = it; ThemePreferences.write(context, it)
-                        }
-                        SettingsPickerRow(stringResource(R.string.settings_language_title), AppLanguagePreference.entries, languagePreference,
-                            { stringResource(settingsLanguageTitleRes(it)) }) { languagePreference = it; LanguagePreferences.write(context, it) }
-                        SettingsPickerRow(stringResource(R.string.settings_font_title), AppFontStyle.entries, fontStyle,
-                            { if (it == AppFontStyle.system) stringResource(R.string.settings_theme_system_title) else it.title },
-                            { stringResource(when (it) { AppFontStyle.system -> R.string.font_system_subtitle; AppFontStyle.geist -> R.string.font_geist_subtitle; AppFontStyle.jetBrainsMono -> R.string.font_mono_subtitle }) }) {
-                            fontStyle = it; AppFontPreferences.writeFontStyle(context, it)
-                        }
-                        SettingsPickerRow(stringResource(R.string.settings_user_bubble_title), UserBubbleColor.entries, userBubbleColor,
-                            { stringResource(settingsUserBubbleTitleRes(it)) }) { color ->
-                            val changed = color != userBubbleColor
-                            userBubbleColor = color; UserBubblePreferences.write(context, color)
-                            if (changed) scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("user_bubble_color_changed", "settings", refreshAfter = false) }
-                        }
-                    }
-                    SettingsPage.NOTIFICATIONS -> SettingsGroup { SettingsNotificationSection(context) }
-                    SettingsPage.PETS -> SettingsGroup { SettingsPetCompanionSection(repository, AppContainer.petCompanionStore) }
-                    SettingsPage.SUBSCRIPTION -> SettingsGroup { SettingsSubscriptionSection(AppContainer.subscriptionService) }
-                    SettingsPage.CONNECTION -> {
-                        SettingsGroup(stringResource(R.string.settings_current_connection)) {
-                            SettingsConnectionStatus(conn)
-                            OutlinedTextField(value = localRelayHostOverride, onValueChange = {
-                                localRelayHostOverride = it; AppContainer.sessionPersistence.saveLocalRelayHostOverride(it)
-                            }, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.settings_local_relay_host_override_label)) },
-                                placeholder = { Text(stringResource(R.string.settings_local_relay_host_override_placeholder)) }, singleLine = true)
-                        }
-                        SettingsGroup { SettingsRelayHealthSection(AppContainer.relayHealthClient, localRelayHostOverride) }
-                    }
-                    SettingsPage.ACCOUNT -> {
-                        SettingsGroup(stringResource(R.string.settings_current_account)) {
-                            HostRefreshStatus(hostLoading, hostError, ready && conn is ConnectionState.Connected) { scope.launch { refreshHost() } }
-                            SettingsValueRow(stringResource(R.string.settings_account_identity), host?.email, host != null)
-                            SettingsValueRow(stringResource(R.string.settings_account_status), host?.let { stringResource(when(it.status) {
-                                "authenticated" -> R.string.settings_auth_valid
-                                "pending_login" -> R.string.settings_auth_pending
-                                "expired" -> R.string.settings_auth_expired
-                                "not_logged_in" -> R.string.settings_auth_missing
-                                else -> R.string.usage_reset_card_unknown
-                            }) }, host != null)
-                            SettingsValueRow(stringResource(R.string.settings_account_plan), host?.plan, host != null)
-                            SettingsValueRow(stringResource(R.string.settings_account_method), host?.authMethod?.let {
-                                when (it) { "chatgpt", "chatgptAuthTokens" -> "ChatGPT"; "apikey", "apiKey" -> "API key"; else -> it }
-                            }, host != null)
-                        }
-                        SettingsGroup(stringResource(R.string.settings_auth_files)) {
-                            SettingsAuthFileContent(host?.authFile, host != null, hostLoading)
-                            authProfiles.currentProfile?.takeIf { authProfiles.supportsTokenRefresh }?.let { current ->
-                                RefreshTokenAction(current, authProfiles, ready && conn is ConnectionState.Connected && !hostLoading) {
-                                    refreshHost()
-                                }
+        RemodexPageStack(page, depth = {
+            when (it) {
+                SettingsPage.HOME -> 0
+                SettingsPage.TERMINAL -> 3
+                SettingsPage.COMPONENTS, SettingsPage.UPDATES -> 2
+                else -> 1
+            }
+        }, modifier = Modifier.padding(innerPadding)) { destination ->
+            pageStates.SaveableStateProvider(destination.name) {
+                Column(Modifier.fillMaxSize()
+                    .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    when (destination) {
+                        SettingsPage.HOME -> {
+                            CurrentAccountCard(currentName, identity, verification, currentWeeklyQuota()?.remainingPercent?.takeUnless { authProfiles.verifyingIdentity }) { page = SettingsPage.ACCOUNT }
+                            SettingsDestinationGroup(stringResource(R.string.settings_group_application)) {
+                                SettingsUpdateEntry { updateOpen = true }
+                                SettingsDestination(LucideR.drawable.lucide_ic_info, stringResource(R.string.settings_app_hub),
+                                    stringResource(R.string.settings_components), { page = SettingsPage.APP })
+                            }
+                            SettingsDestinationGroup(stringResource(R.string.settings_environment)) {
+                                SettingsDestination(LucideR.drawable.lucide_ic_plug, stringResource(R.string.settings_section_connection), stringResource(if (conn is ConnectionState.Connected) R.string.sidebar_bridge_connected else R.string.settings_connection_summary), { page = SettingsPage.CONNECTION })
+                                if (AppContainer.subscriptionService.isConfigured) SettingsDestination(LucideR.drawable.lucide_ic_credit_card, stringResource(R.string.settings_section_subscription), "", { page = SettingsPage.SUBSCRIPTION })
+                            }
+                            SettingsDestinationGroup(stringResource(R.string.settings_group_preferences)) {
+                                SettingsDestination(LucideR.drawable.lucide_ic_palette, stringResource(R.string.settings_section_appearance),
+                                    stringResource(R.string.settings_appearance_summary, stringResource(settingsThemeTitleRes(themePreference)), stringResource(settingsLanguageTitleRes(languagePreference))),
+                                    { page = SettingsPage.APPEARANCE })
+                                SettingsDestination(LucideR.drawable.lucide_ic_bell, stringResource(R.string.settings_section_notifications), stringResource(R.string.settings_notifications_run_completion_title),
+                                    { page = SettingsPage.NOTIFICATIONS })
+                                SettingsDestination(LucideR.drawable.lucide_ic_paw_print, stringResource(R.string.settings_section_pet), stringResource(R.string.settings_pet_summary), { page = SettingsPage.PETS })
                             }
                         }
-                        AuthProfilesSection(authProfiles, ready && conn is ConnectionState.Connected) {
-                            // Host refresh is triggered only by verified runtime readiness above.
+                        SettingsPage.APP, SettingsPage.UPDATES -> {
+                            SettingsSummary(LucideR.drawable.lucide_ic_download, stringResource(R.string.settings_installed_version),
+                                versionName, actions = {
+                                    FilledTonalButton(onClick = { updateOpen = true }) { Text(stringResource(R.string.app_update_check)) }
+                                })
+                            SettingsDestinationGroup(stringResource(R.string.settings_help_tools)) {
+                                SettingsDestination(LucideR.drawable.lucide_ic_blocks, stringResource(R.string.settings_components), stringResource(R.string.settings_components_summary), { page = SettingsPage.COMPONENTS })
+                            }
+                            SettingsDestinationGroup(stringResource(R.string.settings_group_application)) {
+                                SettingsDestination(LucideR.drawable.lucide_ic_info, stringResource(R.string.nav_about_remodex), stringResource(R.string.settings_about_remodex_hint), {
+                                    scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("about_screen_opened", "settings") }
+                                    onNavigateToAbout()
+                                })
+                                SettingsDestination(LucideR.drawable.lucide_ic_sparkles, stringResource(R.string.nav_whats_new), "", {
+                                    scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("settings_whats_new_opened", "settings") }
+                                    onNavigateToWhatsNew()
+                                })
+                                if (FeatureFlags.betaEngagementEnabled) SettingsDestination(LucideR.drawable.lucide_ic_flask_conical, stringResource(R.string.nav_tester_hq), "", {
+                                    scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("settings_tester_hq_entry_opened", "settings") }
+                                    onNavigateToTesterHq()
+                                })
+                            }
                         }
+                        SettingsPage.APPEARANCE -> {
+                            SettingsSummary(null, stringResource(R.string.settings_palette),
+                                stringResource(com.remodex.mobile.ui.theme.LocalAppPalette.current.mode.label),
+                                trailing = { SettingsPaletteButton() })
+                            SettingsGroup(stringResource(R.string.settings_display)) {
+                                SettingsPickerRow(stringResource(R.string.settings_theme_title), AppThemePreference.entries, themePreference,
+                                    { stringResource(settingsThemeTitleRes(it)) }, { stringResource(settingsThemeSubtitleRes(it)) }) {
+                                    themePreference = it; ThemePreferences.write(context, it)
+                                }
+                                SettingsPickerRow(stringResource(R.string.settings_user_bubble_title), UserBubbleColor.entries, userBubbleColor,
+                                    { stringResource(settingsUserBubbleTitleRes(it)) }) { color ->
+                                    val changed = color != userBubbleColor
+                                    userBubbleColor = color; UserBubblePreferences.write(context, color)
+                                    if (changed) scope.launch { AppContainer.betaEngagementRepository.recordMissionEvent("user_bubble_color_changed", "settings", refreshAfter = false) }
+                                }
+                            }
+                            SettingsGroup(stringResource(R.string.settings_language_and_fonts)) {
+                                SettingsPickerRow(stringResource(R.string.settings_language_title), AppLanguagePreference.entries, languagePreference,
+                                    { stringResource(settingsLanguageTitleRes(it)) }) { languagePreference = it; LanguagePreferences.write(context, it) }
+                                val customFonts by com.remodex.mobile.data.CustomFonts.slots.collectAsStateWithLifecycle()
+                                if (customFonts[com.remodex.mobile.data.FontSlot.Interface]?.font == null)
+                                    SettingsPickerRow(stringResource(R.string.settings_font_title), AppFontStyle.entries, fontStyle,
+                                    { if (it == AppFontStyle.system) stringResource(R.string.settings_theme_system_title) else it.title },
+                                    { stringResource(when (it) { AppFontStyle.system -> R.string.font_system_subtitle; AppFontStyle.geist -> R.string.font_geist_subtitle; AppFontStyle.jetBrainsMono -> R.string.font_mono_subtitle }) }) {
+                                    fontStyle = it; AppFontPreferences.writeFontStyle(context, it)
+                                }
+                                CustomFontSetting(com.remodex.mobile.data.FontSlot.Interface)
+                                CustomFontSetting(com.remodex.mobile.data.FontSlot.Reply)
+                            }
+                        }
+                        SettingsPage.NOTIFICATIONS -> SettingsNotificationSection(context)
+                        SettingsPage.PETS -> SettingsGroup { SettingsPetCompanionSection(repository, AppContainer.petCompanionStore) }
+                        SettingsPage.SUBSCRIPTION -> SettingsGroup { SettingsSubscriptionSection(AppContainer.subscriptionService) }
+                        SettingsPage.CONNECTION -> {
+                            SettingsSummary(LucideR.drawable.lucide_ic_plug, stringResource(R.string.settings_current_connection),
+                                connectionStatusLabel(conn))
+                            SettingsGroup {
+                                RelayAddressSetting(localRelayHostOverride) { address ->
+                                    AppContainer.sessionPersistence.saveLocalRelayHostOverride(address)
+                                    localRelayHostOverride = address
+                                }
+                            }
+                            SettingsGroup { SettingsRelayHealthSection(AppContainer.relayHealthClient, localRelayHostOverride) }
+                        }
+                        SettingsPage.ACCOUNT -> {
+                            androidx.compose.runtime.key(deviceId) {
+                                AuthProfilesSection(authProfiles, files, connected, authScope, addOpen, { addOpen = false },
+                                    currentFiles, currentName, identity, verification,
+                                    currentFile != null || host?.email != null, currentFile, host?.plan?.takeUnless { authProfiles.verifyingIdentity },
+                                    openCurrent = { id -> checkingRuntime = false; currentDetailId = id },
+                                    verifyCurrent = {
+                                        checkingRuntime = true
+                                        currentDetailId = "current"
+                                        host = null
+                                        hostError = null
+                                        authScope.launch {
+                                            authProfiles.refresh()
+                                            refreshHost(forceNew = true)
+                                        }
+                                    })
+                            }
+                            if (currentDetailId != null) AccountDetailSheet({ currentDetailId = null }) {
+                                val selectedFile = currentFiles.firstOrNull { it.id == currentDetailId }
+                                var fileDetails by rememberSaveable(currentDetailId) { mutableStateOf(false) }
+                                var loginDetails by rememberSaveable(currentDetailId) { mutableStateOf(false) }
+                                val enabled = connected && authProfiles.busy == null && !authProfiles.switching
+                                AccountDetailHeader(verification ?: stringResource(R.string.account_current_heading),
+                                    selectedFile?.let { profileTitle(it) } ?: currentName, selectedFile?.accountIdentity() ?: identity,
+                                    host?.plan?.takeUnless { authProfiles.verifyingIdentity },
+                                    selectedFile?.takeIf { authProfiles.management?.nextProfileId != null }, enabled) { file, name ->
+                                    authScope.launch { authProfiles.rename(file, name) }
+                                }
+                                if (!fileDetails && selectedFile != null) {
+                                    AuthActionFeedback(authProfiles, "file:${selectedFile.id}", connected, authScope)
+                                }
+                                if (checkingRuntime && verification != null && !hostLoading && hostError == null && host != null) {
+                                    val email = host?.email
+                                    val expected = currentFile?.email
+                                    val hint = when {
+                                        host?.status == "not_logged_in" -> R.string.auth_runtime_signed_out
+                                        host?.status != "authenticated" || email.isNullOrBlank() || expected.isNullOrBlank() -> R.string.auth_runtime_unknown
+                                        email.equals(expected, ignoreCase = true) -> R.string.auth_runtime_matches
+                                        else -> R.string.auth_runtime_differs
+                                    }
+                                    Text(stringResource(hint), style = MaterialTheme.typography.bodyMedium)
+                                }
+                                AccountDetailQuota(currentWeeklyQuota().takeUnless { authProfiles.verifyingIdentity }, null,
+                                    stringResource(R.string.weekly_quota_unknown)) {
+                                    TextButton(onClick = { currentDetailId = null; usageOpen = true }) { Text(stringResource(R.string.settings_section_usage)) }
+                                }
+                                if (hostLoading || hostError != null || !connected) {
+                                    HostRefreshStatus(hostLoading, hostError, connected) { scope.launch { refreshHost() } }
+                                }
+                                AccountDetailSection(stringResource(R.string.account_sign_in_details), loginDetails, { loginDetails = !loginDetails }) {
+                                    if (!hostLoading && hostError == null && connected) {
+                                        HostRefreshStatus(false, null, connected) { scope.launch { refreshHost() } }
+                                    }
+                                    SettingsValueRow(stringResource(R.string.settings_account_identity), host?.email, host != null)
+                                    SettingsValueRow(stringResource(R.string.settings_account_status), host?.let { stringResource(when(it.status) {
+                                        "authenticated" -> R.string.settings_auth_valid
+                                        "pending_login" -> R.string.settings_auth_pending
+                                        "expired" -> R.string.settings_auth_expired
+                                        "not_logged_in" -> R.string.settings_auth_missing
+                                        else -> R.string.usage_reset_card_unknown
+                                    }) }, host != null)
+                                    SettingsValueRow(stringResource(R.string.settings_account_plan), host?.plan, host != null)
+                                    SettingsValueRow(stringResource(R.string.settings_account_method), host?.authMethod?.let {
+                                        when (it) { "chatgpt", "chatgptAuthTokens" -> "ChatGPT"; "apikey", "apiKey" -> "API key"; else -> it }
+                                    }, host != null)
+                                }
+                                AccountDetailSection(stringResource(R.string.auth_profiles_token_details), fileDetails, { fileDetails = !fileDetails }) {
+                                    SettingsAuthFileContent(host?.authFile, host != null, hostLoading)
+                                    authProfiles.management?.current?.let { file ->
+                                        SettingsValueRow(stringResource(R.string.auth_library_account),
+                                            file.accountIdentity() ?: stringResource(R.string.auth_library_unknown))
+                                    }
+                                    authProfiles.currentProfile?.takeIf { authProfiles.supportsTokenRefresh }?.let { current ->
+                                        RefreshTokenAction(current, authProfiles, connected && !hostLoading, authScope) {
+                                            refreshHost()
+                                        }
+                                    }
+                                    if (authProfiles.supportsManagement) {
+                                        authProfiles.management?.current?.let { file ->
+                                            SettingsFileRow(stringResource(R.string.auth_manage_current_file), file, authProfiles, files, enabled, authScope)
+                                        }
+                                        selectedFile?.let { file -> SettingsFileRow(profileTitle(file), file, authProfiles, files, enabled, authScope) }
+                                    }
+                                }
+                                selectedFile?.let { file -> AuthMaintenanceFailure(authProfiles.management?.entries?.firstOrNull { it.profile.id == file.id }) }
+                            }
+                        }
+                        SettingsPage.COMPONENTS -> {
+                            SettingsSummary(LucideR.drawable.lucide_ic_blocks, stringResource(R.string.settings_phone_component),
+                                "Remodex $versionName", "Android ${Build.VERSION.RELEASE}")
+                            SettingsGroup(stringResource(R.string.settings_computer_components)) {
+                                val platform = when (val name = host?.hostPlatform) {
+                                    "linux" -> "Linux"; "macos", "darwin" -> "macOS"; "windows" -> "Windows"; else -> name
+                                }
+                                platform?.let { Text(it, style = MaterialTheme.typography.titleLarge) }
+                                SettingsValueRow(stringResource(R.string.settings_bridge_version), host?.bridgeVersion, host != null)
+                                SettingsValueRow(stringResource(R.string.settings_host_transport), host?.transport, host != null)
+                                HostRefreshStatus(hostLoading, hostError, connected) { scope.launch { refreshHost() } }
+                                if (host?.hostPlatform in setOf("macos", "darwin")) MacBridgeControls(repository, deviceId, ready)
+                            }
+                            SettingsGroup(stringResource(R.string.settings_help_tools)) {
+                                SettingsNavigationRow(stringResource(R.string.terminal_windows_guide_title), stringResource(R.string.settings_terminal_summary), { page = SettingsPage.TERMINAL })
+                            }
+                        }
+                        SettingsPage.TERMINAL -> SettingsGroup { TerminalWindowsSetupGuide() }
                     }
-                    SettingsPage.COMPONENTS -> {
-                        SettingsGroup(stringResource(R.string.settings_phone_component)) {
-                            SettingsValueRow("Remodex", versionName)
-                            SettingsValueRow("Android", Build.VERSION.RELEASE)
-                        }
-                        SettingsGroup(stringResource(R.string.settings_computer_components)) {
-                            HostRefreshStatus(hostLoading, hostError, ready && conn is ConnectionState.Connected) { scope.launch { refreshHost() } }
-                            SettingsValueRow(stringResource(R.string.settings_bridge_version), host?.bridgeVersion, host != null)
-                            SettingsValueRow(stringResource(R.string.settings_host_system), host?.hostPlatform?.let {
-                                when (it) { "linux" -> "Linux"; "macos" -> "macOS"; "windows" -> "Windows"; else -> it }
-                            }, host != null)
-                            SettingsValueRow(stringResource(R.string.settings_host_transport), host?.transport, host != null)
-                        }
-                        SettingsGroup(stringResource(R.string.settings_help_tools)) {
-                            SettingsNavigationRow(stringResource(R.string.terminal_windows_guide_title), stringResource(R.string.settings_terminal_summary), { page = SettingsPage.TERMINAL })
-                        }
-                    }
-                    SettingsPage.TERMINAL -> SettingsGroup { TerminalWindowsSetupGuide() }
-                    SettingsPage.UPDATES -> SettingsGroup { AppUpdateSection() }
                 }
             }
         }
@@ -342,32 +514,71 @@ private fun SettingsAuthFileContent(info: SettingsAuthFileInfo?, resolved: Boole
 }
 
 @Composable
-private fun SettingsGroup(title: String? = null, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        title?.let { Text(it, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        androidx.compose.material3.Surface(Modifier.fillMaxWidth(), shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+private fun SettingsDestinationGroup(title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, Modifier.padding(start = 12.dp), style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.onSurface) {
+            Column(content = content)
         }
     }
 }
 
 @Composable
+private fun SettingsUpdateEntry(onOpen: () -> Unit) {
+    val state = AppContainer.appUpdates.state.collectAsStateWithLifecycle()
+    // The home row only tracks stages. Byte-by-byte progress belongs in the open dialog.
+    val status by remember { derivedStateOf { state.value.phase to state.value.retry } }
+    val subtitle = if (status.first == UpdatePhase.IDLE) {
+        stringResource(R.string.app_update_current, BuildConfig.VERSION_NAME)
+    } else stringResource(updateTitle(status.first, status.second))
+    SettingsDestination(LucideR.drawable.lucide_ic_download, stringResource(R.string.app_update_check), subtitle, onOpen)
+}
+
+@Composable
+private fun SettingsDestination(icon: Int, title: String, subtitle: String, onClick: () -> Unit,
+    trailing: (@Composable () -> Unit)? = null) {
+    SettingsNavigationRow(title, subtitle, onClick, trailing, leading = {
+        Icon(painterResource(icon), null, Modifier.size(24.dp))
+    })
+}
+
+@Composable
+internal fun SettingsGroup(title: String? = null, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        title?.let { Text(it, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        com.remodex.mobile.ui.theme.RemodexGroup() {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), content = content)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun <T> SettingsPickerRow(title: String, choices: List<T>, selected: T,
     label: @Composable (T) -> String, description: @Composable (T) -> String = { "" }, onSelect: (T) -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
     SettingsNavigationRow(title, label(selected), { open = true })
-    if (open) androidx.compose.material3.AlertDialog(onDismissRequest = { open = false }, title = { Text(title) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+    if (open) RemodexModalBottomSheet(onDismissRequest = { open = false }, sheetGesturesEnabled = true) {
+        val closeSheet = LocalSheetClose.current
+        Text(title, Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.titleLarge)
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
             choices.forEach { choice ->
-                Row(Modifier.fillMaxWidth().selectable(choice == selected, onClick = { onSelect(choice); open = false }, role = Role.RadioButton).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(choice == selected, onClick = null)
-                    Column(Modifier.padding(start = 8.dp)) {
-                        Text(label(choice), style = MaterialTheme.typography.bodyLarge)
-                        description(choice).takeIf { it.isNotEmpty() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                    }
-                }
+                val hint = description(choice)
+                ListItem(
+                    modifier = Modifier.selectable(choice == selected, role = Role.RadioButton, onClick = {
+                        onSelect(choice)
+                        closeSheet()
+                    }),
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    headlineContent = { Text(label(choice)) },
+                    supportingContent = if (hint.isBlank()) null else ({ Text(hint) }),
+                    trailingContent = { RadioButton(choice == selected, onClick = null) },
+                )
             }
-        } }, confirmButton = { TextButton(onClick = { open = false }) { Text(stringResource(R.string.questions_close)) } })
+        }
+    }
 }
 
 @Composable
@@ -390,7 +601,10 @@ private fun HostRefreshStatus(loading: Boolean, error: Exception?, connected: Bo
     }
     if (error != null) {
         TextButton(onClick = { showDetails = !showDetails }) { Text(stringResource(R.string.questions_error_details)) }
-        if (showDetails) Text(error.message ?: error.javaClass.name, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        if (showDetails) androidx.compose.foundation.text.selection.SelectionContainer {
+            Text(remember(error) { authProfileDiagnostic(error) }, Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
+                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -422,115 +636,62 @@ private fun SettingsNotificationSection(context: Context) {
         permissionStatus == LocalNotificationSettings.PermissionStatus.Granted ||
             permissionStatus == LocalNotificationSettings.PermissionStatus.NotRequired
 
-    Text(
-        text = stringResource(R.string.settings_notifications_hint),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.settings_notifications_run_completion_title),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Text(
-                text = stringResource(
-                    if (notificationsEnabled) {
-                        R.string.settings_notifications_status_enabled
-                    } else {
-                        R.string.settings_notifications_status_disabled
-                    }
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-
-    if (notificationsEnabled) {
-        Text(
-            text = stringResource(R.string.settings_notifications_enabled_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    } else {
-        Text(
-            text = stringResource(R.string.settings_notifications_disabled_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (
-            Build.VERSION.SDK_INT >= 33 &&
-            permissionStatus == LocalNotificationSettings.PermissionStatus.RuntimePermissionRequired &&
-            !requestedInSession
-        ) {
-            TextButton(
-                onClick = { permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+    SettingsSummary(LucideR.drawable.lucide_ic_bell, stringResource(R.string.settings_notifications_run_completion_title),
+        stringResource(if (notificationsEnabled) R.string.settings_notifications_status_enabled else R.string.settings_notifications_status_disabled),
+        stringResource(if (notificationsEnabled) R.string.settings_notifications_enabled_hint else R.string.settings_notifications_disabled_hint),
+        actions = {
+            if (
+                !notificationsEnabled && Build.VERSION.SDK_INT >= 33 &&
+                permissionStatus == LocalNotificationSettings.PermissionStatus.RuntimePermissionRequired &&
+                !requestedInSession
             ) {
-                Text(stringResource(R.string.settings_notifications_request_permission))
+                TextButton(
+                    onClick = { permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                ) {
+                    Text(stringResource(R.string.settings_notifications_request_permission))
+                }
+            } else {
+                TextButton(
+                    onClick = { openSystemNotificationSettings(context) },
+                ) {
+                    Text(stringResource(R.string.settings_notifications_open_system_settings))
+                }
             }
-        } else {
-            TextButton(
-                onClick = { openSystemNotificationSettings(context) },
-            ) {
-                Text(stringResource(R.string.settings_notifications_open_system_settings))
-            }
-        }
-    }
+    })
+    Text(stringResource(R.string.settings_notifications_hint), Modifier.padding(horizontal = 12.dp),
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
-private fun SettingsNavigationRow(
+internal fun SettingsNavigationRow(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
+    leading: (@Composable () -> Unit)? = null,
+    enabled: Boolean = true,
 ) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp)
-                .selectable(
-                    selected = false,
-                    onClick = onClick,
-                    role = Role.Button,
-                )
-                .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = title, style = MaterialTheme.typography.bodyLarge)
-            if (subtitle.isNotBlank()) Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    ListItem(
+        modifier = Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = leading,
+        headlineContent = { Text(title, style = MaterialTheme.typography.bodyLarge) },
+        supportingContent = if (subtitle.isBlank()) null else { { Text(subtitle, style = MaterialTheme.typography.bodySmall) } },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                trailing?.invoke()
+                Icon(painterResource(LucideR.drawable.lucide_ic_chevron_right), null, Modifier.size(16.dp))
+            }
+        },
+    )
 }
 
 @Composable
-private fun SettingsConnectionStatus(conn: ConnectionState) {
-    val text =
-        when (val c = conn) {
-            ConnectionState.Offline -> stringResource(R.string.sidebar_bridge_offline)
-            ConnectionState.Connecting -> stringResource(R.string.sidebar_bridge_connecting)
-            ConnectionState.Connected -> stringResource(R.string.sidebar_bridge_connected)
-            is ConnectionState.Error -> stringResource(R.string.sidebar_bridge_error, c.message)
-        }
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodyMedium,
-    )
+private fun connectionStatusLabel(conn: ConnectionState): String = when (conn) {
+    ConnectionState.Offline -> stringResource(R.string.sidebar_bridge_offline)
+    ConnectionState.Connecting -> stringResource(R.string.sidebar_bridge_connecting)
+    ConnectionState.Connected -> stringResource(R.string.sidebar_bridge_connected)
+    is ConnectionState.Error -> stringResource(R.string.sidebar_bridge_error, conn.message)
 }
 
 @Composable
@@ -706,21 +867,21 @@ private fun SettingsRelayHealthSection(
     relayHealthClient: RelayHealthClient,
     localRelayHostOverride: String,
 ) {
-    var relayHealth by remember { mutableStateOf<RelayHealthSnapshot?>(null) }
+    var relayHealth by remember(localRelayHostOverride) { mutableStateOf<RelayHealthSnapshot?>(null) }
     var refreshNonce by remember { mutableStateOf(0) }
 
+    var checking by remember(localRelayHostOverride, refreshNonce) { mutableStateOf(true) }
     LaunchedEffect(localRelayHostOverride, refreshNonce) {
         relayHealth = relayHealthClient.fetchHealth(localRelayHostOverride)
+        checking = false
     }
 
-    Text(
-        text = stringResource(R.string.settings_relay_health_title),
-        style = MaterialTheme.typography.titleMedium,
-    )
-    TextButton(onClick = { refreshNonce++ }) {
-        Text(stringResource(R.string.settings_relay_health_refresh))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(R.string.settings_relay_health_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = { refreshNonce++ }, enabled = !checking) { Text(stringResource(R.string.settings_relay_health_refresh)) }
     }
     when {
+        checking -> Text(stringResource(R.string.settings_checking_relay), style = MaterialTheme.typography.bodySmall)
         relayHealth == null -> {
             Text(
                 text = stringResource(R.string.settings_relay_health_unavailable),

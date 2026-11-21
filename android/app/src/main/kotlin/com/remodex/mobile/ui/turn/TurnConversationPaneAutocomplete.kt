@@ -129,6 +129,7 @@ internal fun buildComposerAutocompleteState(
     fileMatches: List<CodexFuzzyFileMatch> = emptyList(),
     isThreadRunning: Boolean,
     isPluginLoading: Boolean = false,
+    goalsSupported: Boolean = true,
 ): TurnComposerAutocompleteState? {
     parse ?: return null
     val query = parse.payload.semanticValue.trim()
@@ -140,14 +141,15 @@ internal fun buildComposerAutocompleteState(
                     "review-base" to "Review against default branch",
                     "pet" to "Show the companion pet",
                     "compact" to "Compact conversation context",
+                    "goal" to "Manage the conversation goal",
                     "feedback" to "Report a bug or product feedback",
                     "status" to "Summarize runtime status",
                     "subagents" to "Delegate using subagents",
                     "fork" to "Fork current thread",
                 ).filter { (cmd, _) ->
-                    (FeatureFlags.gitIntegrationEnabled || !cmd.startsWith("review")) &&
+                    (cmd != "goal" || goalsSupported) && (FeatureFlags.gitIntegrationEnabled || !cmd.startsWith("review")) &&
                         (query.isBlank() || cmd.startsWith(query, ignoreCase = true)) &&
-                        !(isThreadRunning && (cmd == "fork" || cmd.startsWith("review")))
+                        !(isThreadRunning && (cmd in setOf("fork", "compact") || cmd.startsWith("review")))
                 }
                     .take(6)
                     .map { (cmd, subtitle) ->

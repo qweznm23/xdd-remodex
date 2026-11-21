@@ -1,0 +1,4 @@
+<resources>
+    <string name="weekly_quota_summary">Weekly remaining %1$d%%</string>
+    <string name="weekly_quota_unknown">Weekly remaining —</string>
+</resources>

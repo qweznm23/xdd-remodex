@@ -1,5 +1,6 @@
 package com.remodex.mobile.services
 
+import com.remodex.mobile.core.model.accountWeeklyQuota
 import com.remodex.mobile.core.model.CodexRateLimitBucket
 import com.remodex.mobile.core.model.CodexRateLimitWindow
 import com.remodex.mobile.core.model.JSONValue
@@ -7,6 +8,16 @@ import kotlin.test.assertEquals
 import org.junit.Test
 
 class RateLimitPayloadCodecTest {
+    @Test fun accountWeekExcludesModelSpecificLimitsAndKeepsZeroDistinctFromUnknown() {
+        val full = CodexRateLimitWindow(0, 10080)
+        val spark = CodexRateLimitBucket("codex_bengalfox", secondary = full)
+        val account = CodexRateLimitBucket("codex", secondary = full.copy(usedPercent = 100))
+        assertEquals(0, accountWeeklyQuota(listOf(spark, account))?.remainingPercent)
+        assertEquals(null, accountWeeklyQuota(listOf(spark)))
+        assertEquals(null, accountWeeklyQuota(listOf(account.copy(secondary = full.copy(windowDurationMins = 300)))))
+        assertEquals(100, accountWeeklyQuota(listOf(CodexRateLimitBucket("secondary", secondary = full)))?.remainingPercent)
+    }
+
     @Test
     fun `decodes read response with rateLimitsByLimitId`() {
         val payload =

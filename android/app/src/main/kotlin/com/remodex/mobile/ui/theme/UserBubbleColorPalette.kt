@@ -21,12 +21,7 @@ fun UserBubbleColor.bubbleBackground(
     isLightChrome: Boolean,
 ): Color =
     when (this) {
-        UserBubbleColor.default ->
-            if (isLightChrome) {
-                colorScheme.surfaceVariant.copy(alpha = 1f)
-            } else {
-                colorScheme.surfaceVariant.copy(alpha = 0.55f)
-            }
+        UserBubbleColor.default -> colorScheme.chatLayers(isLightChrome).outgoing
         UserBubbleColor.orange ->
             if (isLightChrome) Color(red = 0.81f, green = 0.25f, blue = 0.06f)
             else Color(red = 0.77f, green = 0.18f, blue = 0.03f)
@@ -56,7 +51,10 @@ fun UserBubbleColor.bubbleForeground(
     when (this) {
         UserBubbleColor.default -> colorScheme.onSurface
         UserBubbleColor.black -> if (isLightChrome) Color.White else Color.Black
-        else -> Color.White
+        else -> {
+            val fill = bubbleBackground(colorScheme, isLightChrome)
+            if (contrastRatio(Color.White, fill) >= 4.5f) Color.White else Color.Black
+        }
     }
 
 fun UserBubbleColor.mentionForeground(

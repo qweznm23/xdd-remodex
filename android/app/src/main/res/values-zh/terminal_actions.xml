@@ -1,0 +1,11 @@
+<resources>
+    <string name="terminal_action_connect">连接</string>
+    <string name="terminal_action_disconnect">断开</string>
+    <string name="terminal_action_sessions">会话</string>
+    <string name="terminal_action_help">帮助</string>
+    <string name="terminal_profile_edit">编辑连接</string>
+    <string name="terminal_profile_delete">删除连接</string>
+    <string name="terminal_profile_create">新建连接</string>
+    <string name="terminal_profile_empty">还没有保存的连接。</string>
+    <string name="terminal_profile_saved">已保存的连接</string>
+</resources>

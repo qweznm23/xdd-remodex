@@ -1,11 +1,15 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.ui.theme.chatLayers
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentWidth
+import com.remodex.mobile.ui.theme.conversationColors
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import com.remodex.mobile.AppContainer
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.CodexMessage
+import com.remodex.mobile.core.model.visibleSummaryParts
 import com.remodex.mobile.core.model.CodexMessageDeliveryState
 import com.remodex.mobile.core.model.CodexMessageKind
 import com.remodex.mobile.core.model.CodexMessageRole
@@ -34,10 +39,10 @@ import com.remodex.mobile.core.model.UserBubbleColor
 import com.remodex.mobile.ui.LocalUserBubbleColor
 import com.remodex.mobile.ui.agent.FileEditRow
 import com.remodex.mobile.ui.agent.ToolCallRow
-import com.remodex.mobile.ui.theme.RemodexLinkLight
-import com.remodex.mobile.ui.theme.RemodexLinkDark
+import com.remodex.mobile.ui.theme.readableLinkOn
 import com.remodex.mobile.ui.theme.bubbleBackground
 import com.remodex.mobile.ui.theme.bubbleForeground
+import com.remodex.mobile.ui.agent.containsOnlyQuestionPrompt
 import com.remodex.mobile.ui.theme.isAgentLightChrome
 import com.remodex.mobile.ui.theme.mentionForeground
 import kotlinx.coroutines.launch
@@ -55,6 +60,15 @@ fun TurnMessageRow(
     onApplyPlan: ((CodexMessage) -> Unit)? = null,
     canApplyPlan: Boolean = true,
 ) {
+    if (message.kind == CodexMessageKind.thinking) {
+        val parts = remember(message.reasoningSummary) { message.visibleSummaryParts() }
+        if (parts.isNotEmpty()) ReasoningSummaryRow(parts, modifier)
+        return
+    }
+    if (message.structuredUserInputRequest != null && remember(message) { message.containsOnlyQuestionPrompt() }) {
+        ConversationQuestionCard(message.threadId, message.structuredUserInputRequest, modifier)
+        return
+    }
     val missionScope = rememberCoroutineScope()
     val isTimelineToolRow =
         message.role == CodexMessageRole.system &&
@@ -98,17 +112,11 @@ fun TurnMessageRow(
             CodexMessageRole.assistant -> colors.onBackground
             CodexMessageRole.system -> colors.onSurfaceVariant
         }
-    val bubbleBorder =
-        if (message.role == CodexMessageRole.user && isLightChrome && userBubbleColor == UserBubbleColor.default) {
-            BorderStroke(0.5.dp, colors.outline.copy(alpha = 0.58f))
-        } else {
-            null
-        }
     val markdownLinkColor =
         if (message.role == CodexMessageRole.user) {
             userBubbleColor.mentionForeground(colors, isLightChrome, onBubble)
         } else {
-            if (isLightChrome) RemodexLinkLight else RemodexLinkDark
+            remember(colors) { colors.readableLinkOn(colors.conversationColors().reading) }
         }
 
     Column(
@@ -116,24 +124,24 @@ fun TurnMessageRow(
         horizontalAlignment = horizontalAlignment,
     ) {
         Surface(
-            shape = MaterialTheme.shapes.medium,
+            shape = if (message.role == CodexMessageRole.user)
+                androidx.compose.foundation.shape.RoundedCornerShape(16.dp, 16.dp, 6.dp, 16.dp)
+            else MaterialTheme.shapes.medium,
             color = bubbleColor,
-            border = bubbleBorder,
+            border = if (message.role == CodexMessageRole.user && userBubbleColor == UserBubbleColor.default) {
+                androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.chatLayers(isLightChrome).outgoingEdge)
+            } else null,
             modifier =
                 if (isTimelineToolRow) {
                     Modifier
                         .fillMaxWidth(0.96f)
                         .widthIn(max = 620.dp)
+                } else if (message.role == CodexMessageRole.user) {
+                    Modifier.widthIn(max = 620.dp).fillMaxWidth(0.86f).wrapContentWidth(Alignment.End)
+                        .then(outgoingBubbleMotion(message.localSendNanos))
                 } else {
-                    Modifier
-                        .fillMaxWidth(
-                            when (message.role) {
-                                CodexMessageRole.user -> 0.92f
-                                CodexMessageRole.assistant -> 0.98f
-                                CodexMessageRole.system -> 0.96f
-                            },
-                        )
-                        .widthIn(max = 620.dp)
+                    Modifier.widthIn(max = 620.dp)
+                        .fillMaxWidth(if (message.role == CodexMessageRole.assistant) 1f else 0.96f)
                 },
         ) {
             Column(
@@ -142,7 +150,7 @@ fun TurnMessageRow(
                         horizontal =
                             when (message.role) {
                                 CodexMessageRole.user -> 12.dp
-                                CodexMessageRole.assistant -> 4.dp
+                                CodexMessageRole.assistant -> 0.dp
                                 CodexMessageRole.system -> 12.dp
                             },
                         vertical =
@@ -166,7 +174,7 @@ fun TurnMessageRow(
                     MessageAttachmentStrip(attachments = message.attachments)
                 }
                 val directiveOutcome =
-                    TurnDirectiveRenderCache.parseCodeCommentDirectives(message.id, message.text)
+                    TurnDirectiveRenderCache.parseCodeCommentDirectives(message.id, message.visibleAssistantText())
                 val bodyMarkdown =
                     timelineBodyText(
                         message = message,
@@ -177,24 +185,9 @@ fun TurnMessageRow(
                 val preparedBody = remember(message, bodyMarkdown) { prepareTimelineBody(message, bodyMarkdown) }
                 val proposedPlanExtraction = preparedBody.first
                 val cappedBody = preparedBody.second
-                val bodyModifier = Modifier.fillMaxWidth()
+                val fitProse = message.role == CodexMessageRole.user && message.kind == CodexMessageKind.chat
+                val bodyModifier = if (fitProse) Modifier else Modifier.fillMaxWidth()
                 when (message.kind) {
-                    CodexMessageKind.thinking -> {
-                        TurnThinkingTimelineRow(
-                            bodyMarkdown =
-                                timelineBodyText(
-                                    message = message,
-                                    skipThinkingHeadline = true,
-                                    cleanedDirectiveText = directiveOutcome.cleanedText,
-                                    hasDirectiveFindings = directiveOutcome.hasFindings,
-                                ),
-                            contentColor = onBubble,
-                            useMarkdown = shouldRenderMarkdownBody(message),
-                            isStreaming = message.isStreaming,
-                            messageId = message.id,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
                     CodexMessageKind.fileChange -> {
                         FileEditRow(
                             message = message,
@@ -235,6 +228,8 @@ fun TurnMessageRow(
                                     modifier = bodyModifier,
                                     keyPrefix = message.id,
                                     linkColor = markdownLinkColor,
+                                    fitProse = fitProse,
+                                    assistantProse = message.role == CodexMessageRole.assistant && message.kind == CodexMessageKind.chat,
                                 )
                             } else {
                                 Text(
@@ -356,7 +351,7 @@ private fun prepareTimelineBody(message: CodexMessage, body: String): Pair<Propo
 /** Same body transformation as the row, for background preparation of settled chat history. */
 internal fun settledTimelineMarkdown(message: CodexMessage): String? {
     if (message.isStreaming || message.kind != CodexMessageKind.chat || message.role == CodexMessageRole.system) return null
-    val raw = TurnDirectiveRenderCache.parseCodeCommentDirectives(message.id, message.text).cleanedText.trim()
+    val raw = TurnDirectiveRenderCache.parseCodeCommentDirectives(message.id, message.visibleAssistantText()).cleanedText.trim()
     if (raw.isEmpty()) return null // Localized empty/streaming placeholders are tiny and stay in the UI.
     val body = if (message.role == CodexMessageRole.user) com.remodex.mobile.data.ConversationQuestionCodec.displayReply(raw) else raw
     return prepareTimelineBody(message, body).second.text
@@ -376,6 +371,12 @@ private fun capTimelineBody(
                 PLAN_MESSAGE_INLINE_MAX_CHARS to PLAN_MESSAGE_INLINE_MAX_LINES
             else -> return CappedTimelineBody(text = text, truncated = false)
         }
+    if (message.role == CodexMessageRole.assistant && message.kind == CodexMessageKind.chat &&
+        (text.contains("```") || text.contains("~~~"))
+    ) {
+        val end = MarkdownFenceSegmentParser.closingFenceAtLimit(text, maxLines)
+        if (end != null) return CappedTimelineBody(text.take(end), truncated = end < text.trimEnd().length)
+    }
     return capTextForTimeline(text, maxChars = maxChars, maxLines = maxLines)
 }
 

@@ -1,6 +1,8 @@
 package com.remodex.mobile.services
 
 import android.util.Log
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import android.content.pm.PackageManager
 import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.JSONValue
@@ -92,12 +94,17 @@ private fun CodexService.wireMessageKind(text: String): String? =
 internal fun CodexService.dispatchIncomingRpc(message: RPCMessage) {
     val method = message.method?.trim()
     if (method != null && message.id != null) {
+        val generation = connectionGeneration
+        val socket = webSocket
         incomingRouter.dispatchServerRequest(
             method = method,
             requestId = message.id!!,
             params = message.params,
         ) { response ->
-            sendMessage(response)
+            synchronized(secureSessionLock) {
+                if (generation != connectionGeneration || socket !== webSocket || !sessionReady) throw CodexServiceError.Disconnected
+                sendMessage(response)
+            }
         }
         return
     }
@@ -107,6 +114,16 @@ internal fun CodexService.dispatchIncomingRpc(message: RPCMessage) {
             val threadId = params?.get("threadId")?.stringValue
             params?.get("requestId")?.let { requestId ->
                 val key = JSONValue.toJsonElement(requestId).toString()
+                val resolvedApproval = synchronized(pendingApprovalResponders) {
+                    val approval = pendingApprovalQueue[key]
+                    if (approval != null && (threadId == null || approval.threadId == threadId)) {
+                        pendingApprovalResponders.remove(key)
+                        pendingApprovalQueue.remove(key)
+                        _pendingApprovalRequest.value = pendingApprovalQueue.values.firstOrNull()
+                        true
+                    } else false
+                }
+                if (resolvedApproval) scope.launch { messageTimelineStore.removeEphemeralPendingServerMarker(key) }
                 synchronized(pendingStructuredInputResponders) {
                     if (_pendingStructuredInputRequests.value[key]?.threadId == threadId) {
                         pendingStructuredInputResponders.remove(key)
@@ -116,11 +133,81 @@ internal fun CodexService.dispatchIncomingRpc(message: RPCMessage) {
                 }
             }
         }
+        if (method in setOf("thread/replaced", "thread/archived", "thread/unarchived", "thread/deleted")) {
+            message.params?.objectValue?.get("threadId")?.stringValue?.takeIf { it.isNotBlank() }?.let { id ->
+                val generation = connectionGeneration
+                val stamp = hostEventSequence.incrementAndGet()
+                if (method == "thread/replaced") {
+                    sourceReplacements[id] = stamp
+                    hydratedThreadIds.remove(id)
+                } else latestCatalogEvents[id] = stamp
+                scope.launch {
+                    try {
+                        if (!sessionReady || connectionGeneration != generation) return@launch
+                        if (method == "thread/replaced") {
+                            if (_activeThreadId.value == id && sourceReplacements[id] == stamp)
+                                syncThreadHistoryInternal(id, force = true, replaceInFlight = true)
+                        } else {
+                            val replay = message.params?.objectValue?.get("remodexReplayedEvent")?.boolValue == true
+                            if (!replay) threadRefreshMutex.withLock {
+                                if (!sessionReady || connectionGeneration != generation || latestCatalogEvents[id] != stamp) return@withLock
+                                val rows = _threads.value
+                                if (method == "thread/deleted") {
+                                    loadingHistory.remove(id)
+                                    hydratedThreadIds.remove(id)
+                                    resumedThreadIds.remove(id)
+                                    noteTurnFinished(id)
+                                    publishThreads(rows.filterNot { it.id == id })
+                                } else {
+                                    val state = if (method == "thread/archived") com.remodex.mobile.core.model.CodexThreadSyncState.archivedLocal
+                                        else com.remodex.mobile.core.model.CodexThreadSyncState.live
+                                    if (method == "thread/unarchived") setScopedLocallyArchivedThreadId(id, false)
+                                    publishThreads(rows.map { if (it.id == id) it.copy(syncState = state) else it })
+                                }
+                            }
+                            if (latestCatalogEvents.remove(id, stamp)) {
+                                refreshThreadsInternal(deletedOnHost = id.takeIf { method == "thread/deleted" }, expectedGeneration = generation)
+                            }
+                        }
+                    } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                    catch (failure: Exception) { Log.e("RemodexHistory", "operation=$method thread=$id", failure) }
+                }
+            }
+        }
         if (method == "thread/status/changed") {
             val params = message.params?.objectValue
             val threadId = params?.get("threadId")?.stringValue
             val waiting = params?.get("status")?.objectValue?.get("activeFlags")?.arrayValue?.any { it.stringValue == "waitingOnUserInput" } == true
             if (threadId != null) _threads.value = _threads.value.map { if (it.id == threadId) it.copy(waitingOnUserInput = waiting) else it }
+        }
+        if (supportsSettingsSync && method == "remodex/runtimeSettings/updated") {
+            val p = message.params?.objectValue
+            val id = p?.get("threadId")?.stringValue
+            val settings = p?.get("runtimeSettings")?.objectValue
+            if (id != null && settings != null) applyConfirmedSettings(id, settings)
+        }
+        if (method == "thread/goal/updated" || method == "thread/goal/cleared") {
+            message.params?.objectValue?.let { _conversationEvents.tryEmit(method to it) }
+        }
+        if (method in setOf("turn/started", "turn/completed", "item/autoApprovalReview/started", "item/autoApprovalReview/completed")) {
+            message.params?.objectValue?.let { p ->
+                liveFollowUps.observe(method, p, _runningTurnIdByThread.value[p["threadId"]?.stringValue])
+            }
+        }
+        if (changeLedger != null && method in setOf("turn/started", "turn/completed", "item/completed", "turn/diff/updated")) {
+            val p = message.params?.objectValue
+            val thread = p?.get("threadId")?.stringValue
+            if (p != null && thread != null && p["remodexReplayedEvent"]?.boolValue != true && p["remodexRolloutBootstrapReplay"]?.boolValue != true) {
+                val device = resolvedMacScopedPersistenceDeviceId()
+                val captured = turnPatches.observe(method, p, _threads.value.firstOrNull { it.id == thread }?.cwd)
+                if (device != null && captured != null) scope.launch {
+                    try {
+                        changeLedger.update(device) { current ->
+                            if (current.any { it.turnId == captured.turnId && it.threadId == thread }) current else current + captured
+                        }
+                    } catch (failure: java.lang.Exception) { Log.e("RemodexLedger", "persist captured change set", failure) }
+                }
+            }
         }
         handleSidebarNotification(method, message.params)
         incomingRouter.dispatchNotification(method, message.params)
@@ -174,7 +261,7 @@ internal suspend fun CodexService.initializeSession() {
                     ),
             ),
         )
-    try {
+    val initialize = try {
         rpcRequestWhileHandshaking("initialize", modern)
     } catch (e: Exception) {
         if (!shouldRetryInitializeWithoutCapabilities(e)) {
@@ -183,6 +270,7 @@ internal suspend fun CodexService.initializeSession() {
         val legacy = JSONValue.Obj(mapOf("clientInfo" to clientInfo))
         rpcRequestWhileHandshaking("initialize", legacy)
     }
+    supportsSettingsSync = initialize.result?.objectValue?.get("remodexRuntimeSettingsVersion")?.intValue == 2
     sendMessage(RPCMessage.notification(method = "initialized", params = null, includeJsonRpc = false))
 }
 

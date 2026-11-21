@@ -10,8 +10,20 @@ import time
 root = Path(os.environ['REMODEX_AUTH_FIXTURE_ROOT']).resolve()
 assert (root / '.fixture').is_file()
 if 'daemon' in sys.argv:
-    (root / 'daemon-called').write_text(json.dumps(sys.argv[1:]))
-    print(json.dumps({'status': 'running'}))
+    assert Path(os.environ['CODEX_HOME']).resolve() == root
+    verb = sys.argv[-1]
+    if verb == 'version':
+        backend = None if (root / 'unmanaged').exists() else 'pid'
+        print(json.dumps({'status': 'running', 'backend': backend,
+                          'socketPath': str(root / 'app-server-control/app-server-control.sock')}))
+    elif verb == 'restart':
+        (root / 'daemon-called').write_text(json.dumps(sys.argv[1:]))
+        if (root / 'reject-restart').exists():
+            print('fixture daemon rejected restart', file=sys.stderr)
+            raise SystemExit(18)
+        (root / 'runtime-auth.json').write_bytes((root / 'auth.json').read_bytes())
+    else:
+        raise AssertionError(verb)
     raise SystemExit(0)
 home = Path(os.environ['CODEX_HOME']).resolve()
 assert home.is_relative_to(root)

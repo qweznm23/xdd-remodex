@@ -1,49 +1,20 @@
 package com.remodex.mobile.data
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
-import android.net.Uri
 import android.util.Base64
 import com.remodex.mobile.core.model.CodexImageAttachment
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 internal object TurnAttachmentCodec {
     private const val MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
-    private const val MAX_PAYLOAD_DIMENSION = 1600
     private const val THUMBNAIL_SIDE = 70
     private const val JPEG_QUALITY = 80
-
-    fun makeAttachment(
-        context: Context,
-        uri: Uri,
-    ): CodexImageAttachment? {
-        val sourceData =
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                input.readAtMost(MAX_ATTACHMENT_BYTES) ?: return null
-            } ?: return null
-        return makeAttachment(sourceData, sourceUrl = uri.toString())
-    }
-
-    fun makeAttachment(
-        sourceData: ByteArray,
-        sourceUrl: String? = null,
-    ): CodexImageAttachment? {
-        val normalizedPayload = normalizePayloadJpeg(sourceData) ?: return null
-        val thumbnailBase64 = makeThumbnailBase64JPEG(normalizedPayload) ?: return null
-        val payloadDataUrl = "data:image/jpeg;base64,${Base64.encodeToString(normalizedPayload, Base64.NO_WRAP)}"
-        return CodexImageAttachment(
-            thumbnailBase64JPEG = thumbnailBase64,
-            payloadDataURL = payloadDataUrl,
-            sourceURL = sourceUrl,
-        )
-    }
 
     fun attachmentFromHistorySource(sourceUrl: String?): CodexImageAttachment? {
         val normalizedSource = sourceUrl?.trim()?.takeIf { it.isNotEmpty() } ?: return null
@@ -74,38 +45,6 @@ internal object TurnAttachmentCodec {
         if (base64Part.length > encodedBase64Limit(MAX_ATTACHMENT_BYTES)) return null
         return runCatching { Base64.decode(base64Part, Base64.DEFAULT) }.getOrNull()
             ?.takeIf { it.size <= MAX_ATTACHMENT_BYTES }
-    }
-
-    private fun normalizePayloadJpeg(sourceData: ByteArray): ByteArray? {
-        val bounds =
-            BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
-        BitmapFactory.decodeByteArray(sourceData, 0, sourceData.size, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-
-        val decodeOptions =
-            BitmapFactory.Options().apply {
-                inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, MAX_PAYLOAD_DIMENSION)
-            }
-        val decoded = BitmapFactory.decodeByteArray(sourceData, 0, sourceData.size, decodeOptions) ?: return null
-
-        val longestSide = max(decoded.width, decoded.height)
-        val scaled =
-            if (longestSide <= MAX_PAYLOAD_DIMENSION) {
-                decoded
-            } else {
-                val scale = MAX_PAYLOAD_DIMENSION.toFloat() / longestSide.toFloat()
-                val targetWidth = max(1, (decoded.width * scale).roundToInt())
-                val targetHeight = max(1, (decoded.height * scale).roundToInt())
-                Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true).also {
-                    if (it != decoded) decoded.recycle()
-                }
-            }
-
-        return scaled.compressToJpeg(JPEG_QUALITY).also {
-            scaled.recycle()
-        }
     }
 
     private fun makeThumbnailBase64JPEG(imageData: ByteArray): String? {
@@ -140,36 +79,7 @@ internal object TurnAttachmentCodec {
         return out.toByteArray()
     }
 
-    private fun InputStream.readAtMost(maxBytes: Int): ByteArray? {
-        val out = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE))
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        var total = 0
-        while (true) {
-            val read = read(buffer)
-            if (read == -1) break
-            total += read
-            if (total > maxBytes) return null
-            out.write(buffer, 0, read)
-        }
-        return out.toByteArray()
-    }
-
     private fun encodedBase64Limit(decodedBytes: Int): Int =
         ((decodedBytes + 2) / 3) * 4 + 128
 
-    private fun calculateInSampleSize(
-        width: Int,
-        height: Int,
-        maxDimension: Int,
-    ): Int {
-        var sampleSize = 1
-        var candidateWidth = width
-        var candidateHeight = height
-        while (max(candidateWidth, candidateHeight) > maxDimension) {
-            candidateWidth = max(1, candidateWidth / 2)
-            candidateHeight = max(1, candidateHeight / 2)
-            sampleSize *= 2
-        }
-        return max(1, sampleSize)
-    }
 }

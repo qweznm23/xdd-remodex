@@ -64,6 +64,7 @@ internal class IncomingEventRouter(
     private val onPredictionInvalidated: (String) -> Unit = {},
     private val onPredictionSource: (String, String) -> Unit = { _, _ -> },
     private val onTurnCompletedActivity: (String, String) -> Unit = { _, _ -> },
+    private val onAccountUpdated: () -> Unit = {},
     private val onRateLimitsUpdated: (Map<String, JSONValue>?) -> Unit = { _ -> },
     /**
      * Live context window from [thread/tokenUsage/updated] or legacy `codex/event` `token_count`
@@ -151,6 +152,13 @@ internal class IncomingEventRouter(
             "codex/event/agent_message_content_delta",
             "codex/event/agent_message_delta",
             -> handleAgentDelta(obj)
+            "item/started" -> {
+                val item = obj?.get("item")?.objectValue
+                if (item?.get("type")?.stringValue.equals("reasoning", ignoreCase = true) &&
+                    ThreadHistoryDecoder.publicSummaryParts(item.orEmpty()).isNotEmpty()) {
+                    handleItemCompleted(obj, summarySnapshot = true)
+                }
+            }
             "item/completed",
             "codex/event/item_completed",
             -> handleItemCompleted(obj)
@@ -158,8 +166,10 @@ internal class IncomingEventRouter(
             "codex/event/user_message" -> handleUserMirrored(obj)
             "codex/event/background_event" -> handleBackgroundEvent(obj)
             "codex/event/image_generation_end" -> handleImageGenerationEnd(obj)
-            "item/reasoning/summaryTextDelta",
-            "item/reasoning/summaryPartAdded",
+            "item/reasoning/summaryTextDelta" -> {
+                val index = obj?.get("summaryIndex")?.intValue ?: 0
+                if (index >= 0) handleReasoningDelta(obj, index)
+            }
             "item/reasoning/textDelta",
             -> handleReasoningDelta(obj)
             "item/plan/delta" -> handlePlanDelta(obj)
@@ -192,13 +202,14 @@ internal class IncomingEventRouter(
             "error",
             "codex/event/error",
             -> handleErrorNotification(obj)
+            "account/updated" -> onAccountUpdated()
             "account/rateLimits/updated" -> onRateLimitsUpdated(obj)
             "thread/tokenUsage/updated" -> handleThreadTokenUsagePush(obj)
             "git/stackedAction/progress" -> handleGitStackedActionProgress(obj)
             else -> {
                 val nm = normalizeMethod(m)
                 when {
-                    m.startsWith("codex/event/") && m.contains("agent") && m.contains("delta") ->
+                    m.startsWith("codex/event/") && m.contains("agent") && !m.contains("reasoning") && m.contains("delta") ->
                         handleAgentDelta(obj)
                     m.startsWith("codex/event/") && nm.contains("plan") ->
                         handleTurnPlanUpdated(obj)
@@ -355,11 +366,16 @@ internal class IncomingEventRouter(
                     }
                 }
                 ServerRequestKind.Approval -> {
+                    if (m == "item/permissions/requestApproval" && params?.objectValue?.get("permissions") !is JSONValue.Obj) {
+                        respond(RPCMessage.failure(id = requestId, error = RPCError(code = -32602,
+                            message = "item/permissions/requestApproval requires a permissions object"), includeJsonRpc = false))
+                        return@launch
+                    }
                     if (shouldAutoApproveRequests()) {
                         respond(
                             RPCMessage.success(
                                 id = requestId,
-                                result = approvalDecisionResult("accept"),
+                                result = approvalResponse(m, params, "accept"),
                                 includeJsonRpc = false,
                             ),
                         )
@@ -377,7 +393,7 @@ internal class IncomingEventRouter(
                         respond(
                             RPCMessage.success(
                                 id = requestId,
-                                result = approvalDecisionResult(rpc),
+                                result = approvalResponse(m, params, rpc),
                                 includeJsonRpc = false,
                             ),
                         )
@@ -533,6 +549,7 @@ internal class IncomingEventRouter(
         val p = params ?: return
         val threadId = resolveThreadId(p) ?: IncomingNotificationParsers.extractThreadId(p) ?: return
         val turnId = IncomingNotificationParsers.extractTurnIdForTurnLifecycleEvent(p)
+        if (turnId != null && isTurnStreamingActive(threadId, null) && !isTurnStreamingActive(threadId, turnId)) return
         cancelAssistantSilenceFinalize(threadId, turnId)
         onPredictionInvalidated(threadId)
         finishTurnAndRefreshThreads(threadId)
@@ -548,6 +565,11 @@ internal class IncomingEventRouter(
         val p = params ?: return
         val threadId = resolveThreadId(p) ?: return
         val turnId = IncomingNotificationParsers.extractTurnIdForTurnLifecycleEvent(p)
+        val failureMsg = TurnCompletionNotificationLogic.parseTurnFailureMessage(p)
+        val terminal = TurnCompletionNotificationLogic.parseTurnTerminalState(p, failureMsg)
+        if (terminal == com.remodex.mobile.core.notification.TurnTerminalStateForNotification.Unconfirmed) return
+        if (turnId != null && isTurnStreamingActive(threadId, null) && !isTurnStreamingActive(threadId, turnId)) return
+        val trackedLive = isTurnStreamingActive(threadId, turnId) && TurnCompletionNotificationLogic.freshLiveEvent(p)
         cancelAssistantSilenceFinalize(threadId, turnId)
         if (!turnId.isNullOrBlank()) onTurnCompletedActivity(threadId, turnId)
         finishTurnAndRefreshThreads(threadId)
@@ -566,14 +588,12 @@ internal class IncomingEventRouter(
                 messageTimeline.appendSystemLine(threadId, turnId, "Turn: $msg")
             }
         }
-        val failureMsg = TurnCompletionNotificationLogic.parseTurnFailureMessage(p)
-        val terminal = TurnCompletionNotificationLogic.parseTurnTerminalState(p, failureMsg)
         val explicitStatus = p["turn"]?.objectValue?.get("status")?.stringValue ?: p["status"]?.stringValue
         if (turnId != null && (explicitStatus == null || explicitStatus == "completed") &&
             terminal == com.remodex.mobile.core.notification.TurnTerminalStateForNotification.Completed) onPredictionSource(threadId, turnId)
         else if (explicitStatus != null) onPredictionInvalidated(threadId)
         val attention = TurnCompletionNotificationLogic.attentionKindFromTerminalState(terminal)
-        if (attention != null) {
+        if (attention != null && trackedLive) {
             onRunCompletionAttention(threadId, turnId, attention)
         }
     }
@@ -637,6 +657,7 @@ internal class IncomingEventRouter(
     private fun handleItemCompleted(
         params: Map<String, JSONValue>?,
         completesTurn: Boolean = false,
+        summarySnapshot: Boolean = false,
     ) {
         val p = params ?: return
         val ev = envelopeEventObject(p)
@@ -688,6 +709,7 @@ internal class IncomingEventRouter(
                                 turnId = turnId,
                                 text = text,
                                 attachments = decoded.attachments,
+                                itemId = itemId,
                                 createdAt = createdAt,
                             )
                         }
@@ -716,7 +738,10 @@ internal class IncomingEventRouter(
                     )
                 }
                 scope.launch {
-                    messageTimeline.completeSystemItem(threadId, turnId, itemId, decoded.kind, text)
+                    val finalSummary = decoded.kind == CodexMessageKind.thinking && !summarySnapshot &&
+                        p["remodexDesktopIpcMirror"]?.boolValue != true
+                    messageTimeline.completeSystemItem(threadId, turnId, itemId, decoded.kind, text,
+                        decoded.reasoningSummary, summaryFinal = finalSummary)
                 }
             }
             CodexMessageKind.plan -> {
@@ -799,7 +824,8 @@ internal class IncomingEventRouter(
         markTurnActiveFromLiveEvent(threadId, turnId)
         val createdAt = IncomingNotificationParsers.extractCreatedAt(params)
         scope.launch {
-            messageTimeline.appendMirroredUser(threadId, turnId, text, createdAt = createdAt)
+            messageTimeline.appendMirroredUser(threadId, turnId, text, createdAt = createdAt,
+                mirrorId = IncomingNotificationParsers.extractItemId(params) ?: params?.get("id")?.stringValue)
             if (!turnId.isNullOrBlank()) {
                 messageTimeline.ensureStreamingAssistantPlaceholder(threadId, turnId)
             }
@@ -838,7 +864,7 @@ internal class IncomingEventRouter(
         }
     }
 
-    private fun handleReasoningDelta(params: Map<String, JSONValue>?) {
+    private fun handleReasoningDelta(params: Map<String, JSONValue>?, summaryIndex: Int? = null) {
         val p = params ?: return
         val delta = IncomingNotificationParsers.extractTextDelta(p) ?: return
         if (delta.isEmpty()) return
@@ -846,6 +872,11 @@ internal class IncomingEventRouter(
         val threadId = resolveThreadId(p) ?: return
         recordTurnThread(turnId, threadId)
         val itemId = IncomingNotificationParsers.extractItemId(p)
+        if (summaryIndex != null) {
+            val active = isTurnStreamingActive(threadId, turnId)
+            scope.launch { messageTimeline.appendPublicSummary(threadId, turnId, itemId, summaryIndex, delta, active) }
+            return
+        }
         if (!isTurnStreamingActive(threadId, turnId)) {
             scope.launch {
                 messageTimeline.mergeLateReasoningDelta(threadId, turnId, itemId, delta)
@@ -1237,7 +1268,8 @@ internal class IncomingEventRouter(
         scope.launch {
             messageTimeline.appendSystemLine(threadId, turnId, "Error: $text")
         }
-        onRunCompletionAttention(threadId, turnId, RunCompletionAttentionKind.Failed)
+        if (params != null && isTurnStreamingActive(threadId, turnId) && TurnCompletionNotificationLogic.freshLiveEvent(params)
+            && params["willRetry"]?.boolValue != true) onRunCompletionAttention(threadId, turnId, RunCompletionAttentionKind.Failed)
     }
 
     private fun upsertThread(
@@ -1271,8 +1303,6 @@ internal class IncomingEventRouter(
         }
     }
 
-    private fun approvalDecisionResult(decision: String): JSONValue =
-        JSONValue.Obj(mapOf("decision" to JSONValue.Str(decision)))
 
     private fun structuredUserInputResult(answersByQuestionId: Map<String, List<String>>): JSONValue =
         JSONValue.Obj(
@@ -1349,6 +1379,7 @@ internal class IncomingEventRouter(
             itemId = IncomingNotificationParsers.extractItemId(obj),
             command = obj?.get("command")?.stringValue,
             reason = obj?.get("reason")?.stringValue,
+            permissions = obj?.get("permissions") as? JSONValue.Obj,
         )
     }
 

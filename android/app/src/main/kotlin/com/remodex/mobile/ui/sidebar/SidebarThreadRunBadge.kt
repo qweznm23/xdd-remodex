@@ -1,25 +1,23 @@
 package com.remodex.mobile.ui.sidebar
 
-import com.remodex.mobile.R
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -27,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
+import com.remodex.mobile.R
 
 private val StaticRunRotation: State<Float> = mutableFloatStateOf(0f)
 private val LocalRunRotation = compositionLocalOf { StaticRunRotation }
@@ -55,25 +54,18 @@ internal fun SidebarRunAnimation(enabled: Boolean, content: @Composable () -> Un
 
 @Composable
 fun SidebarThreadRunBadge(
-    isRunning: Boolean,
+    color: Color,
     modifier: Modifier = Modifier,
 ) {
-    if (!isRunning) return
     val description = stringResource(R.string.turn_timeline_command_running)
     val rotation = LocalRunRotation.current
-    val color = rememberSidebarColorPalette().secondaryText
-    Canvas(
-        modifier = modifier.size(20.dp).semantics { contentDescription = description },
-    ) {
-        val inset = 3.dp.toPx()
-        drawArc(
-            color = color,
-            startAngle = rotation.value - 90f,
-            sweepAngle = 250f,
-            useCenter = false,
-            topLeft = Offset(inset, inset),
-            size = Size(size.width - inset * 2, size.height - inset * 2),
-            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
-        )
-    }
+    CircularProgressIndicator(
+        progress = { 250f / 360f },
+        modifier = modifier.size(20.dp).padding(3.dp)
+            .graphicsLayer { rotationZ = rotation.value }
+            .semantics { contentDescription = description },
+        color = color,
+        trackColor = Color.Transparent,
+        strokeWidth = 2.dp,
+    )
 }

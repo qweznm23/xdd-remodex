@@ -21,6 +21,73 @@ import kotlinx.coroutines.test.runTest
 @OptIn(ExperimentalCoroutinesApi::class)
 class IncomingEventRouterDesktopMirrorTest {
     @Test
+    fun summaryPartsStreamInIndexOrderAndHistoryKeepsEachItem() = runTest {
+        val store = MessageTimelineStore()
+        val router = newRouter(messageTimeline = store)
+        val owner = mapOf("threadId" to JSONValue.Str("t"), "turnId" to JSONValue.Str("a"))
+        fun emit(method: String, index: Int, delta: String, item: String = "one") =
+            router.dispatchNotification("item/reasoning/$method", JSONValue.Obj(owner + mapOf(
+                "itemId" to JSONValue.Str(item), "summaryIndex" to JSONValue.NumLong(index.toLong()),
+                "delta" to JSONValue.Str(delta))))
+        emit("textDelta", 0, "unmarked text")
+        val builder = com.remodex.mobile.ui.agent.TimelinePresentationBuilder()
+        fun shown(turn: String = "a") = builder.build(store.messagesByThread.value.getValue("t"), true, turn).activeSummary
+        assertEquals(emptyList(), shown())
+        emit("summaryTextDelta", 0, "first")
+        emit("summaryPartAdded", 1, "")
+        assertEquals(listOf("first"), shown())
+        emit("summaryTextDelta", 1, "new")
+        emit("summaryTextDelta", 0, " part")
+        emit("summaryTextDelta", 1, " step")
+        assertEquals(listOf("first part", "new step"), shown())
+        assertEquals(emptyList(), shown("another-turn"))
+        fun item(id: String, vararg parts: String) = JSONValue.Obj(mapOf(
+            "id" to JSONValue.Str(id), "type" to JSONValue.Str("reasoning"),
+            "content" to JSONValue.Str("unmarked detail"),
+            "summary" to JSONValue.Arr(parts.map { JSONValue.Obj(mapOf("text" to JSONValue.Str(it))) })))
+        val final = item("one", "first part", "new step")
+        router.dispatchNotification("item/completed", JSONValue.Obj(owner + ("item" to final)))
+        emit("summaryTextDelta", 1, "late")
+        val mirrorItem = item("two", "la")
+        router.dispatchNotification("item/started", JSONValue.Obj(owner + ("item" to mirrorItem)))
+        router.dispatchNotification("item/completed", JSONValue.Obj(owner + mapOf(
+            "item" to mirrorItem, "remodexDesktopIpcMirror" to JSONValue.Bool(true))))
+        emit("summaryTextDelta", 0, "st", "two")
+        assertEquals(listOf("first part", "new step", "last"), shown())
+        val other = item("two", "last")
+        val history = ThreadHistoryDecoder.decodeFromThreadRead("t", mapOf("turns" to JSONValue.Arr(listOf(
+            JSONValue.Obj(mapOf("id" to JSONValue.Str("a"), "items" to JSONValue.Arr(listOf(final, other))))))))
+        val merged = HistoryMessageMerge.merge(store.messagesByThread.value.getValue("t"), history)
+        assertEquals(listOf("first part", "new step", "last"), builder.build(merged, true, "a").activeSummary)
+        assertEquals(listOf("first part", "new step", "last"), shown())
+        assertEquals(emptyList(), builder.build(merged, false, null).activeSummary)
+        assertEquals(2, builder.build(merged, false, null).items.size)
+    }
+
+    @Test
+    fun desktopSteerAndCanonicalEchoSurviveRealtimeDelivery() = runTest {
+        val store = MessageTimelineStore()
+        val router = newRouter(messageTimeline = store)
+        val owner = mapOf("threadId" to JSONValue.Str("t"), "turnId" to JSONValue.Str("turn"))
+        fun raw(id: String) = router.dispatchNotification("codex/event/user_message",
+            JSONValue.Obj(owner + mapOf("message" to JSONValue.Str("continue"), "id" to JSONValue.Str(id))))
+        fun complete(id: String, type: String, field: String) {
+            val input = JSONValue.Arr(listOf(JSONValue.Obj(mapOf("type" to JSONValue.Str("text"), "text" to JSONValue.Str("continue")))))
+            val item = JSONValue.Obj(mapOf("id" to JSONValue.Str(id), "type" to JSONValue.Str(type), field to input))
+            router.dispatchNotification("item/completed", JSONValue.Obj(owner + ("item" to item)))
+        }
+        raw("raw-1")
+        complete("first", "UserMessage", "content")
+        store.completeAssistantMessage("t", "turn", "reply", "working")
+        raw("raw-2")
+        complete("second", "steeringUserMessage", "input")
+        raw("raw-2")
+        val visible = store.messagesByThread.value.getValue("t").filter { it.text.isNotEmpty() }
+        assertEquals(listOf("first", "reply", "second"), visible.map { it.itemId })
+        assertEquals(listOf("raw-1", null, "raw-2"), visible.map { it.userMirrorId })
+    }
+
+    @Test
     fun desktopUserMessageWithoutTurnStart_marksThreadRunningFallback() =
         runTest {
             val lifecycle = mutableListOf<Pair<String, String?>>()

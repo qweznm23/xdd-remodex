@@ -1,16 +1,12 @@
 package com.remodex.mobile.ui.turn
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,70 +15,31 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.R
 
-/**
- * Compact expandable “Thinking” timeline row (parity with reference ThinkingBubble styling).
- */
 @Composable
-internal fun TurnThinkingTimelineRow(
-    bodyMarkdown: String,
-    contentColor: Color,
-    useMarkdown: Boolean,
-    isStreaming: Boolean,
-    messageId: String,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by rememberSaveable(messageId) { mutableStateOf(false) }
-    val colors = MaterialTheme.colorScheme
-    val mute = colors.onSurfaceVariant
-
-    Column(
-        modifier =
-            modifier
-                .fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+internal fun ReasoningSummaryRow(parts: List<String>, modifier: Modifier = Modifier) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    TimelineActionRow(
+        modifier = modifier,
+        onClick = { open = true },
+        trailing = { Icon(Icons.Rounded.ChevronRight, stringResource(R.string.reasoning_summary), Modifier.size(18.dp)) },
     ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.turn_timeline_kind_thinking),
-                style = MaterialTheme.typography.labelLarge,
-                color = mute.copy(alpha = 0.6f),
-                maxLines = 1,
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                contentDescription = null,
-                tint = mute.copy(alpha = 0.5f),
-                modifier = Modifier.size(18.dp),
-            )
-        }
-        if (expanded && bodyMarkdown.isNotBlank()) {
-            if (useMarkdown) {
-                TurnRichMarkdownBody(
-                    markdown = bodyMarkdown,
-                    contentColor = mute.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth(),
-                    keyPrefix = messageId,
-                )
-            } else {
-                Text(
-                    text = bodyMarkdown,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = mute.copy(alpha = 0.55f),
-                )
+        Text(parts.last(), style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    }
+    if (open) {
+        ChatDetailSheet(stringResource(R.string.reasoning_summary), onDismiss = { open = false }) {
+            LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
+                items(parts.size) { index ->
+                    SelectionContainer {
+                        Text(parts[parts.lastIndex - index], Modifier.padding(vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
         }
     }

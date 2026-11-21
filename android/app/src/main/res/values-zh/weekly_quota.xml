@@ -1,0 +1,4 @@
+<resources>
+    <string name="weekly_quota_summary">本周剩余 %1$d%%</string>
+    <string name="weekly_quota_unknown">本周剩余 —</string>
+</resources>

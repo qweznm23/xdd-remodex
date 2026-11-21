@@ -1,0 +1,9 @@
+<resources>
+    <string name="font_interface">界面字体</string>
+    <string name="font_reply">助手正文字体</string>
+    <string name="font_builtin">内置字体</string>
+    <string name="font_import">导入字体</string>
+    <string name="font_reset">恢复默认</string>
+    <string name="font_working">处理中…</string>
+    <string name="font_problem">字体：%1$s</string>
+</resources>

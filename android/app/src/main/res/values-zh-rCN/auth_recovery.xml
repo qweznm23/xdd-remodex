@@ -1,0 +1,21 @@
+<resources>
+    <string name="auth_recovery_busy">授权维护正在进行，等它结束后再试。</string>
+    <string name="auth_recovery_changed">先刷新列表，确认正在使用的文件后再操作。</string>
+    <string name="auth_recovery_host">请在电脑上检查桥接诊断和授权文件，确认后再处理。</string>
+    <string name="auth_recovery_input">检查所选授权文件、大小和名称，再重新选择。</string>
+    <string name="auth_recovery_token">请先刷新列表，检查文件里的令牌时间，再决定是否重新刷新令牌。</string>
+    <string name="auth_recovery_denied">服务端拒绝访问。请核对账号权限和访问限制。</string>
+    <string name="auth_recovery_authentication">服务端拒绝了本次身份验证。请在电脑上检查这份授权。</string>
+    <string name="auth_recovery_connection">请先恢复桥接连接，再核对最新结果。</string>
+    <string name="auth_recovery_switch">先核对 Codex 正在使用的账号，再决定是否需要重启或重新切换。</string>
+    <string name="auth_recovery_read">失败原因尚未确定。可展开错误详情，或手动重新请求结果。</string>
+    <string name="auth_recovery_unknown_write">操作结果未确认。请先核对文件现状和错误详情，再决定是否重复操作。</string>
+    <string name="auth_recovery_maintenance">上次自动维护失败。先查看记录，再决定是否需要手动处理。</string>
+    <string name="auth_recovery_query">重新查询</string>
+    <string name="auth_recovery_verify">核对运行账号</string>
+    <string name="auth_runtime_matches">Codex 当前返回的邮箱与授权文件一致。如果账号和工作区符合预期，可以继续使用。上次重启结果保留在诊断中。</string>
+    <string name="auth_runtime_differs">Codex 返回的邮箱与当前授权文件不同。请先保存进行中的任务，在电脑上核对登录账号后再验证。</string>
+    <string name="auth_runtime_unknown">当前信息不足以核对账号。请在电脑上查看 Codex 的登录状态。</string>
+    <string name="auth_runtime_signed_out">Codex 返回未登录。请先在电脑上登录，再重新核对。</string>
+    <string name="auth_recovery_timeout">请求超时。可以重新获取这项结果。</string>
+</resources>

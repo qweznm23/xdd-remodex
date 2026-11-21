@@ -1,0 +1,11 @@
+<resources>
+    <string name="terminal_action_connect">Connetti</string>
+    <string name="terminal_action_disconnect">Disconnetti</string>
+    <string name="terminal_action_sessions">Sessioni</string>
+    <string name="terminal_action_help">Aiuto</string>
+    <string name="terminal_profile_edit">Modifica connessione</string>
+    <string name="terminal_profile_delete">Elimina connessione</string>
+    <string name="terminal_profile_create">Nuova connessione</string>
+    <string name="terminal_profile_empty">Nessuna connessione salvata.</string>
+    <string name="terminal_profile_saved">Connessioni salvate</string>
+</resources>

@@ -8,12 +8,18 @@ import sys
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--home', default=str(Path.home() / '.codex'))
-parser.add_argument('action', choices=['status', 'refresh', 'switch'])
-parser.add_argument('profile', nargs='?', choices=['1', '2', '3'])
+parser.add_argument('action', choices=['status', 'refresh', 'switch', 'restart', 'restart-history'])
+parser.add_argument('profile', nargs='?')
 parser.add_argument('--force', action='store_true')
 parser.add_argument('--dry-run', action='store_true')
+parser.add_argument('--start-if-stopped', action='store_true', help='Allow the local Codex daemon manager to start an offline instance')
 args = parser.parse_args()
+if args.start_if_stopped and args.action != 'restart':
+    parser.error('--start-if-stopped requires restart')
+if args.action == 'restart' and (args.profile or args.dry_run or args.force):
+    parser.error('restart accepts only --home and --start-if-stopped')
 entry = Path(__file__).with_name('auth-profiles.py')
+control = ['--socket', str(Path(args.home).resolve() / 'app-server-control/app-server-control.sock')]
 
 def request(action, extra=()):
     response = subprocess.run([sys.executable, str(entry), '--home', args.home, action, *extra],
@@ -26,6 +32,10 @@ def request(action, extra=()):
 
 if args.action == 'status':
     result = request('status')
+elif args.action == 'restart-history':
+    result = request('restart-history', control)
+elif args.action == 'restart':
+    result = request('restart', control + (['--start-if-stopped'] if args.start_if_stopped else []))
 elif args.action == 'refresh':
     extra = (['--dry-run'] if args.dry_run else []) + (['--force'] if args.force else [])
     result = request('maintenance', extra)
@@ -43,7 +53,7 @@ else:
         row = next((p for p in status['profiles'] if p['id'] == args.profile), None)
         if row is None:
             parser.error('authorization not found')
-        result = request('switch', ['--profile', row['id'], '--revision', row['revision']])
+        result = request('switch', [*control, '--profile', row['id'], '--revision', row['revision']])
 print(json.dumps(result, ensure_ascii=False, indent=2))
-if result.get('results') and any(row.get('status') == 'failed' for row in result['results']):
+if result.get('status') == 'failed' or any(row.get('status') == 'failed' for row in result.get('results', [])):
     raise SystemExit(1)

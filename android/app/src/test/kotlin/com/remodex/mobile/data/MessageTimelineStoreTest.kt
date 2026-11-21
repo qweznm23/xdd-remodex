@@ -16,6 +16,18 @@ import kotlinx.serialization.json.Json
 
 class MessageTimelineStoreTest {
     @Test
+    fun sendAnimationSurvivesConfirmationButIsNeverRestoredFromHistory() = runTest {
+        val store = MessageTimelineStore()
+        val id = store.appendPendingUserMessage("thread", "hello")
+        val start = kotlin.test.assertNotNull(store.messagesByThread.value.getValue("thread").single().localSendNanos)
+        store.markUserMessageOutcome("thread", id, CodexMessageDeliveryState.confirmed, "turn")
+        val confirmed = store.messagesByThread.value.getValue("thread").single()
+        assertEquals(start, confirmed.localSendNanos)
+        val restored = Json.decodeFromString<CodexMessage>(Json.encodeToString(confirmed))
+        kotlin.test.assertNull(restored.localSendNanos)
+    }
+
+    @Test
     fun lateClosingBracketAfterCompletionDoesNotHideFullAnswer() = runTest {
         val store = MessageTimelineStore()
         val answer = "已修复历史问题回复。\n\n[下载 APK](http://example.test/app.apk)"
@@ -103,7 +115,7 @@ class MessageTimelineStoreTest {
                             listOf(
                                 userMessage(
                                     id = "persisted-user-1",
-                                    itemId = "user-input",
+                                    itemId = "turn-phone:input",
                                     attachments = listOf(firstAttachment),
                                 ),
                                 userMessage(
@@ -484,6 +496,30 @@ class MessageTimelineStoreTest {
             assertEquals("failed> Gradle", messages.single().text)
             assertEquals("cmd-2", messages.single().itemId)
         }
+
+    @Test
+    fun desktopSteersKeepOccurrenceAndPositionAcrossReplayAndHistoryPages() = runTest {
+        val store = MessageTimelineStore()
+        val thread = "desktop"
+        val turn = "turn"
+        store.appendMirroredUser(thread, turn, "continue", mirrorId = "raw-1")
+        store.completeAssistantMessage(thread, turn, "reply", "working")
+        store.appendMirroredUser(thread, turn, "continue", createdAt = Instant.EPOCH, mirrorId = "raw-2")
+        store.appendMirroredUser(thread, turn, "continue", createdAt = Instant.EPOCH, mirrorId = "raw-2")
+        fun rows() = store.messagesByThread.value.getValue(thread)
+        val visibleIds = rows().map { it.id }
+        assertEquals(listOf("continue", "working", "continue"), rows().map { it.text })
+        val page = rows().mapIndexed { i, row ->
+            row.copy(id = "snapshot-$i", itemId = row.itemId ?: "canonical-$i", userMirrorId = null)
+        }
+        repeat(2) { store.mergeThreadHistory(thread, page, isItemPage = true) }
+        store.appendMirroredUser(thread, turn, "continue", mirrorId = "raw-1")
+        store.appendMirroredUser(thread, turn, "continue", itemId = "canonical-2")
+        assertEquals(visibleIds, rows().map { it.id })
+        assertEquals(listOf("canonical-0", "reply", "canonical-2"), rows().map { it.itemId })
+        val restored = MessageTimelineStore(initialMessages = store.messagesByThread.value)
+        assertEquals(rows(), restored.messagesByThread.value.getValue(thread))
+    }
 
     @Test
     fun appendMirroredUser_insertsBeforeExistingTurnActivityWhenUserArrivesLate() =

@@ -1,11 +1,14 @@
 ﻿package com.remodex.mobile.ui.shared
 
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -141,6 +144,25 @@ fun WorktreeGlassBadge(modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun DialogConfirmButton(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    destructive: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shapes = ButtonDefaults.shapes(),
+        colors = if (destructive) ButtonDefaults.buttonColors(
+            containerColor = colors.errorContainer, contentColor = colors.onErrorContainer,
+        ) else ButtonDefaults.buttonColors(),
+    ) { content() }
+}
+
 @Composable
 fun ThreadRenameDialog(
     visible: Boolean,
@@ -152,12 +174,13 @@ fun ThreadRenameDialog(
 ) {
     if (!visible) return
     var value by rememberSaveable(initialName) { mutableStateOf(initialName) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    RemodexAlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(stringResource(R.string.thread_rename_dialog_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
                     value = value,
                     onValueChange = { value = it },
                     enabled = !busy,
@@ -174,7 +197,7 @@ fun ThreadRenameDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            DialogConfirmButton(
                 onClick = { onConfirm(value.trim()) },
                 enabled = !busy,
             ) {

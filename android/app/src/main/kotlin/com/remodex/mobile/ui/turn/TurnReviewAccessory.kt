@@ -1,6 +1,5 @@
 package com.remodex.mobile.ui.turn
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,17 +8,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.CodexReviewTarget
@@ -281,65 +279,14 @@ private fun ReviewBaseBranchRow(
     isDisabled: Boolean,
     onClick: () -> Unit,
 ) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(enabled = !isDisabled, onClick = onClick)
-                .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = branch,
-                style = MaterialTheme.typography.bodyMedium,
-                color =
-                    if (isDisabled) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (isCurrent) {
-                    ReviewBranchBadge(stringResource(R.string.git_branch_badge_current))
-                }
-                if (isDefault) {
-                    ReviewBranchBadge(stringResource(R.string.git_branch_badge_default))
-                }
-            }
-        }
-        if (isSelected) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint =
-                    if (isDisabled) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-            )
-        }
-    }
-}
-
-@Composable
-private fun ReviewBranchBadge(text: String) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-    }
+    val badges = listOfNotNull(
+        if (isCurrent) stringResource(R.string.git_branch_badge_current) else null,
+        if (isDefault) stringResource(R.string.git_branch_badge_default) else null,
+    )
+    ListItem(
+        headlineContent = { Text(branch) },
+        supportingContent = if (badges.isEmpty()) null else { { Text(badges.joinToString(" · ")) } },
+        trailingContent = { RadioButton(selected = isSelected, onClick = null, enabled = !isDisabled) },
+        modifier = Modifier.selectable(isSelected, enabled = !isDisabled, role = Role.RadioButton, onClick = onClick),
+    )
 }

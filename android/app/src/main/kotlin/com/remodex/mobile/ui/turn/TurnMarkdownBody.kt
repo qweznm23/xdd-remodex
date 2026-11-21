@@ -1,39 +1,28 @@
 package com.remodex.mobile.ui.turn
 
 import android.content.ClipData
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.remodex.mobile.ui.theme.CodeFontFamily
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.toClipEntry
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -48,11 +37,26 @@ import com.remodex.mobile.core.model.TurnTimelineCacheKey
 import java.net.URI
 import kotlinx.coroutines.launch
 
-private const val CODE_BLOCK_PREVIEW_MAX_LINES = 160
-private const val CODE_BLOCK_PREVIEW_MAX_CHARS = 8_000
+// Latin-only resources keep Chinese on Android's normal fallback and avoid per-token spans.
+private val AssistantProseFamily = FontFamily(
+    Font(R.font.noto_serif_latin_regular),
+    Font(R.font.noto_serif_latin_bold, FontWeight.Bold),
+    Font(R.font.noto_serif_latin_italic, style = FontStyle.Italic),
+    Font(R.font.noto_serif_latin_bold_italic, FontWeight.Bold, FontStyle.Italic),
+)
+
+internal val LocalActivityDetail = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+/** Only a single, literal paragraph qualifies. All Markdown punctuation and links take the rich path. */
+internal fun isPlainActivityParagraph(text: String): Boolean =
+    text.isNotEmpty() && text.first().isLetterOrDigit() && text.last() != ' ' && !text.contains("  ") &&
+        text.indices.all { index ->
+            val c = text[index]
+            c.isLetterOrDigit() || c in " ，。！？；：、（）,!?" || (c == '.' && index == text.lastIndex && text.first().isLetter())
+        }
 
 /**
- * J.5/J.20 — Markdown M3 + syntax highlight; code blocks with language header and copy action.
+ * Render prose and dedicated interactive blocks in their original order.
  */
 @Composable
 fun TurnMarkdownBody(
@@ -61,8 +65,18 @@ fun TurnMarkdownBody(
     modifier: Modifier = Modifier,
     keyPrefix: String = TurnTimelineCacheKey.textKey("markdown-body", markdown),
     linkColor: Color = contentColor,
+    fitProse: Boolean = false,
+    assistantProse: Boolean = false,
 ) {
     val displayMarkdown = TurnMarkdownRenderCache.visibleProse(markdown)
+    if (LocalActivityDetail.current && remember(displayMarkdown) { isPlainActivityParagraph(displayMarkdown) }) {
+        val typography = MaterialTheme.typography.bodyMedium
+        val style = if (assistantProse) typography.copy(
+            fontFamily = com.remodex.mobile.ui.theme.LocalReplyFont.current ?: AssistantProseFamily,
+        ) else typography
+        Text(displayMarkdown, modifier = modifier, style = style, color = contentColor)
+        return
+    }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val segments = TurnMarkdownRenderCache.fenceSegments(displayMarkdown)
@@ -90,31 +104,34 @@ fun TurnMarkdownBody(
         }
 
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = if (fitProse) modifier else modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         segments.forEachIndexed { index, segment ->
             when (segment) {
                 is MarkdownFenceSegment.Text -> {
                     val state = rememberCachedMarkdown(segment.markdown)
-                    val bodyStyle = MaterialTheme.typography.bodyMedium
+                    val typography = MaterialTheme.typography
+                    val replyFont = com.remodex.mobile.ui.theme.LocalReplyFont.current ?: AssistantProseFamily
+                    val bodyStyle = if (assistantProse) typography.bodyMedium.copy(fontFamily = replyFont) else typography.bodyMedium
+                    val titleStyle = if (assistantProse) typography.titleMedium.copy(fontFamily = replyFont) else typography.titleMedium
                     CompositionLocalProvider(LocalUriHandler provides repoFileMarkdownUriHandler) {
                         Markdown(
                             state = state,
-                            error = { Text(segment.markdown, color = contentColor) },
+                            error = { Text(segment.markdown, style = bodyStyle, color = contentColor) },
                             imageTransformer = ConversationMarkdownImages,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = if (fitProse) Modifier else Modifier.fillMaxWidth(),
                             colors = markdownColor(text = contentColor),
                             typography =
                                 markdownTypography(
                                     h1 =
-                                        MaterialTheme.typography.titleMedium.copy(
+                                        titleStyle.copy(
                                             fontSize = 17.sp,
                                             lineHeight = 22.sp,
                                             fontWeight = FontWeight.SemiBold,
                                         ),
                                     h2 =
-                                        MaterialTheme.typography.titleMedium.copy(
+                                        titleStyle.copy(
                                             fontSize = 16.sp,
                                             lineHeight = 21.sp,
                                             fontWeight = FontWeight.SemiBold,
@@ -134,8 +151,8 @@ fun TurnMarkdownBody(
                                     bullet = bodyStyle,
                                     list = bodyStyle,
                                     table = bodyStyle,
-                                    code = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                    inlineCode = bodyStyle.copy(fontFamily = FontFamily.Monospace),
+                                    code = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily),
+                                    inlineCode = bodyStyle.copy(fontFamily = CodeFontFamily),
                                     quote = bodyStyle,
                                     textLink =
                                         TextLinkStyles(
@@ -156,7 +173,12 @@ fun TurnMarkdownBody(
                                     table = { model -> ConversationMarkdownTable(model) },
                                     codeBlock = { model ->
                                         CodeBlockCard(
-                                            raw = model.content.trimEnd(),
+                                            raw = remember(model.node, model.content) {
+                                                val block = model.content.substring(model.node.startOffset, model.node.endOffset)
+                                                block.lineSequence().joinToString("\n") { line ->
+                                                    if (line.startsWith("\t")) line.drop(1) else line.removePrefix("    ")
+                                                }.trimEnd('\n', '\r')
+                                            },
                                             language = null,
                                             expansionKey = "$keyPrefix-inline-code-$index",
                                             onCopy = { text ->
@@ -201,110 +223,6 @@ internal object MarkdownUrlPolicy {
     }
 }
 
-@Composable
-private fun CodeBlockCard(
-    raw: String,
-    language: String?,
-    expansionKey: String,
-    onCopy: (String) -> Unit,
-) {
-    if (raw.isEmpty()) return
-    var expanded by rememberSaveable(expansionKey) { mutableStateOf(false) }
-    val preview =
-        remember(raw, expanded) {
-            if (expanded) {
-                raw
-            } else {
-                codeBlockPreview(raw)
-            }
-        }
-    val isTruncated = preview.length < raw.length
-    val colors = MaterialTheme.colorScheme
-    val normalizedLanguage = language?.trim()?.ifBlank { null }
-    val languageLabel = normalizedLanguage ?: stringResource(R.string.turn_markdown_code_unknown)
-    Column(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clip(MaterialTheme.shapes.small)
-                .background(colors.surface.copy(alpha = 0.72f)),
-    ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = 8.dp, end = 8.dp, top = 1.dp, bottom = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = languageLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurfaceVariant,
-            )
-            TextButton(onClick = { onCopy(raw) }) {
-                Icon(
-                    imageVector = Icons.Default.ContentCopy,
-                    contentDescription = null,
-                    tint = colors.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.turn_markdown_copy_code),
-                    modifier = Modifier.padding(start = 4.dp),
-                )
-            }
-        }
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-        ) {
-            Text(
-                text = preview,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = colors.onSurface,
-                softWrap = false,
-            )
-        }
-        if (isTruncated) {
-            TextButton(
-                onClick = { expanded = true },
-                modifier =
-                    Modifier
-                        .align(Alignment.End)
-                        .padding(end = 8.dp, bottom = 4.dp),
-            ) {
-                Text(stringResource(R.string.markdown_show_full_block))
-            }
-        }
-    }
-}
-
-private fun codeBlockPreview(raw: String): String {
-    if (raw.length <= CODE_BLOCK_PREVIEW_MAX_CHARS && raw.count { it == '\n' } < CODE_BLOCK_PREVIEW_MAX_LINES) {
-        return raw
-    }
-    val lines = raw.lineSequence().take(CODE_BLOCK_PREVIEW_MAX_LINES).toList()
-    val byLines = lines.joinToString("\n")
-    val clipped =
-        if (byLines.length > CODE_BLOCK_PREVIEW_MAX_CHARS) {
-            byLines.take(CODE_BLOCK_PREVIEW_MAX_CHARS)
-        } else {
-            byLines
-        }
-    val hiddenLines = (raw.count { it == '\n' } + 1 - lines.size).coerceAtLeast(0)
-    val hiddenSuffix =
-        if (hiddenLines > 0) {
-            "\n... $hiddenLines more lines hidden"
-        } else {
-            "\n... block truncated"
-        }
-    return clipped.trimEnd() + hiddenSuffix
-}
-
 internal sealed interface MarkdownFenceSegment {
     data class Text(val markdown: String) : MarkdownFenceSegment
 
@@ -335,7 +253,7 @@ internal object MarkdownFenceSegmentParser {
         }
 
         fun flushCode(fence: MarkdownFence) {
-            val code = codeBuffer.joinToString("\n").trimEnd()
+            val code = codeBuffer.joinToString("\n")
             if (code.isNotBlank()) {
                 segments += MarkdownFenceSegment.Code(code = code, language = fence.language)
             }
@@ -374,6 +292,25 @@ internal object MarkdownFenceSegmentParser {
         flushText()
 
         return segments.ifEmpty { listOf(MarkdownFenceSegment.Text(markdown)) }
+    }
+
+    /** Keep the closing fence when the chat's prose line limit falls inside a complete block. */
+    fun closingFenceAtLimit(text: String, limit: Int): Int? {
+        var fence: MarkdownFence? = null
+        var offset = 0
+        for ((index, line) in text.lineSequence().withIndex()) {
+            val current = fence
+            if (current == null) {
+                fence = parseOpeningFence(line.trimStart())
+            } else if (isClosingFence(line.trimStart(), current)) {
+                if (index >= limit) return offset + line.length
+                fence = null
+            }
+            if (index + 1 >= limit && fence == null) return null
+            offset += line.length
+            if (text.startsWith("\r\n", offset)) offset += 2 else offset++
+        }
+        return null
     }
 
     private data class MarkdownFence(

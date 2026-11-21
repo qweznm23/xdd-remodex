@@ -1,16 +1,20 @@
 package com.remodex.mobile.ui.mydevices
 
+import com.remodex.mobile.ui.theme.RemodexDropdownMenu
+import com.remodex.mobile.ui.theme.conversationColors
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.ui.graphics.Color
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -18,24 +22,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.MoreHoriz
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,13 +47,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remodex.mobile.R
 import com.remodex.mobile.data.CodexRepository
-import com.remodex.mobile.ui.theme.remodexScreenTopAppBarColors
+import com.remodex.mobile.ui.theme.RemodexPageHeader
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -122,49 +122,9 @@ fun MyDevicesScreen(
     Scaffold(
         modifier = modifier,
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.my_devices_title)) },
-                colors = remodexScreenTopAppBarColors(),
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.cd_navigate_back),
-                        )
-                    }
-                },
-            )
+            RemodexPageHeader(stringResource(R.string.my_devices_title), onNavigateBack)
         },
-        bottomBar = {
-            Surface(
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-                color = MaterialTheme.colorScheme.background,
-            ) {
-                TextButton(
-                    onClick = {
-                        if (!isSwitching) {
-                            onNavigateBack()
-                            onScanQrCode()
-                        }
-                    },
-                    enabled = !isSwitching,
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
-                ) {
-                    Text(
-                        text = stringResource(R.string.my_devices_scan_qr_code),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-        },
+        containerColor = MaterialTheme.colorScheme.conversationColors().reading,
     ) { innerPadding ->
         Box(
             modifier =
@@ -178,7 +138,7 @@ fun MyDevicesScreen(
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 deviceSwitchNotice?.takeIf { it.isNotBlank() }?.let { notice ->
                     Text(
@@ -195,6 +155,16 @@ fun MyDevicesScreen(
                     }
                 }
 
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Button(enabled = !isSwitching, onClick = {
+                        onNavigateBack()
+                        onScanQrCode()
+                    }) { Text(stringResource(R.string.my_devices_scan_qr_code)) }
+                    TextButton(enabled = !isSwitching, onClick = {
+                        onNavigateBack()
+                        onPairWithCode()
+                    }) { Text(stringResource(R.string.my_devices_pair_code)) }
+                }
                 MyDevicesSectionHeader(text = stringResource(R.string.my_devices_paired_devices))
                 MyDevicesGroupedCard {
                     if (pairedDevices.isEmpty()) {
@@ -259,7 +229,7 @@ fun MyDevicesScreen(
     }
 
     pendingSwitchDeviceId?.let { deviceId ->
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { pendingSwitchDeviceId = null },
             title = { Text(stringResource(R.string.my_devices_switch_confirm_title)) },
             text = { Text(stringResource(R.string.my_devices_switch_confirm_message)) },
@@ -282,7 +252,7 @@ fun MyDevicesScreen(
     }
 
     pendingForgetDeviceId?.let { deviceId ->
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { pendingForgetDeviceId = null },
             title = { Text(stringResource(R.string.my_devices_forget_title)) },
             text = { Text(stringResource(R.string.my_devices_forget_message)) },
@@ -324,15 +294,7 @@ private fun MyDevicesGroupedCard(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-    ) {
-        Column {
-            content()
-        }
-    }
+    com.remodex.mobile.ui.theme.RemodexGroup(modifier) { content() }
 }
 
 @Composable
@@ -340,25 +302,13 @@ private fun CurrentDeviceRow(
     device: MyDeviceRowModel,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        DeviceAvatar(device = device, diameter = 40.dp)
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = device.primaryName,
-                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            DeviceStatusSubtitle(device = device)
-        }
-    }
+    ListItem(
+        modifier = modifier,
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = { DeviceAvatar(device = device, diameter = 40.dp) },
+        headlineContent = { Text(device.primaryName, style = MaterialTheme.typography.titleMedium) },
+        supportingContent = { DeviceStatusSubtitle(device = device) },
+    )
 }
 
 @Composable
@@ -375,45 +325,20 @@ private fun PairedDeviceRow(
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = enabled, onClick = onSwitch)
-                    .padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            DeviceAvatar(device = device, diameter = 40.dp)
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = device.primaryName,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                DeviceStatusSubtitle(device = device)
-            }
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
-            )
-            IconButton(
-                onClick = { onMenuExpandedChange(true) },
-                enabled = enabled,
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.MoreHoriz,
-                    contentDescription = stringResource(R.string.my_devices_device_actions_cd),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        ListItem(
+            modifier = Modifier.clickable(enabled = enabled, onClick = onSwitch),
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            headlineContent = { Text(device.primaryName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            supportingContent = { DeviceStatusSubtitle(device = device) },
+            leadingContent = { DeviceAvatar(device = device, diameter = 40.dp) },
+            trailingContent = {
+                IconButton(onClick = { onMenuExpandedChange(true) }, enabled = enabled) {
+                    Icon(Icons.Outlined.MoreHoriz, stringResource(R.string.my_devices_device_actions_cd))
+                }
+            },
+        )
         val showInMenu = MyDeviceMenuVisibilityStore.isVisible(device.deviceId)
-        DropdownMenu(
+        RemodexDropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { onMenuExpandedChange(false) },
         ) {
@@ -464,7 +389,7 @@ private fun DeviceAvatar(
             modifier
                 .size(diameter)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

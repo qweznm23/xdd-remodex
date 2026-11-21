@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.ui.theme.LocalSheetClose
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -322,7 +323,7 @@ internal fun WorktreeHandoffActionSheet(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 TextButton(
-                    onClick = onDismiss,
+                    onClick = LocalSheetClose.current,
                     enabled = !inProgress,
                     modifier = Modifier.weight(1f),
                 ) {
@@ -338,7 +339,7 @@ internal fun WorktreeHandoffActionSheet(
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
                             strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = androidx.compose.material3.LocalContentColor.current,
                         )
                     } else {
                         Text(
@@ -400,7 +401,7 @@ internal fun ForkThreadActionSheet(
                 horizontalArrangement = Arrangement.End,
             ) {
                 TextButton(
-                    onClick = onDismiss,
+                    onClick = LocalSheetClose.current,
                     enabled = !inProgress,
                 ) {
                     Text(stringResource(android.R.string.cancel))
@@ -495,7 +496,7 @@ internal fun PlanDetailsActionSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.End,
                 ) {
-                    TextButton(onClick = onDismiss) {
+                    TextButton(onClick = LocalSheetClose.current) {
                         Text(stringResource(android.R.string.cancel))
                     }
                     TextButton(

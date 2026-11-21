@@ -14,9 +14,10 @@ internal fun historyPaginationAfterPage(
 ): ThreadHistoryPaginationState {
     // Refreshing the newest window does not undo pages already loaded at the older boundary.
     // A complete server snapshot or a pagination protocol change establishes a new boundary.
-    val keepOlderBoundary = initialLoad && previous.initialTurnsLoaded &&
+    val keepOlderBoundary = initialLoad && (previous.canLoadOlder || previous.hasAuthoritativeLocalHistoryStart) &&
         previous.usesItemPagination == page.itemPage && page.nextCursor != null
     return previous.copy(
+        waitingForFirstMessage = false,
         olderCursor = if (keepOlderBoundary) previous.olderCursor else page.nextCursor,
         exhaustedOlderCursor = if (keepOlderBoundary) previous.exhaustedOlderCursor else if (page.nextCursor == null) JSONValue.Null else null,
         hasAuthoritativeLocalHistoryStart = if (keepOlderBoundary) previous.hasAuthoritativeLocalHistoryStart else page.nextCursor == null,

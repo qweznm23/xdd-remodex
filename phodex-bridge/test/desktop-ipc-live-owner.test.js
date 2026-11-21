@@ -3305,7 +3305,10 @@ test("live owner serves follower load-complete-history with a fresh snapshot rev
       input: [{ type: "text", text: "continue" }],
     },
   }));
-  await waitFor(() => serverSocket);
+  // A Desktop follower can request another snapshot once the owner is registered.
+  await waitForMessage(frames, (frame) =>
+    frame.method === "thread-stream-state-changed" && frame.params?.conversationId === "thread-history"
+  );
 
   writeFrame(serverSocket, {
     type: "request",
@@ -3320,7 +3323,7 @@ test("live owner serves follower load-complete-history with a fresh snapshot rev
     serverSocket,
     (frame) => frame.type === "response" && frame.requestId === "load-history-1"
   );
-  assert.equal(response.resultType, "success");
+  assert.equal(response.resultType, "success", JSON.stringify(response));
   assert.equal(typeof response.result.revision, "number");
   assert.ok(codexRequests.some((request) => (
     request.method === "thread/read"

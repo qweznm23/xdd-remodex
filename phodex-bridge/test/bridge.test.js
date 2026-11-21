@@ -1182,6 +1182,15 @@ test("disableUnsupportedReasoningSummaryForTurnStart leaves other models untouch
   assert.equal(disableUnsupportedReasoningSummaryForTurnStart(raw), raw);
 });
 
+test("Astra turn starts request public summaries without overriding explicit preferences", () => {
+  for (const modelParams of [{ model: "gpt-6.2-astra" }, { collaborationMode: { settings: { model: "gpt-6.2-astra" } } }]) {
+    for (const requested of [undefined, "none", "concise", "detailed"]) {
+      const raw = JSON.stringify({ method: "turn/start", params: { ...modelParams, summary: requested } });
+      assert.equal(JSON.parse(normalizeTurnStartForCodex(raw)).params.summary, requested ?? "auto");
+    }
+  }
+});
+
 test("normalizeTurnStartForCodex aligns stale collaboration settings with the phone runtime choice", () => {
   const raw = JSON.stringify({
     id: "req-phone-sol",

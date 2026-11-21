@@ -76,11 +76,13 @@
     <string name="turn_code_comment_copy">Copy</string>
     <string name="turn_timeline_pending_approval_hint">Respond using the approval dialog.</string>
     <string name="turn_timeline_structured_input_hint">Respond using the input dialog.</string>
+    <string name="turn_markdown_expand_code">Expand code</string>
     <string name="turn_markdown_copy_code">Copy code</string>
     <string name="turn_markdown_code_unknown">code</string>
     <string name="turn_message_streaming_placeholder">&#8230;</string>
     <string name="turn_message_empty_placeholder">(empty)</string>
-    <string name="turn_composer_hint">Ask anything&#8230; \@files, \$skills, /commands</string>
+    <string name="turn_composer_reply_hint">Reply to Codex</string>
+    <string name="turn_composer_hint">Message Codex</string>
     <string name="turn_plan_mode_chip">Plan</string>
     <string name="turn_add_images_cd">Add attachments</string>
     <string name="turn_attachment_menu_library">Choose from library</string>
@@ -208,6 +210,10 @@
     <string name="turn_runtime_reasoning_title_medium">Mid</string>
     <string name="turn_runtime_reasoning_title_high">High</string>
     <string name="turn_runtime_reasoning_title_xhigh">XHigh</string>
+    <string name="composer_picker_title">Model &amp; reasoning</string>
+    <string name="composer_effort_label">Reasoning effort</string>
+    <string name="composer_effort_unavailable">No adjustable reasoning levels</string>
+    <string name="composer_current_model">Current model: %1$s</string>
     <string name="turn_runtime_model_label">Model</string>
     <string name="turn_runtime_access_label">Access</string>
     <string name="turn_plan_status_pending">Pending</string>
@@ -223,6 +229,12 @@
     <string name="sidebar_search_hint">Search conversations</string>
     <string name="sidebar_brand_name">Remodex</string>
     <string name="sidebar_tab_projects">Projects</string>
+    <string name="sidebar_state_collapsed">Collapsed</string>
+    <string name="sidebar_state_expanded">Expanded</string>
+    <plurals name="sidebar_chat_count">
+        <item quantity="one">%d chat</item>
+        <item quantity="other">%d chats</item>
+    </plurals>
     <string name="sidebar_tab_chats">Chats</string>
     <string name="sidebar_terminal">Terminal</string>
     <string name="sidebar_chat">Chat</string>
@@ -531,9 +543,9 @@
     <string name="structured_input_default_title">Input requested</string>
     <string name="structured_input_default_body">Codex is waiting for your input.</string>
     <string name="structured_input_send">Send</string>
-    <string name="structured_input_skip">Skip</string>
+    <string name="structured_input_skip">Decline to answer</string>
     <string name="structured_input_sending">Sending&#8230;</string>
-    <string name="structured_input_skipping">Skipping&#8230;</string>
+    <string name="structured_input_skipping">Declining…</string>
     <string name="structured_input_previous">Previous</string>
     <string name="structured_input_next">Next</string>
     <string name="structured_input_question_n_of_m">Question %1$d of %2$d</string>
@@ -651,8 +663,10 @@
     <string name="questions_close">Close</string>
     <string name="questions_send_failed">Could not send. Your entries are kept; try again.</string>
     <string name="questions_error_details">Error details</string>
-    <string name="questions_skip">Skip</string>
-    <string name="questions_skipped">Skipped</string>
+    <string name="questions_skip">Decline to answer</string>
+    <string name="questions_skipped">Declined to answer</string>
     <string name="questions_input_hint">Type your answer…</string>
     <string name="questions_action">Reply needed</string>
+    <string name="scroll_latest_message">Jump to the latest message</string>
+    <string name="reasoning_summary">Thinking summary</string>
 </resources>

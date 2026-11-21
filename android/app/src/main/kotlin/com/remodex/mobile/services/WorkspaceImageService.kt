@@ -32,13 +32,12 @@ class WorkspaceImageService(
         maxPixelDimension: Long,
         cwd: String? = null,
     ): PreviewDataUrl? {
-        val trimmedPath = path.trim()
-        if (trimmedPath.isEmpty()) return null
-        val key = PreviewCacheKey(trimmedPath, maxPixelDimension, cwd)
+        if (path.isBlank()) return null
+        val key = PreviewCacheKey(path, maxPixelDimension, cwd)
         val cached = synchronized(previewCache) { previewCache[key] }
         val params =
             linkedMapOf<String, JSONValue>(
-                "path" to JSONValue.Str(trimmedPath),
+                "path" to JSONValue.Str(path),
                 "maxPixelDimension" to JSONValue.NumLong(maxPixelDimension),
             )
         cwd?.takeIf { it.isNotBlank() }?.let { params["cwd"] = JSONValue.Str(it) }
@@ -54,7 +53,7 @@ class WorkspaceImageService(
         val mime = result.mimeType.ifBlank { "image/png" }
         val fresh =
             PreviewDataUrl(
-                path = result.path.ifBlank { trimmedPath },
+                path = result.path.ifBlank { path },
                 dataUrl = "data:$mime;base64,$base64",
                 byteLength = result.byteLength,
                 mtimeMs = result.mtimeMs,
@@ -62,7 +61,7 @@ class WorkspaceImageService(
             )
         synchronized(previewCache) {
             previewCache[key] = fresh
-            if (fresh.path != trimmedPath) {
+            if (fresh.path != path) {
                 previewCache[PreviewCacheKey(fresh.path, maxPixelDimension, cwd)] = fresh
             }
         }
@@ -78,6 +77,7 @@ class WorkspaceImageService(
                 method = method,
                 params = JSONValue.Obj(params),
             )
+        response.error?.let { throw com.remodex.mobile.core.error.CodexServiceError.RpcFailure(it) }
         return response.result?.objectValue
             ?: error("Invalid response from bridge.")
     }

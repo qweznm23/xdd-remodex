@@ -89,7 +89,7 @@ object TurnUsageSheetLogic {
         }
 
     private fun AIChangeSet.hasRestorableChangeEvidence(): Boolean =
-        !inverseUnifiedPatch.isNullOrBlank() ||
+        forwardUnifiedPatch.startsWith("diff --git ") || !inverseUnifiedPatch.isNullOrBlank() || (source == AIChangeSetSource.fileChangeFallback && fallbackPatchBatches.isNotEmpty()) ||
             !workspaceCheckpoint?.restoreCheckpointRef.isNullOrBlank()
 }
 

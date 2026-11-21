@@ -35,6 +35,7 @@ data class CodexThread(
     val syncState: CodexThreadSyncState = CodexThreadSyncState.live,
     val runtimeStatus: ThreadRuntimeStatus? = null,
     val waitingOnUserInput: Boolean = false,
+    val runtimeSettings: Map<String, JSONValue>? = null,
 ) {
     companion object {
         /** User-visible fallback when there is no name, title, or preview (parity [CodexThread.swift] `defaultDisplayTitle`). */
@@ -150,6 +151,7 @@ data class CodexThread(
                 agentId = normalizeIdentifier(agent),
                 agentNickname = normalizeIdentifier(agentNick),
                 agentRole = normalizeIdentifier(agentRoleVal),
+                runtimeSettings = (obj["runtimeSettings"] as? JsonObject)?.toRpcObject(),
                 model = normalizeIdentifier(modelVal),
                 modelProvider = normalizeIdentifier(modelProv),
                 reasoningEffort = decodeThreadIdentity(obj, metadata, listOf("reasoningEffort", "reasoning_effort", "effort")),

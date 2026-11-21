@@ -8,6 +8,45 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class RateLimitRefreshGuardTest {
+    private val week = CodexRateLimitBucket("codex", secondary = CodexRateLimitWindow(25, 10080))
+    private val short = CodexRateLimitBucket("codex", primary = CodexRateLimitWindow(10, 300))
+
+    @Test fun lateReadKeepsNewerPartialPushAndFillsMissingWeek() {
+        val guard = RateLimitRefreshGuard()
+        val read = guard.begin(1)!!
+        guard.pushed(listOf(short))
+        val resolved = RateLimitPayloadCodec.mergeRateLimitBuckets(listOf(week), read.pushedBuckets).single()
+        assertEquals(week.secondary, resolved.secondary)
+        assertEquals(short.primary, resolved.primary)
+        guard.cancel(read)
+        guard.finish(read)
+        assertTrue(guard.begin(1) != null)
+    }
+
+    @Test fun automaticReadsAreThrottledAcrossScreensAndWeeklyPushesExtendFreshness() {
+        var now = 0L
+        val guard = RateLimitRefreshGuard { now }
+        guard.finish(guard.begin(1)!!)
+        now = 299_000
+        assertNull(guard.begin(1))
+        guard.pushed(listOf(week))
+        now = 300_000
+        assertNull(guard.begin(1))
+        val manual = guard.begin(1, force = true)!!
+        assertNull(guard.begin(1, force = true))
+        guard.finish(manual)
+        now += 299_999
+        guard.pushed(listOf(short))
+        assertNull(guard.begin(1))
+        now++
+        val old = guard.begin(1)!!
+        guard.reset(waitForReconnect = true)
+        assertFalse(guard.isCurrent(old, 1))
+        assertNull(guard.begin(1, force = true))
+        guard.reset()
+        assertTrue(guard.begin(2) != null)
+    }
+
     @Test fun concurrentReadDeduplicatesAndOldCleanupCannotClearNewConnection() {
         val guard = RateLimitRefreshGuard()
         val old = guard.begin(1)!!
@@ -17,9 +56,9 @@ class RateLimitRefreshGuardTest {
         assertFalse(guard.isCurrent(old, 2))
         guard.finish(old)
         assertTrue(guard.isCurrent(next, 2))
-        assertFalse(guard.hasNewerPush(next))
-        guard.pushed()
-        assertTrue(guard.hasNewerPush(next))
+        assertTrue(next.pushedBuckets.isEmpty())
+        guard.pushed(listOf(week))
+        assertEquals(listOf(week), next.pushedBuckets)
     }
 
     @Test fun explicitDetailReadHasOneCompatibilityRetryAndPreservesBothRpcFailures() = runTest {

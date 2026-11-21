@@ -1,43 +1,45 @@
 package com.remodex.mobile.ui.sidebar
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,16 +53,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.AppContainer
 import com.remodex.mobile.R
@@ -80,10 +81,6 @@ private enum class NewThreadSessionType {
     CloudOnly,
 }
 
-private val NewThreadFloatingCtaHeight = 54.dp
-private val NewThreadFloatingCtaBottomPadding = 18.dp
-private val NewThreadListBottomInset =
-    NewThreadFloatingCtaHeight + NewThreadFloatingCtaBottomPadding + 12.dp
 
 private data class NewThreadWorkspaceSummary(
     val name: String,
@@ -315,19 +312,14 @@ fun SidebarProjectPickerSheet(
             }
         val quickLocationChips = quickLocations.preferredQuickLocations()
 
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(),
-        ) {
+        Column(Modifier.fillMaxSize()) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding =
                     PaddingValues(
                         start = 18.dp,
                         end = 18.dp,
-                        bottom = NewThreadListBottomInset,
+                        bottom = 12.dp,
                     ),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
@@ -340,14 +332,8 @@ fun SidebarProjectPickerSheet(
                 }
 
                 item {
-                    NewThreadStepper(colors = colors)
-                }
-
-                item {
                     CurrentWorkspaceSection(
                         workspace = currentWorkspace,
-                        colors = colors,
-                        enabled = !startBusy && !noCwdBusy && !createBusy,
                     )
                 }
 
@@ -380,23 +366,16 @@ fun SidebarProjectPickerSheet(
                             onAction = { showAllRecentWorkspaces = true },
                         )
                     }
-                    item {
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(end = 2.dp),
-                        ) {
-                            items(visibleRecentWorkspaces, key = { "recent-${it.path}" }) { workspace ->
-                                WorkspaceRow(
-                                    workspace = workspace,
-                                    colors = colors,
-                                    enabled = !startBusy && !noCwdBusy && !createBusy,
-                                    busy = false,
-                                    selected = workspace.path == currentWorkspace?.path,
-                                    onClick = { selectFolder(workspace.path) },
-                                    modifier = Modifier.width(174.dp),
-                                )
-                            }
-                        }
+                    items(visibleRecentWorkspaces, key = { "recent-${it.path}" }) { workspace ->
+                        WorkspaceRow(
+                            workspace = workspace,
+                            colors = colors,
+                            enabled = !startBusy && !noCwdBusy && !createBusy,
+                            busy = false,
+                            selected = workspace.path == currentWorkspace?.path,
+                            onClick = { selectFolder(workspace.path) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
 
@@ -488,7 +467,6 @@ fun SidebarProjectPickerSheet(
                         items(visibleEntries, key = { "folder-${it.id}" }) { entry ->
                             FolderRow(
                                 entry = entry,
-                                colors = colors,
                                 enabled = !startBusy && !createBusy,
                                 onClick = { selectFolder(entry.path) },
                             )
@@ -496,8 +474,7 @@ fun SidebarProjectPickerSheet(
                     }
                 }
             }
-            NewThreadFloatingCtas(
-                colors = colors,
+            NewThreadActions(
                 sessionType = sessionType,
                 enabled =
                     !startBusy &&
@@ -514,16 +491,7 @@ fun SidebarProjectPickerSheet(
                         NewThreadSessionType.CloudOnly -> startCloudChat()
                     }
                 },
-                modifier =
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .zIndex(1f)
-                        .padding(
-                            start = 18.dp,
-                            end = 18.dp,
-                            bottom = NewThreadFloatingCtaBottomPadding,
-                        ),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp),
             )
         }
     }
@@ -540,19 +508,6 @@ private fun NewThreadHeader(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Box(
-            modifier = Modifier.fillMaxWidth(),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier =
-                    Modifier
-                        .width(42.dp)
-                        .height(5.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(colors.primaryText.copy(alpha = 0.78f)),
-            )
-        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Top,
@@ -571,11 +526,7 @@ private fun NewThreadHeader(
                         ),
                     color = colors.primaryText,
                 )
-                Text(
-                    text = stringResource(R.string.sidebar_project_picker_subtitle),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.secondaryText,
-                )
+
             }
             IconButton(
                 onClick = onCancel,
@@ -594,162 +545,23 @@ private fun NewThreadHeader(
 }
 
 @Composable
-private fun NewThreadStepper(
-    colors: SidebarColorPalette,
-    modifier: Modifier = Modifier,
-) {
-    val steps =
-        listOf(
-            stringResource(R.string.sidebar_project_picker_step_workspace),
-            stringResource(R.string.sidebar_project_picker_step_mode),
-            stringResource(R.string.sidebar_project_picker_step_launch),
-        )
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top,
-    ) {
-        steps.forEachIndexed { index, label ->
-            StepIndicator(
-                number = index + 1,
-                label = label,
-                active = index == 0,
-                colors = colors,
-                modifier = Modifier.weight(1f),
-            )
-            if (index < steps.lastIndex) {
-                Box(
-                    modifier =
-                        Modifier
-                            .weight(0.7f)
-                            .padding(top = 16.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(colors.border),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StepIndicator(
-    number: Int,
-    label: String,
-    active: Boolean,
-    colors: SidebarColorPalette,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Surface(
-            modifier = Modifier.size(34.dp),
-            shape = RoundedCornerShape(999.dp),
-            color = if (active) colors.primaryText else colors.surface,
-            border = BorderStroke(1.dp, if (active) colors.primaryText else colors.border),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = number.toString(),
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                    color = if (active) colors.background else colors.primaryText,
-                )
-            }
-        }
-        Text(
-            text = label,
-            style =
-                MaterialTheme.typography.labelMedium.copy(
-                    fontSize = 12.sp,
-                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                ),
-            color = if (active) colors.primaryText else colors.secondaryText,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
 private fun CurrentWorkspaceSection(
     workspace: NewThreadWorkspaceSummary?,
-    colors: SidebarColorPalette,
-    enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        SectionHeading(
-            title = "1. ${stringResource(R.string.sidebar_project_picker_current_workspace)}",
-            subtitle = stringResource(R.string.sidebar_project_picker_current_workspace_hint),
-            colors = colors,
-        )
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeading(stringResource(R.string.sidebar_project_picker_current_workspace))
         if (workspace == null) {
-            Text(
-                text = stringResource(R.string.sidebar_project_picker_browse_empty),
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.secondaryText,
-            )
+            Text(stringResource(R.string.sidebar_project_picker_browse_empty), style = MaterialTheme.typography.bodyMedium)
         } else {
-            Surface(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .border(1.dp, colors.border, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
-                color = colors.selectedRow,
-                tonalElevation = 1.dp,
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(11.dp),
-                ) {
-                    WorkspaceIcon(colors = colors)
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        Text(
-                            text = workspace.name,
-                            style =
-                                MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                ),
-                            color = colors.primaryText,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = workspace.path,
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            color = colors.secondaryText,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = workspace.metadata,
-                            style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
-                            color = colors.secondaryText,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    CheckBubble(colors = colors, selected = enabled)
-                }
-            }
+            ListItem(
+                modifier = Modifier.clip(MaterialTheme.shapes.medium),
+                headlineContent = { Text(workspace.name) },
+                supportingContent = { Text(workspace.path) },
+                overlineContent = { Text(workspace.metadata) },
+                leadingContent = { Icon(painterResource(LucideR.drawable.lucide_ic_laptop), null) },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            )
         }
     }
 }
@@ -768,9 +580,7 @@ private fun SessionTypeSelector(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SectionHeading(
-            title = "2. ${stringResource(R.string.sidebar_project_picker_session_type)}",
-            subtitle = stringResource(R.string.sidebar_project_picker_session_type_hint),
-            colors = colors,
+            title = stringResource(R.string.sidebar_project_picker_session_type),
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -781,7 +591,6 @@ private fun SessionTypeSelector(
                 body = stringResource(R.string.sidebar_project_picker_session_local_desc),
                 icon = LucideR.drawable.lucide_ic_laptop,
                 selected = selected == NewThreadSessionType.LocalWorkspace,
-                colors = colors,
                 enabled = enabled && !cloudBusy,
                 onClick = { onSelected(NewThreadSessionType.LocalWorkspace) },
                 modifier = Modifier.weight(1f),
@@ -791,7 +600,6 @@ private fun SessionTypeSelector(
                 body = stringResource(R.string.sidebar_project_picker_session_cloud_desc),
                 imageVector = Icons.Outlined.ChatBubbleOutline,
                 selected = selected == NewThreadSessionType.CloudOnly,
-                colors = colors,
                 enabled = enabled && !cloudBusy,
                 onClick = { onSelected(NewThreadSessionType.CloudOnly) },
                 modifier = Modifier.weight(1f),
@@ -810,56 +618,26 @@ private fun SessionModeCard(
     icon: Int? = null,
     imageVector: ImageVector? = null,
     selected: Boolean,
-    colors: SidebarColorPalette,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier =
-            modifier
-                .height(132.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .border(
-                    width = if (selected) 1.5.dp else 1.dp,
-                    color = if (selected) colors.primaryText else colors.border,
-                    shape = RoundedCornerShape(12.dp),
-                )
-                .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        color = if (selected) colors.selectedRow else Color.Transparent,
+        selected = selected,
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.heightIn(min = 112.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconBadge(
-                    icon = icon,
-                    imageVector = imageVector,
-                    colors = colors,
-                    selected = selected,
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                CheckBubble(colors = colors, selected = selected)
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (imageVector != null) Icon(imageVector, null) else if (icon != null) Icon(painterResource(icon), null)
+                Spacer(Modifier.weight(1f))
+                RadioButton(selected = selected, enabled = enabled, onClick = null)
             }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = colors.primaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 17.sp),
-                color = colors.secondaryText,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(body, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -901,9 +679,7 @@ private fun NewThreadPreviewSection(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SectionHeading(
-            title = "3. ${stringResource(R.string.sidebar_project_picker_preview_title)}",
-            subtitle = stringResource(R.string.sidebar_project_picker_preview_hint),
-            colors = colors,
+            title = stringResource(R.string.sidebar_project_picker_preview_title),
         )
         Surface(
             modifier =
@@ -1053,14 +829,13 @@ private fun BrowseWorkspaceSection(
             placeholderText = stringResource(R.string.sidebar_project_picker_search_hint),
         )
         if (quickLocations.isNotEmpty()) {
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 quickLocations.forEach { location ->
                     QuickLocationChip(
                         text = location.label,
-                        colors = colors,
                         enabled = enabled,
                         onClick = { onQuickLocation(location) },
                     )
@@ -1073,28 +848,11 @@ private fun BrowseWorkspaceSection(
 @Composable
 private fun QuickLocationChip(
     text: String,
-    colors: SidebarColorPalette,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier =
-            modifier
-                .clip(RoundedCornerShape(14.dp))
-                .border(1.dp, colors.border, RoundedCornerShape(14.dp))
-                .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        color = colors.surface,
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
-            style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
-            color = colors.secondaryText,
-            maxLines = 1,
-        )
-    }
+    AssistChip(onClick = onClick, enabled = enabled, modifier = modifier, label = { Text(text) })
 }
 
 @Composable
@@ -1107,104 +865,36 @@ private fun WorkspaceRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier =
-            modifier
-                .clip(RoundedCornerShape(10.dp))
-                .border(1.dp, if (selected) colors.primaryText else colors.border, RoundedCornerShape(10.dp))
-                .clickable(enabled = enabled && !busy, onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) colors.selectedRow else colors.surface,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            WorkspaceIcon(colors = colors)
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = workspace.name,
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
-                    color = colors.primaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = workspace.metadata,
-                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
-                    color = colors.secondaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+    ListItem(
+        modifier = modifier.selectable(selected, enabled = enabled && !busy, role = Role.RadioButton, onClick = onClick),
+        colors = ListItemDefaults.colors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.surface),
+        headlineContent = { Text(workspace.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(workspace.metadata, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingContent = { Icon(Icons.Outlined.Folder, null) },
+        trailingContent = {
+            when {
+                busy -> BusyIndicator(colors = colors)
+                selected -> RadioButton(selected = true, onClick = null)
+                else -> workspace.relativeTime?.let { Text(it) }
             }
-            if (busy) {
-                BusyIndicator(colors = colors)
-            } else if (selected) {
-                CheckBubble(colors = colors, selected = true, modifier = Modifier.size(22.dp))
-            } else {
-                workspace.relativeTime?.let { relative ->
-                    Text(
-                        text = relative,
-                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
-                        color = colors.mutedText,
-                        maxLines = 1,
-                    )
-                }
-            }
-        }
-    }
+        },
+    )
 }
 
 @Composable
 private fun FolderRow(
     entry: CodexProjectDirectoryEntry,
-    colors: SidebarColorPalette,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(enabled = enabled, onClick = onClick)
-                    .padding(horizontal = 8.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Folder,
-                contentDescription = null,
-                tint = colors.secondaryText,
-                modifier = Modifier.size(19.dp),
-            )
-            Text(
-                text = entry.name,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
-                color = colors.primaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = colors.mutedText,
-                modifier = Modifier.size(17.dp),
-            )
-        }
-        HorizontalDivider(
-            color = colors.border,
-            thickness = 0.5.dp,
-            modifier = Modifier.padding(start = 37.dp),
-        )
-    }
+    ListItem(
+        modifier = modifier.clickable(enabled = enabled, onClick = onClick),
+        headlineContent = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingContent = { Icon(Icons.Outlined.Folder, null) },
+        trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+    )
 }
 
 @Composable
@@ -1269,8 +959,7 @@ private fun CreateFolderField(
 }
 
 @Composable
-private fun NewThreadFloatingCtas(
-    colors: SidebarColorPalette,
+private fun NewThreadActions(
     sessionType: NewThreadSessionType,
     enabled: Boolean,
     busy: Boolean,
@@ -1278,110 +967,26 @@ private fun NewThreadFloatingCtas(
     onCreate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Surface(
-            modifier =
-                Modifier
-                    .height(NewThreadFloatingCtaHeight)
-                    .weight(0.82f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, colors.border, RoundedCornerShape(12.dp))
-                    .clickable(enabled = !busy, onClick = onCancel),
-            shape = RoundedCornerShape(12.dp),
-            color = colors.background,
-            shadowElevation = 6.dp,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = stringResource(android.R.string.cancel),
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    color = colors.primaryText,
-                )
-            }
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedButton(onClick = onCancel, enabled = !busy, modifier = Modifier.weight(.82f)) {
+            Text(stringResource(android.R.string.cancel))
         }
-        Surface(
-            modifier =
-                Modifier
-                    .height(NewThreadFloatingCtaHeight)
-                    .weight(1.18f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(enabled = enabled && !busy, onClick = onCreate),
-            shape = RoundedCornerShape(12.dp),
-            color = if (enabled) colors.primaryText else colors.surface,
-            shadowElevation = 6.dp,
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                if (busy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = colors.background,
-                        trackColor = colors.secondaryText,
-                    )
-                } else {
-                    if (sessionType == NewThreadSessionType.CloudOnly) {
-                        Icon(
-                            imageVector = Icons.Outlined.ChatBubbleOutline,
-                            contentDescription = null,
-                            tint = if (enabled) colors.background else colors.secondaryText,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Filled.Add,
-                            contentDescription = null,
-                            tint = if (enabled) colors.background else colors.secondaryText,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(9.dp))
-                    Text(
-                        text = stringResource(R.string.sidebar_project_picker_start_selected),
-                        style =
-                            MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                            ),
-                        color = if (enabled) colors.background else colors.secondaryText,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+        Button(onClick = onCreate, enabled = enabled && !busy, modifier = Modifier.weight(1.18f)) {
+            if (busy) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+            } else {
+                Icon(if (sessionType == NewThreadSessionType.CloudOnly) Icons.Outlined.ChatBubbleOutline else Icons.Filled.Add,
+                    null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.sidebar_project_picker_start_selected))
             }
         }
     }
 }
 
 @Composable
-private fun SectionHeading(
-    title: String,
-    subtitle: String,
-    colors: SidebarColorPalette,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = colors.primaryText,
-        )
-        Text(
-            text = subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.secondaryText,
-        )
-    }
+private fun SectionHeading(title: String) {
+    Text(title, style = MaterialTheme.typography.titleMedium)
 }
 
 @Composable
@@ -1419,87 +1024,6 @@ private fun SectionLabel(
                     color = colors.secondaryText,
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun IconBadge(
-    icon: Int? = null,
-    imageVector: ImageVector? = null,
-    colors: SidebarColorPalette,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.size(38.dp),
-        shape = RoundedCornerShape(999.dp),
-        color = if (selected) colors.primaryText else colors.surface,
-        border = BorderStroke(1.dp, colors.border),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (imageVector != null) {
-                Icon(
-                    imageVector = imageVector,
-                    contentDescription = null,
-                    tint = if (selected) colors.background else colors.primaryText,
-                    modifier = Modifier.size(20.dp),
-                )
-            } else if (icon != null) {
-                Icon(
-                    painter = painterResource(icon),
-                    contentDescription = null,
-                    tint = if (selected) colors.background else colors.primaryText,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CheckBubble(
-    colors: SidebarColorPalette,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.size(28.dp),
-        shape = RoundedCornerShape(999.dp),
-        color = if (selected) colors.primaryText else Color.Transparent,
-        border = BorderStroke(1.dp, if (selected) colors.primaryText else colors.border),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (selected) {
-                Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = null,
-                    tint = colors.background,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorkspaceIcon(
-    colors: SidebarColorPalette,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.size(32.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = colors.background,
-        border = androidx.compose.foundation.BorderStroke(1.dp, colors.border),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = Icons.Outlined.Computer,
-                contentDescription = null,
-                tint = colors.secondaryText,
-                modifier = Modifier.size(18.dp),
-            )
         }
     }
 }

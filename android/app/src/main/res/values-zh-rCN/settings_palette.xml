@@ -1,0 +1,19 @@
+<resources>
+    <string name="settings_palette">主题配色</string>
+    <string name="settings_accent_chat">对话灰</string>
+    <string name="settings_accent_blue">晴蓝</string>
+    <string name="settings_accent_green">松绿</string>
+    <string name="settings_accent_violet">雾紫</string>
+    <string name="settings_accent_selected">已选中</string>
+    <string name="settings_week_left">本周剩余</string>
+    <string name="settings_manage_accounts">管理账号</string>
+    <string name="settings_environment">工作环境</string>
+    <string name="settings_no_quota">尚未查询</string>
+    <string name="settings_app_hub">关于与诊断</string>
+    <string name="palette_system">跟随系统配色</string>
+    <string name="palette_custom">自选种子色</string>
+    <string name="palette_hex">十六进制颜色 · RRGGBB</string>
+    <string name="palette_preview">主题预览</string>
+    <string name="settings_verifying_identity">Codex 尚未确认此授权</string>
+    <string name="settings_checking_authorization">等待 Codex 确认</string>
+</resources>

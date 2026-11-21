@@ -1,0 +1,10 @@
+<resources>
+    <style name="RemodexDialogMotion" parent="@android:style/Animation.Dialog">
+        <item name="android:windowEnterAnimation">@anim/remodex_dialog_enter</item>
+        <item name="android:windowExitAnimation">@anim/remodex_dialog_exit</item>
+    </style>
+    <style name="RemodexPreviewMotion" parent="@android:style/Animation.Dialog">
+        <item name="android:windowEnterAnimation">@anim/remodex_preview_enter</item>
+        <item name="android:windowExitAnimation">@anim/remodex_preview_exit</item>
+    </style>
+</resources>

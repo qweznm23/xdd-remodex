@@ -1,0 +1,15 @@
+<resources>
+    <string name="session_info_title">会话信息</string>
+    <string name="session_info_environment">运行环境</string>
+    <string name="session_info_directory">工作目录</string>
+    <string name="session_info_expanded">已展开</string>
+    <string name="session_info_collapsed">已收起</string>
+    <string name="session_info_continue_desktop">在电脑上继续</string>
+    <string name="session_info_quota">本周剩余</string>
+    <string name="session_info_context">上下文已用</string>
+    <string name="session_info_approval">等待授权</string>
+    <string name="session_info_refresh">刷新会话</string>
+    <string name="session_info_connecting">正在连接…</string>
+    <string name="session_info_reset_days">%1$d 天后重置</string>
+    <string name="session_info_reset_days_hours">%1$d 天 %2$d 小时后重置</string>
+</resources>

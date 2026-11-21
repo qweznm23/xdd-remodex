@@ -11,6 +11,49 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 
 class OlderHistoryProgressTest {
+    @Test fun openingToolHeavyTurnFindsAndDisplaysConversationWithoutAGesture() = runTest {
+        fun activity(i: Int) = row(i).copy(role = CodexMessageRole.system,
+            kind = if (i % 2 == 0) CodexMessageKind.commandExecution else CodexMessageKind.thinking)
+        var rows = (91..120).map(::activity)
+        var page = state("90")
+        val cursors = mutableListOf<Int>()
+        loadInitialConversationContent(1, { rows }, { page }) {
+            val last = page.olderCursor!!.stringValue!!.toInt()
+            cursors += last
+            if (last == 0) {
+                rows = listOf(row(0)) + rows
+                page = state("earlier-turn")
+            } else {
+                rows = (last - 29..last).map(::activity) + rows
+                page = state((last - 30).toString())
+            }
+        }
+        assertEquals(listOf(90, 60, 30, 0), cursors)
+        assertEquals("earlier-turn", page.olderCursor?.stringValue)
+        assertEquals("row-0", rows[timelineWindowStartIndex(rows, null, 48, true)].id)
+        assertEquals("row-0", rows[timelineWindowStartIndex(rows, "row-91", 48, false)].id)
+        loadInitialConversationContent(1, { rows }, { page }) { fail("cached conversation should open immediately") }
+    }
+
+    @Test fun openingWithoutDialoguePreservesRpcFailureAndHonorsRefreshAndEof() = runTest {
+        val cause = IOException("original RPC failure")
+        var page = state("next")
+        assertSame(cause, assertFailsWith<IOException> {
+            loadInitialConversationContent(1, { emptyList() }, { page }) { throw cause }
+        })
+        var calls = 0
+        assertFailsWith<CancellationException> {
+            loadInitialConversationContent(1, { emptyList() }, { page }) {
+                calls++
+                page = page.copy(initialLoadRevision = 2)
+            }
+        }
+        assertEquals(1, calls)
+        loadInitialConversationContent(1, { emptyList() }, { state(null) }) { fail("end of history") }
+        assertFailsWith<IllegalStateException> {
+            loadInitialConversationContent(1, { emptyList() }, { state("repeated") }) { }
+        }
+    }
     private fun row(i: Int) = CodexMessage(id = "row-$i", threadId = "thread", role = CodexMessageRole.user,
         text = "$i", itemId = "item-$i", turnId = "turn", createdAt = Instant.EPOCH)
     private fun state(cursor: String?) = ThreadHistoryPaginationState(olderCursor = cursor?.let(JSONValue::Str), initialTurnsLoaded = true, initialLoadRevision = 1, usesItemPagination = true)

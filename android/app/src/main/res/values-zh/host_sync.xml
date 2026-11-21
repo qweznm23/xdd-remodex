@@ -1,0 +1,16 @@
+<resources>
+    <string name="revert_preview_title">撤销预览</string>
+    <string name="revert_preview_ready">可以撤销以下更改。</string>
+    <string name="revert_preview_blocked">当前无法撤销这些更改。</string>
+    <string name="revert_preview_staged">暂存的文件：%1$s</string>
+    <string name="goal_state_active">进行中</string>
+    <string name="goal_state_paused">已暂停</string>
+    <string name="goal_state_done">已完成</string>
+    <string name="goal_inline">目标 · %1$s · %2$s</string>
+    <string name="mac_keep_awake">保持 Mac 唤醒</string>
+    <string name="mac_bridge_update">更新 XDD 桥接</string>
+    <string name="mac_update_scheduled">重启已安排，重连后可核对版本。</string>
+    <string name="mac_update_latest">已是最新公开版本。</string>
+    <string name="mac_update_managed">从手机更新需要将 XDD 正式包作为 Mac 服务运行。</string>
+    <string name="mac_update_confirm">检查 XDD 正式版并校验安装包。发现新版本时将重启桥接，连接会短暂中断。</string>
+</resources>

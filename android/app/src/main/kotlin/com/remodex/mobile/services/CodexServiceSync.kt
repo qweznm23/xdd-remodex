@@ -14,18 +14,22 @@ import kotlinx.coroutines.sync.withLock
 /**
  * Mirrors [CodexService+Sync.swift](../../../../../../../../CodexMobile/CodexMobile/Services/CodexService+Sync.swift).
  */
-internal suspend fun CodexService.refreshThreadsInternal() = threadRefreshMutex.withLock {
-    if (!sessionReady) return@withLock
+internal suspend fun CodexService.refreshThreadsInternal(
+    deletedOnHost: String? = null,
+    expectedGeneration: Long = connectionGeneration,
+) = threadRefreshMutex.withLock {
+    if (!sessionReady || expectedGeneration != connectionGeneration) return@withLock
     val connection = webSocket
     val device = resolvedMacScopedPersistenceDeviceId()
     val sidebarRequest = codexSidebar.begin(device)
+    var deletionScope: String? = null
     var sidebarSnapshot: com.remodex.mobile.core.model.CodexSidebarState? = null
     val statusSnapshot = synchronized(runningTurnStateLock) { threadStatusRefreshGuard.begin() }
     try {
         val locallyDeleted = loadScopedLocallyDeletedThreadIds()
         val locallyArchived = loadScopedLocallyArchivedThreadIds()
         val fetched =
-            try { ThreadListSync.fetchSnapshot(this).also { sidebarSnapshot = it.sidebar }.threads }
+            try { ThreadListSync.fetchSnapshot(this).also { sidebarSnapshot = it.sidebar; deletionScope = it.deletionScope }.threads }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 val rpc = (error as? CodexServiceError.RpcFailure)?.rpcError
@@ -42,15 +46,13 @@ internal suspend fun CodexService.refreshThreadsInternal() = threadRefreshMutex.
                 throw error
             }
                 .filter { it.id !in locallyDeleted }
-                .map { thread ->
-                    if (thread.id in locallyArchived && thread.syncState == CodexThreadSyncState.live) {
-                        thread.copy(syncState = CodexThreadSyncState.archivedLocal)
-                    } else {
-                        thread
-                    }
-                }
+
         currentCoroutineContext().ensureActive()
         if (!sessionReady || webSocket !== connection || resolvedMacScopedPersistenceDeviceId() != device) return@withLock
+        for (thread in fetched) {
+            if (thread.id in locallyArchived && thread.syncState == CodexThreadSyncState.live)
+                setScopedLocallyArchivedThreadId(thread.id, false)
+        }
         val serverThreads = fetched.map { incoming -> applyAuthoritativeProjectPathToServerThread(incoming) }
         synchronized(runningTurnStateLock) {
             for (thread in serverThreads) {
@@ -77,14 +79,16 @@ internal suspend fun CodexService.refreshThreadsInternal() = threadRefreshMutex.
                     _runningTurnIdByThread.value.keys +
                     _protectedRunningFallbackThreadIds.value
             ).filter { it !in locallyDeleted && it !in locallyArchived }.toSet()
+        val observedMissing = catalogVerifier.observe(deletionScope, serverThreads)
         val merged =
             mergeFetchedThreadsPreservingLocalRows(
                 fetched = serverThreads,
                 previous = _threads.value,
-                preserveLocalThreadIds = preserveLocalThreadIds,
+                preserveLocalThreadIds = (preserveLocalThreadIds + observedMissing).filterNot { it == deletedOnHost }.toSet(),
                 persistedRename = { tid -> persistedThreadRename(tid) },
             )
         publishThreads(merged)
+        catalogVerifier.checkMissing(this, observedMissing)
         sidebarSnapshot?.let { codexSidebar.apply(sidebarRequest, it) }
 
     } finally {
@@ -94,6 +98,9 @@ internal suspend fun CodexService.refreshThreadsInternal() = threadRefreshMutex.
 }
 
 internal fun CodexService.publishThreads(threads: List<CodexThread>) {
+    if (supportsSettingsSync) for (row in threads) row.runtimeSettings?.let {
+        threadRuntimeSelection.confirm(row.id, ThreadModelSelection(row.model, row.reasoningEffort), it)
+    }
     _threads.value = threads
     syncActiveThreadRuntimeSelection()
     if (isApplyingMacScopedState) return

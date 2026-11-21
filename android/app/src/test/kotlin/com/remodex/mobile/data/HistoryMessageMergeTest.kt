@@ -275,7 +275,7 @@ class HistoryMessageMergeTest {
                     kind = CodexMessageKind.chat,
                     text = "look",
                     turnId = "turn-phone",
-                    itemId = "user-input",
+                    itemId = "turn-phone:input",
                     isStreaming = false,
                     createdAt = Instant.parse("2024-01-01T00:00:01Z"),
                     attachments = listOf(firstAttachment),

@@ -37,7 +37,8 @@ internal fun AuthSwitchProgress(state: AuthProfilesState, connected: Boolean) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val profile = state.switchProfileId
-                Text(if (profile == null) stringResource(R.string.auth_progress_title)
+                Text(if (profile == null && state.restartHistory.firstOrNull()?.kind == "manual") stringResource(R.string.auth_restart_action)
+                    else if (profile == null) stringResource(R.string.auth_progress_title)
                     else stringResource(R.string.auth_progress_target, profile),
                     Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                 if (started != null) {
@@ -46,7 +47,7 @@ internal fun AuthSwitchProgress(state: AuthProfilesState, connected: Boolean) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (phase != SwitchPhase.Submit) ProgressRow(stringResource(R.string.auth_progress_selected), done = true)
+            if (phase != SwitchPhase.Submit && state.restartHistory.isEmpty()) ProgressRow(stringResource(R.string.auth_progress_selected), done = true)
             if (phase == SwitchPhase.Verify) ProgressRow(stringResource(R.string.auth_progress_restored), done = true)
             val current = when (phase) {
                 SwitchPhase.Submit -> stringResource(R.string.auth_progress_submit)

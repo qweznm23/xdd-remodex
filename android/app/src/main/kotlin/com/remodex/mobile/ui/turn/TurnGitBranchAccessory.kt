@@ -1,10 +1,6 @@
 package com.remodex.mobile.ui.turn
 
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,19 +8,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -37,9 +33,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,10 +44,7 @@ import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
 import com.remodex.mobile.data.GitBranchDisplaySummary
 import com.remodex.mobile.data.GitBranchPickerRules
-import com.remodex.mobile.ui.theme.AgentLightColors
 import com.remodex.mobile.ui.theme.RemodexModalBottomSheet
-import com.remodex.mobile.ui.theme.isAgentLightChrome
-import com.remodex.mobile.ui.sidebar.remodexFlatControlChrome
 
 /** Read-only Git branch / worktree snapshot for the active thread (J.7c), with optional picker. */
 sealed class GitBranchPaneState {
@@ -504,80 +497,17 @@ private fun BranchPickerRow(
     disabled: Boolean,
     onClick: () -> Unit,
 ) {
-    val badgeText =
-        when (badgeElsewhere) {
-            ElsewhereBadgeKind.OpenElsewhere -> stringResource(R.string.git_branch_badge_open_elsewhere)
-            null -> null
-        }
-
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(enabled = !disabled, onClick = onClick)
-                .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = branch,
-                style = MaterialTheme.typography.bodyMedium,
-                color =
-                    if (disabled) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-            )
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (isCurrent) {
-                    BranchBadge(stringResource(R.string.git_branch_badge_current))
-                }
-
-                if (isDefault) {
-                    BranchBadge(stringResource(R.string.git_branch_badge_default))
-                }
-
-                if (badgeText != null) {
-                    BranchBadge(badgeText)
-                }
-            }
-        }
-
-        if (isCurrent) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint =
-                    if (disabled) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-            )
-        }
-    }
-}
-
-@Composable
-private fun BranchBadge(text: String) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-    }
+    val badges = listOfNotNull(
+        if (isCurrent) stringResource(R.string.git_branch_badge_current) else null,
+        if (isDefault) stringResource(R.string.git_branch_badge_default) else null,
+        if (badgeElsewhere == ElsewhereBadgeKind.OpenElsewhere) stringResource(R.string.git_branch_badge_open_elsewhere) else null,
+    )
+    ListItem(
+        headlineContent = { Text(branch) },
+        supportingContent = if (badges.isEmpty()) null else { { Text(badges.joinToString(" · ")) } },
+        trailingContent = { RadioButton(selected = isCurrent, onClick = null, enabled = !disabled) },
+        modifier = Modifier.selectable(isCurrent, enabled = !disabled, role = Role.RadioButton, onClick = onClick),
+    )
 }
 
 @Composable
@@ -601,81 +531,18 @@ private fun LoadedGitBranchPill(
     onOpenPicker: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val unknown = stringResource(R.string.git_branch_placeholder_unknown)
-    val branchName = summary.currentBranch ?: unknown
-    val chrome = isAgentLightChrome()
-    val pillShape = RoundedCornerShape(50)
-
-    val outlineMod: Modifier = Modifier.remodexFlatControlChrome(pillShape)
-
-    val glyphTint =
-        if (chrome) {
-            AgentLightColors.IconMuted
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
-
-    val labelTint =
-        if (chrome) {
-            AgentLightColors.TextSecondary
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
-
-    val clickableMod =
-        if (branchPickerEnabled) {
-            Modifier.clickable(onClick = onOpenPicker)
-        } else {
-            Modifier
-        }
-
-    BoxWithConstraints(modifier = modifier) {
-        Box(
-            modifier =
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .widthIn(max = maxWidth)
-                    .then(outlineMod)
-                    .then(clickableMod),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                Icon(
-                    painter = painterResource(LucideR.drawable.lucide_ic_git_fork),
-                    contentDescription = null,
-                    modifier = Modifier.size(ComposerFootnoteIconDp),
-                    tint = glyphTint,
-                )
-
-                Text(
-                    text = branchName,
-                    modifier = Modifier.widthIn(max = 124.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = labelTint,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    softWrap = false,
-                )
-
-                if (isSwitchingBranch) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(ComposerFootnoteIconDp),
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Icon(
-                        painter = painterResource(LucideR.drawable.lucide_ic_chevron_down),
-                        contentDescription = null,
-                        modifier = Modifier.size(ComposerFootnoteIconDp),
-                        tint = glyphTint,
-                    )
-                }
-            }
-        }
-    }
+    val branch = summary.currentBranch ?: stringResource(R.string.git_branch_placeholder_unknown)
+    AssistChip(
+        onClick = onOpenPicker,
+        enabled = branchPickerEnabled,
+        modifier = modifier,
+        label = { Text(branch, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingIcon = { Icon(painterResource(LucideR.drawable.lucide_ic_git_fork), null, Modifier.size(16.dp)) },
+        trailingIcon = {
+            if (isSwitchingBranch) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            else Icon(painterResource(LucideR.drawable.lucide_ic_chevron_down), null, Modifier.size(16.dp))
+        },
+    )
 }
 
 @Composable
@@ -722,15 +589,6 @@ private fun LoadedGitBranchStrip(
             summary.branchesCheckedOutElsewhere.size,
         )
 
-    val stripModifier =
-        if (branchPickerEnabled) {
-            modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenPicker)
-        } else {
-            modifier.fillMaxWidth()
-        }
-
     val hintRunning = stringResource(R.string.git_branch_picker_disabled_running)
     val hintSwitching = stringResource(R.string.git_branch_switching_inline)
 
@@ -741,11 +599,8 @@ private fun LoadedGitBranchStrip(
             else -> null
         }
 
-    Column(modifier = stripModifier) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        ) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        OutlinedCard(onClick = onOpenPicker, enabled = branchPickerEnabled, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,

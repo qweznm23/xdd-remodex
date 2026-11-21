@@ -1,0 +1,16 @@
+<resources>
+    <string name="session_info_title">Conversation info</string>
+    <string name="session_info_environment">Runtime environment</string>
+    <string name="session_info_directory">Working directory</string>
+    <string name="session_info_expanded">Expanded</string>
+    <string name="session_info_collapsed">Collapsed</string>
+    <string name="session_info_continue_desktop">Continue on computer</string>
+    <string name="session_info_quota">Weekly remaining</string>
+    <string name="session_info_context">Context used</string>
+    <string name="session_info_approval">Awaiting approval</string>
+    <string name="session_info_refresh">Refresh chat</string>
+    <string name="session_info_connecting">Connecting…</string>
+    <string name="session_info_token_counts">%1$s / %2$s tokens</string>
+    <string name="session_info_reset_days">Resets in %1$d d</string>
+    <string name="session_info_reset_days_hours">Resets in %1$d d %2$d h</string>
+</resources>

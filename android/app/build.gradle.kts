@@ -1,9 +1,9 @@
+import com.android.build.api.variant.HostTestBuilder
 import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
@@ -43,7 +43,7 @@ android {
         minSdk = 26
         targetSdk = 36
 
-        versionCode = 92
+        versionCode = 156
         versionName = "0.1.7"
         buildConfigField("String", "APP_UPDATE_URL", quotedBuildConfigString(configValue("APP_UPDATE_URL")))
         buildConfigField("boolean", "BETA_ENABLED", betaEnabled.toString())
@@ -67,10 +67,10 @@ android {
 
     buildTypes {
         debug {
-            versionNameSuffix = "-ws-fix75"
+            versionNameSuffix = "-ws-fix139"
         }
         release {
-            versionNameSuffix = "-ws-fix75"
+            versionNameSuffix = "-ws-fix139"
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
@@ -89,10 +89,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
         buildConfig = true
@@ -105,9 +101,13 @@ android {
     }
 }
 
-// R8 removes the Picnic engine and its Lowmc readers, but Java resources are not
-// resource-shrunk. Exclude only their three tables, and fail packaging if a reader returns.
 androidComponents {
+    // Keep the release JVM test suite used by android-check and release packaging.
+    beforeVariants(selector().withBuildType("release")) { variant ->
+        variant.hostTests.getValue(HostTestBuilder.UNIT_TEST_TYPE).enable = true
+    }
+
+    // R8 removes the Picnic readers. Verify their removal before excluding the Java resources.
     onVariants(selector().withBuildType("release")) { variant ->
         variant.packaging.resources.excludes.addAll(
             listOf("L1", "L3", "L5").map { "org/bouncycastle/pqc/crypto/picnic/lowmc$it.bin.properties" },
@@ -167,7 +167,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
+    // The BOM pins 1.4.0, where MaterialExpressiveTheme is internal.
+    implementation("androidx.compose.material3:material3:1.5.0-alpha14")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.15.0")
@@ -206,7 +207,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlin:kotlin-test:2.2.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.2.10")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")

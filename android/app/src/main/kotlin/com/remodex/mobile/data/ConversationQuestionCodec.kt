@@ -88,10 +88,13 @@ internal object ConversationQuestionCodec {
     fun displayReply(text: String): String {
         val replies = replies(text)
         if (replies.isEmpty()) return text
-        val body = replies.joinToString("\n\n") { "${it.question}\n${it.answer}" }
+        val body = displayAnswers(replies.map { it.answer })
         val start = text.indexOf(OPEN); val end = text.indexOf(CLOSE, start) + CLOSE.length
         return text.take(start) + body + text.substring(end)
     }
+
+    fun displayAnswers(answers: List<String>): String = answers.singleOrNull()
+        ?: answers.mapIndexed { index, answer -> "${index + 1}. $answer" }.joinToString("\n")
 
     fun replyText(request: CodexStructuredUserInputRequest, answers: Map<String, List<String>>): String {
         require(request.source == "async")
@@ -109,7 +112,8 @@ internal object ConversationQuestionCodec {
         if (messages.none { it.structuredUserInputRequest != null }) return messages
         val answers = messages.asSequence().filter { it.role == CodexMessageRole.user && it.deliveryState == CodexMessageDeliveryState.confirmed }
             .flatMap { replies(it.text).asSequence() }.associate { it.id to listOf(it.answer) }
-        val lastUser = messages.indexOfLast { it.role == CodexMessageRole.user && it.deliveryState == CodexMessageDeliveryState.confirmed }
+        val lastUser = messages.indexOfLast { it.role == CodexMessageRole.user && !it.isRpcAnswerReceipt &&
+            it.deliveryState == CodexMessageDeliveryState.confirmed }
         val latestReplyIds = messages.getOrNull(lastUser)?.let { replies(it.text).map { reply -> reply.id }.toSet() }.orEmpty()
         return messages.mapIndexed { index, message ->
             val request = message.structuredUserInputRequest ?: return@mapIndexed message
@@ -124,3 +128,5 @@ internal object ConversationQuestionCodec {
         }
     }
 }
+
+internal val CodexMessage.isRpcAnswerReceipt: Boolean get() = id.startsWith("rpc-answer:")

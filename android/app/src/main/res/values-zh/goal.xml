@@ -1,0 +1,18 @@
+<resources>
+    <string name="thread_goal">会话目标</string>
+    <string name="goal_retry">重试</string>
+    <string name="goal_status">%1$s · 已用 %2$d Token</string>
+    <string name="goal_objective">目标</string>
+    <string name="goal_budget">Token 预算（选填）</string>
+    <string name="goal_resume">继续目标</string>
+    <string name="goal_pause">暂停目标</string>
+    <string name="goal_clear">清除目标</string>
+    <string name="goal_save">保存</string>
+    <string name="review_denied">审批已拒绝</string>
+    <string name="review_running">正在审查操作</string>
+    <string name="review_stopped">审查已结束</string>
+    <string name="stream_interrupted">模型回复中断</string>
+    <string name="review_details">审查详情</string>
+    <string name="review_allow_retry">批准本次重试</string>
+    <string name="stream_continue">继续这段回复</string>
+</resources>

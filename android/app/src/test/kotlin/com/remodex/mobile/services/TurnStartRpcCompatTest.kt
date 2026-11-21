@@ -2,6 +2,7 @@ package com.remodex.mobile.services
 
 import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.CodexAccessMode
+import com.remodex.mobile.core.model.CodexImageAttachment
 import com.remodex.mobile.core.model.CodexPluginMetadata
 import com.remodex.mobile.core.model.CodexTurnMention
 import com.remodex.mobile.core.model.CodexTurnSkillMention
@@ -13,6 +14,20 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TurnStartRpcCompatTest {
+
+    @Test
+    fun uploadedImagesUseNativePathsAndLegacyDraftsStillSendInline() {
+        val original = "/computer/remodex_uploads/attachment/screenshot #1.png"
+        val inline = "data:image/jpeg;base64,AA=="
+        val input = makeTurnInputPayload("", listOf(
+            CodexImageAttachment(thumbnailBase64JPEG = "", sourceURL = original, remotePath = original),
+            CodexImageAttachment(thumbnailBase64JPEG = "", payloadDataURL = inline),
+        ), "image_url")
+        assertEquals(listOf(
+            JSONValue.Obj(mapOf("type" to JSONValue.Str("localImage"), "path" to JSONValue.Str(original))),
+            JSONValue.Obj(mapOf("type" to JSONValue.Str("image"), "image_url" to JSONValue.Str(inline))),
+        ), input)
+    }
 
     @Test
     fun serviceTierBridgeUpdateCommand_matchesIosRuntimeCompatPrompt() {

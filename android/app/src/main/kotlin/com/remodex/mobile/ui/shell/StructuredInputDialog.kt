@@ -1,26 +1,25 @@
 package com.remodex.mobile.ui.shell
 
-import androidx.compose.foundation.BorderStroke
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.mapSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import com.remodex.mobile.ui.shared.DialogConfirmButton
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.PendingStructuredInputQuestion
@@ -28,6 +27,7 @@ import com.remodex.mobile.core.model.PendingStructuredInputRequest
 import kotlinx.coroutines.launch
 
 /** One form: all questions, choices and free text are directly available in this dialog. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun StructuredInputDialog(
     request: PendingStructuredInputRequest,
@@ -58,77 +58,81 @@ internal fun StructuredInputDialog(
             } finally { busy = false }
         }
     }
-    Dialog(onDismissRequest = { if (!busy) onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = !busy, dismissOnClickOutside = !busy)) {
-        Box(Modifier.fillMaxWidth().imePadding().padding(horizontal = 20.dp, vertical = 16.dp), contentAlignment = Alignment.Center) {
-            Surface(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().heightIn(max = LocalConfiguration.current.screenHeightDp.dp * .85f),
-                shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(stringResource(R.string.questions_title), style = MaterialTheme.typography.titleMedium)
-                            if (request.questions.size > 1) Text(stringResource(R.string.questions_count, request.questions.size),
-                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.size(36.dp)) {
-                            Icon(Icons.Outlined.Close, stringResource(R.string.questions_close), modifier = Modifier.size(20.dp))
-                        }
+    RemodexAlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.questions_title))
+                    if (request.questions.size > 1) {
+                        Text(stringResource(R.string.questions_count, request.questions.size), style = MaterialTheme.typography.labelMedium)
                     }
-                    Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                        request.questions.forEachIndexed { index, question ->
-                            key(question.id) {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Text((if (request.questions.size > 1) "${index + 1}. " else "") + question.question.ifBlank { question.header },
-                                        style = MaterialTheme.typography.titleSmall)
-                                    question.options.forEach { option ->
+                }
+                IconButton(onClick = onDismiss, enabled = !busy) {
+                    Icon(Icons.Outlined.Close, stringResource(R.string.questions_close))
+                }
+            }
+        },
+        text = {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                request.questions.forEachIndexed { index, question ->
+                    key(question.id) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text((if (request.questions.size > 1) "${index + 1}. " else "") + question.question.ifBlank { question.header },
+                                style = MaterialTheme.typography.titleSmall)
+                            if (question.options.isNotEmpty()) {
+                                Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    question.options.forEachIndexed { index, option ->
                                         val chosen = selected[question.id] == option.label && typed[question.id].isNullOrBlank()
-                                        Surface(onClick = { selected[question.id] = option.label; typed[question.id] = "" }, enabled = !busy,
-                                            shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(),
-                                            color = if (chosen) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-                                            border = BorderStroke(1.dp, if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
-                                            Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                RadioButton(selected = chosen, onClick = null, enabled = !busy, modifier = Modifier.size(20.dp))
-                                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                                    Text(option.label, style = MaterialTheme.typography.bodyMedium)
-                                                    option.description?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                                                }
-                                            }
-                                        }
+                                        SegmentedListItem(
+                                            selected = chosen,
+                                            onClick = {
+                                                selected[question.id] = option.label
+                                                typed[question.id] = ""
+                                            },
+                                            enabled = !busy,
+                                            shapes = ListItemDefaults.segmentedShapes(index, question.options.size),
+                                            supportingContent = option.description?.takeIf { it.isNotBlank() }?.let { { Text(it) } },
+                                            leadingContent = { RadioButton(selected = chosen, onClick = null, enabled = !busy) },
+                                        ) { Text(option.label) }
                                     }
-                                    OutlinedTextField(value = typed[question.id].orEmpty(),
-                                        onValueChange = { typed[question.id] = it; selected.remove(question.id) },
-                                        enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
-                                        placeholder = { Text(stringResource(R.string.questions_input_hint), style = MaterialTheme.typography.bodyMedium) },
-                                        minLines = 2, maxLines = 5,
-                                        visualTransformation = if (shouldMaskStructuredInput(question)) PasswordVisualTransformation() else VisualTransformation.None,
-                                        keyboardOptions = KeyboardOptions(capitalization = if (shouldMaskStructuredInput(question)) KeyboardCapitalization.None else KeyboardCapitalization.Sentences,
-                                            autoCorrectEnabled = !shouldMaskStructuredInput(question)))
                                 }
                             }
-                        }
-                    }
-                    failure?.let { error ->
-                        Column {
-                            Text(stringResource(R.string.questions_send_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { showDetails = !showDetails }) { Text(stringResource(R.string.questions_error_details)) }
-                            if (showDetails) Text(error.message ?: error.javaClass.name, style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.heightIn(max = 100.dp).verticalScroll(rememberScrollState()))
-                        }
-                    }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        onSkip?.let { skip -> TextButton(enabled = !busy && !submitted, onClick = { perform("skip", skip) }) { Text(stringResource(R.string.questions_skip)) } }
-                        Spacer(Modifier.weight(1f))
-                        Button(enabled = !busy && !submitted && payload != null, onClick = { payload?.let { perform("submit") { onSubmit(it) } } },
-                            shape = RoundedCornerShape(14.dp), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)) {
-                            if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            else Text(stringResource(R.string.structured_input_send))
+                            OutlinedTextField(value = typed[question.id].orEmpty(),
+                                onValueChange = { typed[question.id] = it; selected.remove(question.id) },
+                                enabled = !busy, modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text(stringResource(R.string.questions_input_hint), style = MaterialTheme.typography.bodyMedium) },
+                                minLines = 1, maxLines = 5,
+                                visualTransformation = if (shouldMaskStructuredInput(question)) PasswordVisualTransformation() else VisualTransformation.None,
+                                keyboardOptions = KeyboardOptions(capitalization = if (shouldMaskStructuredInput(question)) KeyboardCapitalization.None else KeyboardCapitalization.Sentences,
+                                    autoCorrectEnabled = !shouldMaskStructuredInput(question)))
                         }
                     }
                 }
+                failure?.let { error ->
+                    Column {
+                        Text(stringResource(R.string.questions_send_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { showDetails = !showDetails }) { Text(stringResource(R.string.questions_error_details)) }
+                        if (showDetails) Text(error.message ?: error.javaClass.name, style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.heightIn(max = 100.dp).verticalScroll(rememberScrollState()))
+                    }
+                }
             }
-        }
-    }
+        },
+        dismissButton = onSkip?.let { skip ->
+            { TextButton(enabled = !busy && !submitted, onClick = { perform("skip", skip) }) {
+                Text(stringResource(R.string.questions_skip))
+            } }
+        },
+        confirmButton = {
+            DialogConfirmButton(enabled = !busy && !submitted && payload != null,
+                onClick = { payload?.let { perform("submit") { onSubmit(it) } } }) {
+                if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = LocalContentColor.current, strokeWidth = 2.dp)
+                else Text(stringResource(R.string.structured_input_send))
+            }
+        },
+    )
 }
 
 internal fun buildStructuredInputAnswersPayload(

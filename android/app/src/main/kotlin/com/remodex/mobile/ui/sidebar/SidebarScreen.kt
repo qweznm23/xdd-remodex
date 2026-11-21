@@ -1,8 +1,14 @@
 package com.remodex.mobile.ui.sidebar
+import com.remodex.mobile.ui.theme.singleOwnerPageEntry
 
-import com.remodex.mobile.core.config.FeatureFlags
-import androidx.compose.foundation.clickable
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
+import android.util.Log
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.Surface
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,22 +20,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.ui.zIndex
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.PushPin
+import com.remodex.mobile.ui.shared.DialogConfirmButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -37,30 +44,30 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
+import com.remodex.mobile.core.config.FeatureFlags
 import com.remodex.mobile.core.model.CodexThread
+import com.remodex.mobile.core.model.CodexThreadSyncState
 import com.remodex.mobile.core.model.GitWorktreeChangeTransferMode
 import com.remodex.mobile.core.model.TurnGitPreflightOperation
 import com.remodex.mobile.core.model.TurnGitPreflightPolicy
@@ -76,16 +83,10 @@ import com.remodex.mobile.data.loadGitBranchesWithStatus
 import com.remodex.mobile.ui.draft.NewChatDraftSource
 import com.remodex.mobile.ui.shared.ThreadRenameDialog
 import com.remodex.mobile.ui.theme.RemodexDropdownMenu
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import android.util.Log
-import androidx.compose.material.icons.outlined.PushPin
-import androidx.compose.material.icons.outlined.History
+import kotlinx.coroutines.launch
 
 private const val SIDEBAR_THREADS_PER_GROUP = 5
-private val SidebarFloatingBarHeight = 44.dp
 private val SidebarFloatingBarBottomPadding = 12.dp
 
 @Composable
@@ -101,6 +102,7 @@ fun SidebarScreen(
     onThreadSelected: suspend () -> Unit = {},
     modifier: Modifier = Modifier,
     dotAnimationsEnabled: Boolean = true,
+    drawerOpen: Boolean = true,
 ) {
     val threads by repository.threads.collectAsStateWithLifecycle()
     val pendingQuestions by repository.pendingStructuredInputRequests.collectAsStateWithLifecycle()
@@ -114,13 +116,33 @@ fun SidebarScreen(
     val activityState by repository.sidebarActivity.collectAsStateWithLifecycle()
     val activity = activityState.takeIf { it.deviceId == pinDeviceId }
     val recentIds = activity?.recentThreadIds.orEmpty()
-    val listState = rememberLazyListState()
-    val hasVisibleRunningThread by remember(listState, runningTurnByThread, protectedRunningFallback) {
+    var listTab by rememberSaveable(pinDeviceId) { mutableStateOf(SidebarListTab.Home) }
+    var projectId by rememberSaveable(pinDeviceId) { mutableStateOf<String?>(null) }
+    val homeList = rememberLazyListState()
+    val projectList = rememberLazyListState()
+    val detailList = androidx.compose.runtime.key(projectId) { rememberLazyListState() }
+    var searching by rememberSaveable(pinDeviceId) { mutableStateOf(false) }
+    var query by rememberSaveable(pinDeviceId) { mutableStateOf("") }
+    fun closeSearch() { query = ""; searching = false }
+    val inProject = listTab == SidebarListTab.Projects && projectId != null
+    BackHandler(enabled = drawerOpen && (searching || inProject)) {
+        if (searching) closeSearch() else projectId = null
+    }
+    val searchResults = rememberLazyListState()
+    val listState = when {
+        searching -> searchResults
+        inProject -> detailList
+        listTab == SidebarListTab.Projects -> projectList
+        else -> homeList
+    }
+    val animateRunningRows by remember(listState, dotAnimationsEnabled, runningTurnByThread, protectedRunningFallback) {
         derivedStateOf {
-            listState.layoutInfo.visibleItemsInfo.any { item ->
-                val threadId = (item.key as? String)?.substringAfter("/thread/", "")
-                threadId in runningTurnByThread || threadId in protectedRunningFallback
-            }
+            dotAnimationsEnabled && !listState.isScrollInProgress &&
+                (runningTurnByThread.isNotEmpty() || protectedRunningFallback.isNotEmpty()) &&
+                listState.layoutInfo.visibleItemsInfo.any { item ->
+                    val threadId = (item.key as? String)?.substringAfter("/thread/", "")
+                    threadId in runningTurnByThread || threadId in protectedRunningFallback
+                }
         }
     }
     val scope = rememberCoroutineScope()
@@ -134,12 +156,10 @@ fun SidebarScreen(
     var pinBusy by remember(pinDeviceId) { mutableStateOf(false) }
     var pinError by remember(pinDeviceId) { mutableStateOf<String?>(null) }
     var readError by remember(pinDeviceId) { mutableStateOf<String?>(null) }
-    var actionsThread by remember(pinDeviceId) { mutableStateOf<CodexThread?>(null) }
     fun togglePin(thread: CodexThread) {
         val device = pinDeviceId ?: return
         if (pinBusy || !pinsLoaded) return
         val pinned = thread.id !in pinnedIds
-        actionsThread = null
         pinBusy = true
         pinError = null
         scope.launch {
@@ -152,7 +172,7 @@ fun SidebarScreen(
         }
     }
 
-    var query by remember { mutableStateOf("") }
+
     var newChatBusy by remember { mutableStateOf(false) }
     var newChatError by remember { mutableStateOf<String?>(null) }
     var showProjectPicker by remember { mutableStateOf(false) }
@@ -178,42 +198,51 @@ fun SidebarScreen(
     var deleteLocalGroupError by remember { mutableStateOf<String?>(null) }
     var collapsedGroupIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var expandedGroupIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var listTab by remember { mutableStateOf(SidebarListTab.Projects) }
 
-    val filtered =
-        remember(threads, query) {
-            filterThreadsForSidebar(threads, query)
+
+    var projectlessRoots by remember(repository, pinDeviceId) { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(repository, pinDeviceId, ready) {
+        if (ready) try {
+            val result = repository.sendRequest("project/projectlessRoots", com.remodex.mobile.core.model.JSONValue.Obj(emptyMap()))
+            projectlessRoots = requireNotNull(result.result?.objectValue?.get("roots")?.arrayValue) {
+                "project/projectlessRoots missing roots"
+            }.map { requireNotNull(it.stringValue) { "Invalid projectless root" } }
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (error: Exception) { Log.w("RemodexSidebar", "project/projectlessRoots", error) }
+    }
+    val workingIds = remember(runningTurnByThread, protectedRunningFallback) {
+        runningTurnByThread.keys + protectedRunningFallback
+    }
+    val live = remember(threads) { threads.filter { it.syncState == CodexThreadSyncState.live } }
+    val questionIds = remember(pendingQuestions) { pendingQuestions.values.mapTo(hashSetOf()) { it.threadId } }
+    val projects = if (listTab == SidebarListTab.Projects) remember(live, projectlessRoots) {
+        SidebarThreadGrouping.makeGroups(live, projectlessRoots = projectlessRoots)
+    } else emptyList()
+    val selectedProject = projects.firstOrNull { it.id == projectId }
+    LaunchedEffect(projectId, selectedProject, ready, projects) {
+        if (inProject && ready && projects.isNotEmpty() && selectedProject == null) projectId = null
+    }
+    val directory = !searching && listTab == SidebarListTab.Projects && !inProject
+    val visibleGroups = when {
+        searching -> remember(live, query) {
+            val matches = SidebarThreadGrouping.sortThreadsByRecentActivity(filterThreadsForSidebar(live, query))
+            listOf(SidebarThreadGroup("__search__", "", SidebarThreadGroupKind.Chats, java.time.Instant.EPOCH, null, matches))
         }
-    val groups =
-        remember(filtered, expandedGroupIds, pinnedIds, recentIds, query) {
-            SidebarThreadGrouping.applyGroupLimit(
-                groups = SidebarThreadGrouping.makeGroups(
-                    threads = filtered, pinnedThreadIds = pinnedIds,
-                    recentThreadIds = if (query.isBlank()) recentIds else emptyList(),
-                    includeEmptyShortcuts = query.isBlank(),
-                ),
-                limit = SIDEBAR_THREADS_PER_GROUP,
-                expandedGroupIds = expandedGroupIds,
-            )
-        }
-    val visibleGroups =
-        remember(groups, listTab, query) {
-            val nonArchived = groups.filter { it.kind != SidebarThreadGroupKind.Archived }
-            if (query.trim().isNotEmpty()) {
-                nonArchived
-            } else {
-                when (listTab) {
-                    SidebarListTab.Projects ->
-                        nonArchived.filter { it.kind == SidebarThreadGroupKind.Project || it.kind == SidebarThreadGroupKind.Pinned || it.kind == SidebarThreadGroupKind.Recent }
-                    SidebarListTab.Chats ->
-                        nonArchived.filter { it.kind == SidebarThreadGroupKind.Chats || it.kind == SidebarThreadGroupKind.Pinned || it.kind == SidebarThreadGroupKind.Recent }
-                }
+        inProject -> listOfNotNull(selectedProject)
+        directory -> projects
+        else -> {
+            val groups = remember(live, pinnedIds, recentIds, workingIds) {
+                sidebarHomeGroups(live, pinnedIds, recentIds, workingIds)
+            }
+            remember(groups, expandedGroupIds) {
+                SidebarThreadGrouping.applyGroupLimit(groups, SIDEBAR_THREADS_PER_GROUP, expandedGroupIds)
             }
         }
-    val collapsibleGroupIds =
-        remember(visibleGroups) {
-            visibleGroups.filter { it.kind.canCollapse }.map { it.id }.toSet()
-        }
+    }
+    val home = !searching && listTab == SidebarListTab.Home
+    val collapsibleGroupIds = remember(home, visibleGroups) {
+        if (home) visibleGroups.mapTo(mutableSetOf()) { it.id } else emptySet()
+    }
 
     fun openNewChatDraft(
         source: NewChatDraftSource,
@@ -304,8 +333,34 @@ fun SidebarScreen(
         }
     }
 
+    val indexEntries = remember(directory, projects) {
+        if (directory) projectIndexEntries(projects) else emptyList()
+    }
+    val showIndex by remember(listState, indexEntries) {
+        derivedStateOf { indexEntries.size > 1 && (listState.canScrollBackward || listState.canScrollForward) }
+    }
+    var projectIndexOpen by rememberSaveable(pinDeviceId) { mutableStateOf(false) }
+    val allCollapsed = collapsibleGroupIds.isNotEmpty() && collapsedGroupIds.containsAll(collapsibleGroupIds)
+    fun toggleGroups() {
+        collapsedGroupIds = if (allCollapsed) collapsedGroupIds - collapsibleGroupIds else collapsedGroupIds + collapsibleGroupIds
+        expandedGroupIds = expandedGroupIds - collapsibleGroupIds
+    }
+    var refreshing by remember(repository) { mutableStateOf(false) }
+    var refreshFailure by remember(repository) { mutableStateOf<String?>(null) }
+    fun refreshList() {
+        if (refreshing) return
+        refreshing = true
+        refreshFailure = null
+        scope.launch {
+            try { repository.refreshThreads() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                Log.e("RemodexSidebar", "operation=refreshThreads stage=refresh_list", e)
+                refreshFailure = e.localizedMessage ?: e.javaClass.simpleName
+            } finally { refreshing = false }
+        }
+    }
     val bridgeConnected = conn is ConnectionState.Connected
-    val listBottomInset = SidebarFloatingBarHeight + SidebarFloatingBarBottomPadding + 8.dp
 
     Column(
         modifier =
@@ -313,10 +368,26 @@ fun SidebarScreen(
                 .fillMaxHeight()
                 .fillMaxWidth()
                 .background(sidebarColors.background)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 12.dp),
     ) {
-        SidebarBrandHeader(
+        if (searching) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                SidebarSearchField(query, { query = it; searchResults.requestScrollToItem(0) }, modifier = Modifier.weight(1f), focusOnOpen = true)
+                IconButton(onClick = ::closeSearch) {
+                    Icon(Icons.Filled.Close, stringResource(android.R.string.cancel))
+                }
+            }
+        } else SidebarBrandHeader(
             colors = sidebarColors,
+            navigation = {
+                if (inProject) Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { projectId = null }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.drawer_back_projects))
+                    }
+                    Text(selectedProject?.let { if (it.kind == SidebarThreadGroupKind.Chats) stringResource(R.string.sidebar_tab_chats) else it.label }.orEmpty(),
+                        style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                } else SidebarListTabRow(listTab, onSelected = { listTab = it })
+            },
             onMoreMenu =
                 SidebarMoreMenuCallbacks(
                     onNewChat = {
@@ -327,32 +398,34 @@ fun SidebarScreen(
                     },
                     onQuickCloudChat = { startQuickCloudChat() },
                     onOpenArchivedChats = onOpenArchivedChats,
-                    onRefreshThreads = { scope.launch { runCatching { repository.refreshThreads() } } },
+                    onRefreshThreads = ::refreshList,
                     onOpenConnections = onOpenMyDevices,
+                    toggleGroups = if (collapsibleGroupIds.isEmpty()) null else ::toggleGroups,
+                    allCollapsed = allCollapsed,
+                    openIndex = if (indexEntries.size > 1) { { projectIndexOpen = true } } else null,
                 ),
             onOpenSettings = onOpenSettings,
-            onOpenMyDevices = onOpenMyDevices,
+            onSearch = { searchResults.requestScrollToItem(0); searching = true },
         )
-        SidebarSearch(
-            query = query,
-            onQueryChange = { query = it },
-            modifier = Modifier.padding(bottom = 12.dp),
-        )
-        SidebarListTabRow(
-            selected = listTab,
-            onSelected = { listTab = it },
-            onToggleCollapseAll = {
-                collapsedGroupIds =
-                    if (!collapsedGroupIds.containsAll(collapsibleGroupIds)) {
-                        collapsedGroupIds + collapsibleGroupIds
-                    } else {
-                        collapsedGroupIds - collapsibleGroupIds
-                    }
-                expandedGroupIds = expandedGroupIds - collapsibleGroupIds
-            },
-            colors = sidebarColors,
-            modifier = Modifier.padding(bottom = 10.dp),
-        )
+        if (searching) {
+            val count = visibleGroups.single().totalCount
+            val summary = when {
+                query.isBlank() -> stringResource(R.string.drawer_all_count, count)
+                count > 0 -> stringResource(R.string.drawer_matches, count)
+                else -> stringResource(R.string.drawer_no_matches)
+            }
+            Text(summary, Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelMedium, color = sidebarColors.secondaryText)
+        } else if (ready && visibleGroups.isEmpty()) {
+            Text(stringResource(R.string.drawer_empty), Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodyMedium, color = sidebarColors.secondaryText)
+        }
+        if (refreshing) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+        refreshFailure?.let { error ->
+            Text(stringResource(R.string.drawer_refresh_failed, error), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = ::refreshList) { Text(stringResource(R.string.workspace_text_preview_retry)) }
+        }
         readError?.let { error ->
             Text(stringResource(R.string.sidebar_mark_read_failed, error), color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -388,23 +461,28 @@ fun SidebarScreen(
                     .weight(1f)
                     .fillMaxWidth(),
         ) {
-            SidebarRunAnimation(enabled = dotAnimationsEnabled && hasVisibleRunningThread && !listState.isScrollInProgress) {
+            SidebarRunAnimation(enabled = animateRunningRows) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = listBottomInset),
+                modifier = Modifier.fillMaxSize().padding(end = if (showIndex) 44.dp else 0.dp)
+                    .singleOwnerPageEntry(if (inProject) 2 else listTab.ordinal) { from, to -> to < from },
+                flingBehavior = rememberSessionFling(),
+                contentPadding = PaddingValues(bottom = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 visibleGroups.forEach { group ->
-                item(key = "hdr-${group.id}", contentType = "section-header") {
+                if (home || directory) item(key = "hdr-${group.id}", contentType = "section-header") {
                     val isCollapsed = group.id in collapsedGroupIds
                         RepoHeader(
                             group = group,
+                            modifier = Modifier.padding(horizontal = 4.dp),
                             newChatBusy = newChatBusy,
                             worktreeChatBusy = worktreeChatBusy,
                             colors = sidebarColors,
+                            directory = directory,
                             collapsed = isCollapsed,
                             onToggleCollapse = {
+                            if (directory) projectId = group.id else {
                             // Reopening a section starts with its compact preview again.
                             expandedGroupIds = expandedGroupIds - group.id
                             collapsedGroupIds =
@@ -413,6 +491,7 @@ fun SidebarScreen(
                                 } else {
                                     collapsedGroupIds + group.id
                                 }
+                            }
                         },
                         onNewChatInProject =
                             if (group.kind == SidebarThreadGroupKind.Project && group.projectPath != null) {
@@ -462,17 +541,9 @@ fun SidebarScreen(
                         onOpenArchivedChats = null,
                     )
                 }
-                if (group.id !in collapsedGroupIds && group.threads.isEmpty() && (group.kind == SidebarThreadGroupKind.Pinned || group.kind == SidebarThreadGroupKind.Recent)) {
-                    item(key = "empty-${group.id}", contentType = "empty-section") {
-                        Text(
-                            stringResource(if (group.kind == SidebarThreadGroupKind.Pinned) R.string.sidebar_pinned_empty else R.string.sidebar_recent_empty),
-                            style = MaterialTheme.typography.bodySmall, color = sidebarColors.mutedText,
-                            modifier = Modifier.padding(start = 30.dp, end = 12.dp, bottom = 12.dp),
-                        )
-                    }
-                }
+                if (directory || (home && group.id in collapsedGroupIds)) return@forEach
                 items(
-                    items = if (group.id in collapsedGroupIds) emptyList() else group.visibleThreads,
+                    items = group.visibleThreads,
                     key = { "${group.id}/thread/${it.id}" },
                     contentType = { "thread" },
                 ) { thread ->
@@ -497,6 +568,7 @@ fun SidebarScreen(
                         scope.launch {
                             repository.setActiveThreadId(thread.id)
                             onThreadSelected()
+                            if (searching) closeSearch()
                         }
                         Unit
                     }
@@ -508,36 +580,38 @@ fun SidebarScreen(
                         deleteLocalTarget = thread
                         deleteLocalError = null
                     }
-                    if (isActive) {
-                        ActiveChatRow(
+                    Box {
+                        val shortcut = searching || home
+                        // Keep the popup out of untouched rows. After opening it owns its exit animation.
+                        var menuExpanded by remember(pinDeviceId, thread.id) { mutableStateOf<Boolean?>(null) }
+                        SidebarThreadRow(
                             thread = thread,
+                            selected = isActive,
+                            projectLabel = if (shortcut && !SidebarThreadGrouping.isProjectless(thread, projectlessRoots)) thread.projectDisplayName else null,
                             isRunning = isRunning,
                             isUnread = activity?.threads?.get(thread.id)?.unread == true,
-                            needsAnswer = pendingQuestions.values.any { it.threadId == thread.id },
+                            needsAnswer = thread.id in questionIds,
                             hasQuestions = thread.id in questionThreads,
                             onAnswerRequest = { questionDialogThreadId = thread.id },
                             activeMetadata = activeChatMetadata,
+                            colors = sidebarColors,
                             onSelect = onSelectThread,
-                            onRenameRequest = onRenameThread,
-                            onDeleteLocalRequest = onDeleteThread,
-                            onActionsRequest = { actionsThread = thread },
+                            onActionsRequest = { menuExpanded = true },
                         )
-                    } else {
-                        ChatRow(
-                            thread = thread,
-                            isRunning = isRunning,
-                            isUnread = activity?.threads?.get(thread.id)?.unread == true,
-                            needsAnswer = pendingQuestions.values.any { it.threadId == thread.id },
-                            hasQuestions = thread.id in questionThreads,
-                            onAnswerRequest = { questionDialogThreadId = thread.id },
-                            onSelect = onSelectThread,
-                            onRenameRequest = onRenameThread,
-                            onDeleteLocalRequest = onDeleteThread,
-                            onActionsRequest = { actionsThread = thread },
-                        )
+                        if (menuExpanded != null) RemodexDropdownMenu(
+                            expanded = menuExpanded == true,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(text = { Text(stringResource(if (thread.id in pinnedIds) R.string.sidebar_unpin_thread else R.string.sidebar_pin_thread)) },
+                                enabled = pinsLoaded && !pinBusy, onClick = { menuExpanded = false; togglePin(thread) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.sidebar_thread_rename)) },
+                                onClick = { menuExpanded = false; onRenameThread() })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.sidebar_thread_delete_local), color = MaterialTheme.colorScheme.error) },
+                                onClick = { menuExpanded = false; onDeleteThread() })
+                        }
                     }
                 }
-                if (group.id !in collapsedGroupIds &&
+                if (home &&
                     (
                         group.hiddenCount > 0 ||
                             (group.id in expandedGroupIds && group.totalCount > SIDEBAR_THREADS_PER_GROUP)
@@ -547,7 +621,6 @@ fun SidebarScreen(
                         ShowAllRow(
                             expanded = group.id in expandedGroupIds,
                             hiddenCount = group.hiddenCount,
-                            colors = sidebarColors,
                             onClick = {
                                 expandedGroupIds =
                                     if (group.id in expandedGroupIds) {
@@ -562,14 +635,25 @@ fun SidebarScreen(
             }
             }
             }
-            SidebarFloatingActionBar(
+            if (showIndex) {
+                ProjectIndex(indexEntries, listState, sidebarColors, Modifier.align(Alignment.CenterEnd),
+                    openPicker = { projectIndexOpen = true })
+            }
+            if (projectIndexOpen) ProjectIndexPicker(indexEntries, onDismiss = { projectIndexOpen = false }) { entry ->
+                projectId = entry.id
+                projectIndexOpen = false
+            }
+        }
+        if (!searching) SidebarFloatingActionBar(
                 terminalEnabled = true,
                 chatEnabled = ready && !worktreeChatBusy,
                 chatBusy = newChatBusy,
                 onTerminal = onOpenTerminal,
                 onChat = {
-                    val target =
-                        sidebarFloatingChatDraftTarget(
+                    val target = if (inProject) {
+                        val path = selectedProject?.projectPath
+                        SidebarFloatingChatDraftTarget(if (path == null) NewChatDraftSource.generalChat else NewChatDraftSource.folderChat, path)
+                    } else sidebarFloatingChatDraftTarget(
                             listTab = listTab,
                             activeThreadId = activeId,
                             threads = threads,
@@ -579,36 +663,8 @@ fun SidebarScreen(
                         preferredProjectPath = target.preferredProjectPath,
                     )
                 },
-                colors = sidebarColors,
-                modifier =
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .zIndex(1f)
-                        .padding(bottom = SidebarFloatingBarBottomPadding),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = SidebarFloatingBarBottomPadding),
             )
-        }
-        actionsThread?.let { thread ->
-            AlertDialog(
-                onDismissRequest = { actionsThread = null },
-                title = { Text(thread.displayTitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                text = {
-                    Column {
-                        TextButton(onClick = { togglePin(thread) }, enabled = pinsLoaded && !pinBusy) {
-                            Text(stringResource(if (thread.id in pinnedIds) R.string.sidebar_unpin_thread else R.string.sidebar_pin_thread))
-                        }
-                        TextButton(onClick = { actionsThread = null; renameTarget = thread; renameError = null }) {
-                            Text(stringResource(R.string.sidebar_thread_rename))
-                        }
-                        TextButton(onClick = { actionsThread = null; deleteLocalTarget = thread; deleteLocalError = null }) {
-                            Text(stringResource(R.string.sidebar_thread_delete_local))
-                        }
-                    }
-                },
-                confirmButton = { TextButton(onClick = { actionsThread = null }) { Text(stringResource(R.string.sidebar_pin_close)) } },
-            )
-        }
-
         ThreadRenameDialog(
             visible = renameTarget != null,
             initialName = renameTarget?.displayTitle.orEmpty(),
@@ -641,7 +697,7 @@ fun SidebarScreen(
             },
         )
         deleteLocalTarget?.let { target ->
-            AlertDialog(
+            RemodexAlertDialog(
                 onDismissRequest = {
                     if (!deleteLocalBusy) {
                         deleteLocalTarget = null
@@ -662,7 +718,8 @@ fun SidebarScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(
+                    DialogConfirmButton(
+                        destructive = true,
                         enabled = !deleteLocalBusy,
                         onClick = {
                             deleteLocalBusy = true
@@ -686,7 +743,6 @@ fun SidebarScreen(
                                 } else {
                                     stringResource(R.string.sidebar_thread_delete_local_confirm)
                                 },
-                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 },
@@ -704,7 +760,7 @@ fun SidebarScreen(
             )
         }
         archiveGroupTarget?.let { group ->
-            AlertDialog(
+            RemodexAlertDialog(
                 onDismissRequest = {
                     if (!archiveGroupBusy) {
                         archiveGroupTarget = null
@@ -725,7 +781,7 @@ fun SidebarScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(
+                    DialogConfirmButton(
                         enabled = !archiveGroupBusy,
                         onClick = {
                             archiveGroupBusy = true
@@ -737,6 +793,8 @@ fun SidebarScreen(
                                 }.onSuccess {
                                     archiveGroupTarget = null
                                 }.onFailure { e ->
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    android.util.Log.e("RemodexArchive", "thread/archive", e)
                                     archiveGroupError = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
                                 }
                                 archiveGroupBusy = false
@@ -767,7 +825,7 @@ fun SidebarScreen(
             )
         }
         deleteLocalGroupTarget?.let { group ->
-            AlertDialog(
+            RemodexAlertDialog(
                 onDismissRequest = {
                     if (!deleteLocalGroupBusy) {
                         deleteLocalGroupTarget = null
@@ -788,7 +846,8 @@ fun SidebarScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(
+                    DialogConfirmButton(
+                        destructive = true,
                         enabled = !deleteLocalGroupBusy,
                         onClick = {
                             deleteLocalGroupBusy = true
@@ -813,7 +872,6 @@ fun SidebarScreen(
                                 } else {
                                     stringResource(R.string.sidebar_project_delete_local_confirm)
                                 },
-                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 },
@@ -877,7 +935,7 @@ fun SidebarScreen(
                 pendingWorktreeChat = null
             }
 
-            AlertDialog(
+            RemodexAlertDialog(
                 onDismissRequest = { dismissWorktreeAlert() },
                 title = { Text(alert.title) },
                 text = { Text(alert.message) },
@@ -973,7 +1031,7 @@ internal fun sidebarFloatingChatDraftTarget(
     threads: List<CodexThread>,
 ): SidebarFloatingChatDraftTarget =
     when (listTab) {
-        SidebarListTab.Chats ->
+        SidebarListTab.Home ->
             SidebarFloatingChatDraftTarget(
                 source = NewChatDraftSource.generalChat,
                 preferredProjectPath = null,
@@ -988,6 +1046,7 @@ internal fun sidebarFloatingChatDraftTarget(
 @Composable
 private fun RepoHeader(
     group: SidebarThreadGroup,
+    modifier: Modifier,
     newChatBusy: Boolean,
     worktreeChatBusy: Boolean,
     colors: SidebarColorPalette,
@@ -996,155 +1055,142 @@ private fun RepoHeader(
     onArchiveProjectGroup: (() -> Unit)? = null,
     onDeleteLocalGroup: (() -> Unit)? = null,
     onOpenArchivedChats: (() -> Unit)? = null,
+    directory: Boolean,
     collapsed: Boolean = false,
     onToggleCollapse: (() -> Unit)? = null,
 ) {
-    var showProjectMenu by remember { mutableStateOf(false) }
+    var showProjectMenu by remember(group.id) { mutableStateOf<Boolean?>(null) }
     val hasMenuActions =
         onNewChatInProject != null ||
             onNewWorktreeInProject != null ||
             onArchiveProjectGroup != null ||
             onDeleteLocalGroup != null
-    val canCollapse = group.kind.canCollapse
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 44.dp)
-                .padding(top = 10.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
+    val canCollapse = !directory
+    val disclosure = stringResource(if (collapsed) R.string.sidebar_state_collapsed else R.string.sidebar_state_expanded)
+
+    Box(modifier) {
         Row(
             modifier =
                 Modifier
-                    .weight(1f)
-                    .then(
-                        if (onOpenArchivedChats != null) {
-                            Modifier.clickable { onOpenArchivedChats() }
-                        } else if (canCollapse) {
-                            Modifier.clickable { onToggleCollapse?.invoke() }
-                        } else {
-                            Modifier
-                        },
-                    ),
+                    .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Icon(
-                imageVector = group.leadingIcon(),
-                contentDescription = null,
-                tint = colors.primaryText,
-                modifier = Modifier.size(18.dp),
-            )
-            Text(
-                text = when (group.kind) {
-                    SidebarThreadGroupKind.Pinned -> stringResource(R.string.sidebar_pinned_group)
-                    SidebarThreadGroupKind.Recent -> stringResource(R.string.sidebar_recent_group)
-                    else -> group.label
-                },
-                style = MaterialTheme.typography.titleMedium.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
-                color = colors.primaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (canCollapse) {
-                Icon(
-                    imageVector =
-                        if (collapsed) Icons.AutoMirrored.Filled.KeyboardArrowRight
-                        else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = colors.mutedText,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
-        if (hasMenuActions) {
-            Box {
-                IconButton(
-                    onClick = { showProjectMenu = true },
-                    enabled = !newChatBusy && !worktreeChatBusy,
-                    modifier = Modifier.size(34.dp),
-                ) {
-                    if (newChatBusy || worktreeChatBusy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Outlined.Edit,
-                            contentDescription = stringResource(R.string.sidebar_project_actions_cd),
-                            tint = colors.mutedText,
-                            modifier = Modifier.size(18.dp),
-                        )
+            Row(
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .heightIn(min = if (directory) 60.dp else 48.dp)
+                        .then(if (canCollapse) Modifier.semantics { stateDescription = disclosure } else Modifier)
+                        .combinedClickable(
+                            onClick = { if (onOpenArchivedChats != null) onOpenArchivedChats() else onToggleCollapse?.invoke() },
+                            onLongClickLabel = stringResource(R.string.sidebar_project_actions_cd),
+                            onLongClick = if (hasMenuActions && !newChatBusy && !worktreeChatBusy) ({ showProjectMenu = true }) else null,
+                        ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (directory) Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant) {
+                    Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Icon(group.leadingIcon(), null, Modifier.size(18.dp)) }
+                }
+                Column(Modifier.weight(1f)) {
+                    val label = when {
+                        directory && group.kind == SidebarThreadGroupKind.Chats -> stringResource(R.string.sidebar_tab_chats)
+                        directory -> group.label
+                        group.kind == SidebarThreadGroupKind.Pinned -> stringResource(R.string.session_pinned)
+                        group.kind == SidebarThreadGroupKind.Working -> stringResource(R.string.drawer_working)
+                        group.kind == SidebarThreadGroupKind.Updated -> stringResource(R.string.drawer_updated)
+                        else -> stringResource(R.string.session_recent)
+                    }
+                    Text(label, style = if (directory) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelLarge,
+                        color = if (directory) colors.primaryText else colors.secondaryText,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (directory && group.projectPath != null) {
+                        Text(group.projectPath, style = MaterialTheme.typography.labelSmall, color = colors.mutedText,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                RemodexDropdownMenu(
-                    expanded = showProjectMenu,
-                    onDismissRequest = { showProjectMenu = false },
-                ) {
-                    onNewChatInProject?.let { action ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.sidebar_new_chat)) },
-                            onClick = {
-                                showProjectMenu = false
-                                action()
-                            },
-                        )
-                    }
-                    onNewWorktreeInProject?.let { action ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.sidebar_new_managed_worktree_chat)) },
-                            onClick = {
-                                showProjectMenu = false
-                                action()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    painter = painterResource(LucideR.drawable.lucide_ic_git_branch),
-                                    contentDescription = null,
-                                )
-                            },
-                        )
-                    }
-                    onArchiveProjectGroup?.let { action ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.sidebar_project_archive_menu)) },
-                            onClick = {
-                                showProjectMenu = false
-                                action()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Outlined.Archive,
-                                    contentDescription = null,
-                                )
-                            },
-                        )
-                    }
-                    onDeleteLocalGroup?.let { action ->
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    stringResource(R.string.sidebar_thread_delete_local),
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                            onClick = {
-                                showProjectMenu = false
-                                action()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                        )
-                    }
+                Text(group.totalCount.toString(), style = MaterialTheme.typography.labelMedium, color = colors.mutedText)
+                if (directory) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = colors.mutedText)
+                if (canCollapse) {
+                    val angle by androidx.compose.animation.core.animateFloatAsState(
+                        if (collapsed) -90f else 0f, androidx.compose.animation.core.tween(250,
+                            easing = androidx.compose.animation.core.CubicBezierEasing(.215f, .61f, .355f, 1f)), label = "project disclosure")
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = colors.mutedText,
+                        modifier = Modifier.size(18.dp).rotate(angle),
+                    )
+                }
+            }
+            if (newChatBusy || worktreeChatBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        }
+        if (hasMenuActions && showProjectMenu != null) {
+            RemodexDropdownMenu(
+                expanded = showProjectMenu == true,
+                onDismissRequest = { showProjectMenu = false },
+            ) {
+                onNewChatInProject?.let { action ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.sidebar_new_chat)) },
+                        onClick = {
+                            showProjectMenu = false
+                            action()
+                        },
+                    )
+                }
+                onNewWorktreeInProject?.let { action ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.sidebar_new_managed_worktree_chat)) },
+                        onClick = {
+                            showProjectMenu = false
+                            action()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(LucideR.drawable.lucide_ic_git_branch),
+                                contentDescription = null,
+                            )
+                        },
+                    )
+                }
+                onArchiveProjectGroup?.let { action ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.sidebar_project_archive_menu)) },
+                        onClick = {
+                            showProjectMenu = false
+                            action()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Archive,
+                                contentDescription = null,
+                            )
+                        },
+                    )
+                }
+                onDeleteLocalGroup?.let { action ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(R.string.sidebar_thread_delete_local),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                        onClick = {
+                            showProjectMenu = false
+                            action()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Delete,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                    )
                 }
             }
         }
@@ -1155,36 +1201,13 @@ private fun RepoHeader(
 private fun ShowAllRow(
     expanded: Boolean,
     hiddenCount: Int,
-    colors: SidebarColorPalette,
     onClick: () -> Unit,
 ) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
-                .heightIn(min = 36.dp)
-                .padding(start = 30.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            text =
-                if (expanded) {
-                    stringResource(R.string.sidebar_group_show_less)
-                } else {
-                    stringResource(R.string.sidebar_group_show_more, hiddenCount)
-                },
-            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
-            color = colors.mutedText,
-        )
-        if (!expanded) {
-            Icon(
-                imageVector = Icons.Filled.KeyboardArrowDown,
-                contentDescription = null,
-                tint = colors.mutedText,
-                modifier = Modifier.size(16.dp),
-            )
+    Box(Modifier.fillMaxWidth().padding(start = 18.dp)) {
+        TextButton(onClick = onClick) {
+            Text(if (expanded) stringResource(R.string.sidebar_group_show_less)
+                else stringResource(R.string.sidebar_group_show_more, hiddenCount))
+            if (!expanded) Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(18.dp))
         }
     }
 }
@@ -1192,7 +1215,7 @@ private fun ShowAllRow(
 private fun SidebarThreadGroup.leadingIcon(): ImageVector =
     when (kind) {
         SidebarThreadGroupKind.Pinned -> Icons.Outlined.PushPin
-        SidebarThreadGroupKind.Recent -> Icons.Outlined.History
+        SidebarThreadGroupKind.Recent, SidebarThreadGroupKind.Updated, SidebarThreadGroupKind.Working -> Icons.Outlined.History
         SidebarThreadGroupKind.Archived -> Icons.Outlined.Archive
         SidebarThreadGroupKind.Chats -> Icons.Outlined.ChatBubbleOutline
         SidebarThreadGroupKind.Project -> {

@@ -1,6 +1,5 @@
 package com.remodex.mobile.ui.turn
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,9 +13,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -26,8 +25,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
+import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.data.TurnSubagentAgentPresentation
 import com.remodex.mobile.data.TurnTimelineRichContentCache
 import com.remodex.mobile.ui.theme.RemodexGitAddition
@@ -46,70 +45,58 @@ internal fun TurnSubagentActionCard(
             agentCount > 0 -> "Spawning $agentCount agent${if (agentCount == 1) "" else "s"}"
             else -> stringResource(R.string.turn_timeline_kind_subagent)
         }
-    var isExpanded by remember(message.id, preview.rawText) { mutableStateOf(true) }
-    var expandedAgentThreadIds by remember(message.id, preview.rawText) { mutableStateOf(emptySet<String>()) }
+    var isExpanded by remember(message.id) { mutableStateOf(true) }
+    var expandedAgentThreadIds by remember(message.id) { mutableStateOf(emptySet<String>()) }
 
     Column(
         modifier =
             modifier
                 .fillMaxWidth()
                 .padding(vertical = 1.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        SubagentHeaderRow(
-            heading = preview.headline.ifBlank { heading },
-            expanded = isExpanded,
-            colors = colors,
-            onToggle = { isExpanded = !isExpanded },
-        )
-
+        val title = preview.headline.ifBlank { heading }
+        val summary = preview.summaryText.takeIf { it.isNotBlank() && it != title }
+        if (preview.agents.isEmpty() && summary == null && preview.promptText == null) {
+            TimelineActionRow(onClick = null) {
+                Text(title, style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
+            }
+            return@Column
+        }
+        TimelineDisclosureButton(title, isExpanded, { isExpanded = !isExpanded })
+        if (!isExpanded) return@Column
         if (preview.agents.isNotEmpty()) {
-            if (isExpanded) {
-                Column(
-                    verticalArrangement =
-                        Arrangement.spacedBy(
-                            when (preview.normalizedTool) {
-                                "wait", "waitagent", "resumeagent" -> 9.dp
-                                "spawnagent" -> 2.dp
-                                else -> 4.dp
-                            },
-                        ),
-                ) {
-                    preview.agents.forEach { agent ->
-                        val agentExpanded = agent.threadId in expandedAgentThreadIds
-                        TurnSubagentAgentRow(
-                            agent = agent,
-                            expanded = agentExpanded,
-                            onToggleExpanded = {
-                                expandedAgentThreadIds =
-                                    if (agentExpanded) {
-                                        expandedAgentThreadIds - agent.threadId
-                                    } else {
-                                        expandedAgentThreadIds + agent.threadId
-                                    }
-                            },
-                            statusText =
-                                readableSubagentStatus(
-                                    tool = preview.normalizedTool,
-                                    rawStatus = agent.status ?: preview.status,
-                                ),
-                            modelLabel =
-                                if (preview.normalizedTool == "spawnagent") {
-                                    null
+            Column {
+                preview.agents.forEach { agent ->
+                    val agentExpanded = agent.threadId in expandedAgentThreadIds
+                    TurnSubagentAgentRow(
+                        agent = agent,
+                        expanded = agentExpanded,
+                        onToggleExpanded = {
+                            expandedAgentThreadIds =
+                                if (agentExpanded) {
+                                    expandedAgentThreadIds - agent.threadId
                                 } else {
-                                    agent.model
-                                },
-                            colors = colors,
-                        )
-                    }
+                                    expandedAgentThreadIds + agent.threadId
+                                }
+                        },
+                        statusText =
+                            readableSubagentStatus(
+                                tool = preview.normalizedTool,
+                                rawStatus = agent.status ?: preview.status,
+                            ),
+                        modelLabel =
+                            if (preview.normalizedTool == "spawnagent") {
+                                null
+                            } else {
+                                agent.model
+                            },
+                        colors = colors,
+                    )
                 }
             }
-        } else {
-            TurnSubagentFallbackRow(
-                title = preview.headline,
-                message = preview.summaryText.takeIf { it != preview.headline },
-                contentColor = contentColor,
-            )
+        } else if (summary != null) {
+            Text(summary, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         }
 
         preview.promptText?.let { prompt ->
@@ -121,45 +108,6 @@ internal fun TurnSubagentActionCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-    }
-}
-
-@Composable
-private fun SubagentHeaderRow(
-    heading: String,
-    expanded: Boolean,
-    colors: androidx.compose.material3.ColorScheme,
-    onToggle: () -> Unit,
-) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(vertical = 1.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = heading,
-            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-            color = colors.onSurfaceVariant.copy(alpha = 0.58f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            painter =
-                painterResource(
-                    if (expanded) {
-                        LucideR.drawable.lucide_ic_chevron_down
-                    } else {
-                        LucideR.drawable.lucide_ic_chevron_right
-                    },
-                ),
-            contentDescription = null,
-            modifier = Modifier.size(12.dp),
-            tint = colors.onSurfaceVariant.copy(alpha = 0.42f),
-        )
     }
 }
 
@@ -180,16 +128,36 @@ private fun TurnSubagentAgentRow(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggleExpanded),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        TimelineActionRow(
+            onClick = onToggleExpanded,
+            trailing = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (!modelLabel.isNullOrBlank()) {
+                        Text(
+                            text = modelLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = colors.onSurfaceVariant.copy(alpha = 0.68f),
+                            maxLines = 1,
+                        )
+                    }
+                    Icon(
+                        painter =
+                            painterResource(
+                                if (expanded) {
+                                    LucideR.drawable.lucide_ic_chevron_down
+                                } else {
+                                    LucideR.drawable.lucide_ic_chevron_right
+                                },
+                            ),
+                        contentDescription = stringResource(if (expanded) R.string.turn_timeline_hide_details else R.string.turn_timeline_show_details),
+                        modifier = Modifier.size(13.dp),
+                        tint = colors.onSurfaceVariant.copy(alpha = 0.42f),
+                    )
+                }
+            },
         ) {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -226,27 +194,6 @@ private fun TurnSubagentAgentRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (!modelLabel.isNullOrBlank()) {
-                Text(
-                    text = modelLabel,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    color = colors.onSurfaceVariant.copy(alpha = 0.68f),
-                    maxLines = 1,
-                )
-            }
-            Icon(
-                painter =
-                    painterResource(
-                        if (expanded) {
-                            LucideR.drawable.lucide_ic_chevron_down
-                        } else {
-                            LucideR.drawable.lucide_ic_chevron_right
-                        },
-                    ),
-                contentDescription = null,
-                modifier = Modifier.size(13.dp),
-                tint = colors.onSurfaceVariant.copy(alpha = 0.42f),
-            )
         }
         if (expanded) {
             SubagentAgentDetails(
@@ -292,36 +239,6 @@ private fun SubagentDetailLine(
         maxLines = 3,
         overflow = TextOverflow.Ellipsis,
     )
-}
-
-@Composable
-private fun TurnSubagentFallbackRow(
-    title: String,
-    message: String?,
-    contentColor: Color,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = title,
-            style =
-                MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-            color = contentColor.copy(alpha = 0.9f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        message?.let {
-            Text(
-                text = it,
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                color = contentColor.copy(alpha = 0.62f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
 }
 
 private data class SubagentLabelParts(

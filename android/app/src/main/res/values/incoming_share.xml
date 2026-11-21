@@ -1,0 +1,13 @@
+<resources>
+    <string name="share_prepare_files">Regular files upload to %1$s when added. You can review the draft before sending.</string>
+    <string name="share_connected_computer">the connected computer</string>
+    <string name="share_choose_thread">Select a conversation for the shared content</string>
+    <string name="share_to_thread">Add to %1$s?</string>
+    <string name="share_change_thread">Choose another conversation</string>
+    <string name="share_add_draft">Add to draft</string>
+    <string name="share_file">Shared file</string>
+    <string name="share_available_slots">Choose up to %1$d files for this draft.</string>
+    <string name="share_invalid">This share has no supported file or text.</string>
+    <string name="share_no_access">The sending app did not grant read access to this file.</string>
+    <string name="share_batch_large">Share fewer files or a shorter text at a time.</string>
+</resources>

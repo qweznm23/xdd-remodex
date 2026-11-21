@@ -28,6 +28,7 @@ import com.remodex.mobile.ui.RootScreen
 import com.remodex.mobile.ui.theme.RemodexTheme
 
 class MainActivity : ComponentActivity() {
+    private val sharedContent = ShareInbox()
     override fun attachBaseContext(newBase: android.content.Context) {
         super.attachBaseContext(LanguagePreferences.wrapContext(newBase))
     }
@@ -35,7 +36,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleNotificationLaunchIntent(intent)
+        if (savedInstanceState != null) sharedContent.restore(savedInstanceState)
+        else handleLaunch(intent)
         setContent {
             val context = LocalContext.current
             val configuration = LocalConfiguration.current
@@ -76,8 +78,10 @@ class MainActivity : ComponentActivity() {
                 LocalCodexRepository provides AppContainer.codexRepository,
                 LocalAIChangeSetPersistence provides AppContainer.aiChangeSetPersistence,
                 LocalUserBubbleColor provides userBubbleColor,
+                LocalShareInbox provides sharedContent,
             ) {
                 RemodexTheme(darkTheme = darkTheme) {
+                    com.remodex.mobile.ui.settings.AppUpdateInstallerHost()
                     RootScreen()
                 }
             }
@@ -86,7 +90,24 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleNotificationLaunchIntent(intent)
+        handleLaunch(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        sharedContent.save(outState)
+    }
+
+    private fun handleLaunch(intent: Intent?) {
+        if (intent?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE)) {
+            try {
+                sharedContent.receive(this, requireNotNull(intent))
+            } catch (error: Exception) {
+                android.util.Log.w("RemodexShare", "stage=receive", error)
+                android.widget.Toast.makeText(this, error.localizedMessage ?: getString(R.string.share_invalid),
+                    android.widget.Toast.LENGTH_LONG).show()
+            }
+        } else handleNotificationLaunchIntent(intent)
     }
 
     private fun handleNotificationLaunchIntent(intent: Intent?) {

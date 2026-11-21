@@ -76,6 +76,9 @@ data class AIWorkspaceCheckpointMetadata(
 }
 
 @Serializable
+data class AIPatchBatch(val id: String, val forwardUnifiedPatch: String)
+
+@Serializable
 data class AIChangeSet(
     val id: String = UUID.randomUUID().toString(),
     val repoRoot: String? = null,
@@ -95,6 +98,7 @@ data class AIChangeSet(
     val unsupportedReasons: List<String> = emptyList(),
     val revertMetadata: AIRevertMetadata = AIRevertMetadata(),
     val fallbackPatchCount: Int = 0,
+    val fallbackPatchBatches: List<AIPatchBatch> = emptyList(),
     val workspaceCheckpoint: AIWorkspaceCheckpointMetadata? = null,
 )
 

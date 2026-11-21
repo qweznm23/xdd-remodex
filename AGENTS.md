@@ -13,6 +13,8 @@ AGENTS.md 与 CLAUDE.md 保持一致。本仓库独立维护 Android 客户端�
 - 旧 `/root/remodex-test` 是兼容入口，现行代码和新维护脚本都在本仓库。
 - 保留原许可证、来源及源文件版权声明。不要把旧上游代码误称为新写的实现。
 
+Android Compose 主题、组件和界面验收使用 [remodex-m3e](.agents/skills/remodex-m3e/SKILL.md)，按组件迁移清单记录本批验证结果。
+
 ## 构建、验证与部署
 
 - `make test-server` 验证服务端；`make android-check` 验证客户端；`make android-release` 测试并打包，但不会发布。

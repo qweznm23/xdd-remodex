@@ -3,7 +3,6 @@ package com.remodex.mobile.ui.agent
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexMessageKind
 import com.remodex.mobile.core.model.CodexMessageRole
-import com.remodex.mobile.ui.turn.buildChatAnchorsFromItems
 import com.remodex.mobile.ui.turn.timelineBottomOverflow
 import java.time.Instant
 import kotlin.test.Test
@@ -27,7 +26,7 @@ class TimelinePresentationTest {
             val next = builder.build(history + stream, true, "stream")
             historyItems.forEachIndexed { index, row -> assertSame(row, next.items[index]) }
             assertEquals(stream.text, (next.items.last() as TimelineListItem.Single).message.text)
-            assertTrue(next.streamingAssistant)
+            assertTrue(next.hasActivityRow)
         }
         assertEquals("begin", (initial.items.last() as TimelineListItem.Single).message.text)
     }
@@ -42,9 +41,7 @@ class TimelinePresentationTest {
             message("stream", "answer").copy(isStreaming = true),
         )
         val presentation = TimelinePresentationBuilder().build(messages, true, "stream")
-        val anchors = buildChatAnchorsFromItems(presentation.items, 1)
         val lastUserIndex = presentation.items.indexOfFirst { it.stableKey == "last-user" } + 1
-        assertEquals(lastUserIndex, anchors.last().index)
         assertNotEquals(messages.indexOfFirst { it.id == "last-user" } + 1, lastUserIndex)
         assertEquals(presentation.items.size + 1, presentation.lastListIndex(1))
         assertTrue(presentation.hasActivityRow)
@@ -60,6 +57,10 @@ class TimelinePresentationTest {
         val builder = TimelinePresentationBuilder()
         val running = builder.build(messages, true, "turn")
         val finished = builder.build(messages, false, null)
+        assertEquals(TimelineActivityLabel(com.remodex.mobile.R.string.activity_working), running.statusText)
+        assertTrue(builder.build(emptyList(), true, "turn").hasActivityRow)
+        assertEquals(TimelineActivityLabel(com.remodex.mobile.R.string.activity_working),
+            builder.build(messages, true, "new-turn").statusText)
         assertTrue(running.items.none { it is TimelineListItem.AssistantWorkGroup })
         assertTrue(finished.items.any { it is TimelineListItem.AssistantWorkGroup })
         assertFalse(finished.hasActivityRow)

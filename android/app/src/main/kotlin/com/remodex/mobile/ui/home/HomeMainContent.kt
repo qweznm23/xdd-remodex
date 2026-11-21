@@ -45,13 +45,12 @@ fun HomeMainContent(
     Box(
         modifier =
             modifier
-                .fillMaxSize()
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+                .fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
         val tid = activeThreadId
         if (tid.isNullOrBlank()) {
-            HomeEmptyStateView(Modifier.fillMaxWidth())
+            HomeEmptyStateView(Modifier.fillMaxWidth().padding(horizontal = 14.dp))
         } else {
             CodeAgentScreen(
                 threadId = tid,

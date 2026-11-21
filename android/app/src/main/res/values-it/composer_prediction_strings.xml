@@ -4,4 +4,6 @@
     <string name="prediction_fill">Inserisci nel messaggio</string>
     <string name="prediction_expand">Leggi tutto</string>
     <string name="prediction_collapse">Comprimi suggerimento</string>
+    <string name="prediction_fill_short">Inserisci</string>
+    <string name="prediction_preview">Suggerimento · %1$s</string>
 </resources>

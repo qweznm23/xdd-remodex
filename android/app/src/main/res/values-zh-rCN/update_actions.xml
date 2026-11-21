@@ -1,0 +1,17 @@
+<resources>
+    <string name="update_available">发现新版本</string>
+    <string name="update_setup">设置更新地址</string>
+    <string name="update_downloading">正在下载更新</string>
+    <string name="update_ready">安装包已就绪</string>
+    <string name="update_download_failed">下载或校验失败</string>
+    <string name="update_install_failed">无法打开安装程序</string>
+    <string name="update_check_failed">检查更新失败</string>
+    <string name="update_opening_installer">正在打开安装程序…</string>
+    <string name="update_retry_download">重新下载</string>
+    <string name="update_retry_check">重新检查</string>
+    <string name="update_authorize_install">允许安装</string>
+    <string name="update_release_notes">本次更新</string>
+    <string name="update_custom_source">自定义地址</string>
+    <string name="update_no_connection">配对设备后可使用其更新地址。</string>
+    <string name="update_invalid_source">请输入不含账号、密码或片段的 HTTP 或 HTTPS 地址。</string>
+</resources>

@@ -1,8 +1,16 @@
 package com.remodex.mobile.ui.navigation
 
+import com.remodex.mobile.ui.theme.RemodexPageMotion
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import com.remodex.mobile.AppContainer
 import com.remodex.mobile.core.config.FeatureFlags
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.remodex.mobile.ui.turn.LocalComposerFocusTransfer
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -20,6 +28,7 @@ import com.remodex.mobile.ui.home.HomeMainContent
 import com.remodex.mobile.ui.archived.ArchivedChatsScreen
 import com.remodex.mobile.ui.beta.TesterHqScreen
 import com.remodex.mobile.ui.mydevices.MyDevicesScreen
+import com.remodex.mobile.ui.settings.rememberSettingsProfiles
 import com.remodex.mobile.ui.settings.SettingsScreen
 import com.remodex.mobile.terminal.TerminalRoute
 
@@ -35,20 +44,34 @@ fun AppNavHost(
     onGitContextChanged: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val direction = if (LocalLayoutDirection.current == LayoutDirection.Ltr) 1 else -1
+    val settingsProfiles by androidx.compose.runtime.rememberUpdatedState(rememberSettingsProfiles(repository))
     NavHost(
         navController = navController,
         startDestination = AppRoutes.Home,
+        enterTransition = { RemodexPageMotion.enter(back = false, direction) },
+        exitTransition = { RemodexPageMotion.exit(back = false, direction) },
+        popEnterTransition = { RemodexPageMotion.enter(back = true, direction) },
+        popExitTransition = { RemodexPageMotion.exit(back = true, direction) },
         modifier = modifier,
     ) {
-        composable(AppRoutes.Home) {
-            HomeMainContent(
-                repository = repository,
-                reconnectUiState = reconnectUiState,
-                onReconnectSavedPairing = onReconnectSavedPairing,
-                onWakeSavedComputer = onWakeSavedComputer,
-                onOpenPairingScanner = onOpenPairingScanner,
-                onGitContextChanged = onGitContextChanged,
-            )
+        composable(AppRoutes.Home) { entry ->
+            val handle = entry.savedStateHandle
+            val focusTarget by handle.getStateFlow<String?>("draftKeyboardThread", null).collectAsStateWithLifecycle()
+            val activeThread by repository.activeThreadId.collectAsStateWithLifecycle()
+            val lifecycle by entry.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+            val transfer = focusTarget != null && focusTarget == activeThread && lifecycle == Lifecycle.State.RESUMED
+            CompositionLocalProvider(LocalComposerFocusTransfer provides
+                if (transfer) ({ handle.set<String?>("draftKeyboardThread", null) }) else null) {
+                HomeMainContent(
+                    repository = repository,
+                    reconnectUiState = reconnectUiState,
+                    onReconnectSavedPairing = onReconnectSavedPairing,
+                    onWakeSavedComputer = onWakeSavedComputer,
+                    onOpenPairingScanner = onOpenPairingScanner,
+                    onGitContextChanged = onGitContextChanged,
+                )
+            }
         }
         composable(
             route = AppRoutes.NewChatDraft,
@@ -79,7 +102,9 @@ fun AppNavHost(
                 repository = repository,
                 subscriptionService = AppContainer.subscriptionService,
                 onNavigateBack = { navController.popBackStack() },
-                onThreadStarted = {
+                onThreadStarted = { threadId, keyboardVisible ->
+                    if (keyboardVisible) navController.getBackStackEntry(AppRoutes.Home)
+                        .savedStateHandle["draftKeyboardThread"] = threadId
                     navController.popBackStack(AppRoutes.Home, inclusive = false)
                 },
                 onOpenTerminal = { cdPath ->
@@ -89,6 +114,7 @@ fun AppNavHost(
         }
         composable(AppRoutes.Settings) {
             SettingsScreen(
+                authProfiles = settingsProfiles,
                 repository = repository,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToAbout = { navController.navigate(AppRoutes.About) },

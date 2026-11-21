@@ -1,0 +1,11 @@
+<resources>
+    <string name="activity_working">正在处理…</string>
+    <string name="activity_replying">正在回复…</string>
+    <string name="activity_patch">正在应用补丁…</string>
+    <string name="activity_files">正在修改文件…</string>
+    <string name="activity_edit_file">正在修改 %1$s…</string>
+    <string name="activity_checks">正在运行检查…</string>
+    <string name="activity_changes">正在检查改动…</string>
+    <string name="activity_search">正在搜索…</string>
+    <string name="activity_reading">正在读取文件…</string>
+</resources>

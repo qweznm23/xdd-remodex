@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.shell
 
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
@@ -21,13 +22,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.AlertDialog
+import com.remodex.mobile.ui.theme.conversationColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -72,6 +74,9 @@ import com.remodex.mobile.core.model.GitRepoSyncResult
 import com.remodex.mobile.core.model.GitRunStackedActionResult
 import com.remodex.mobile.core.model.GitStackedActionProgressEvent
 import com.remodex.mobile.core.model.GitWorktreeChangeTransferMode
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import com.remodex.mobile.core.model.PendingApprovalDecision
 import com.remodex.mobile.core.model.TurnGitActionKind
 import com.remodex.mobile.core.model.TurnGitPreflightOperation
@@ -132,7 +137,7 @@ fun MainShell(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val timelineRenderingEnabled by remember(drawerState) {
         derivedStateOf {
-            // The full-width sheet only hides the conversation at its settled open anchor.
+            // Pause background timeline work only at the settled open anchor.
             // Resume on the first close/drag frame, not at the end of the drawer animation.
             !drawerState.isOpen || drawerState.isAnimationRunning || drawerState.currentOffset != 0f
         }
@@ -146,9 +151,26 @@ fun MainShell(
     val sidebarColors = rememberSidebarColorPalette()
 
     val ready by repository.isSessionReady.collectAsStateWithLifecycle()
+    LaunchedEffect(repository, lifecycleOwner, ready) {
+        if (!ready) return@LaunchedEffect
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                repository.refreshUsageStatus(null)
+                kotlinx.coroutines.delay(60_000L)
+            }
+        }
+    }
     val currentReady by rememberUpdatedState(ready)
     var backgroundedWhileReady by remember { mutableStateOf(false) }
     val activeThreadId by repository.activeThreadId.collectAsStateWithLifecycle()
+    val environment = remember(activeThreadId) { com.remodex.mobile.ui.turn.SessionEnvironmentHost(activeThreadId) }
+    val shareInbox = com.remodex.mobile.LocalShareInbox.current
+    val pendingShare = shareInbox?.first
+    LaunchedEffect(pendingShare?.id, currentRoute != null) {
+        if (pendingShare == null || currentRoute == null) return@LaunchedEffect
+        if (currentRoute != AppRoutes.Home) navController.popBackStack(AppRoutes.Home, inclusive = false)
+        if (activeThreadId == null || !ready) drawerState.moveToSessionDrawer(DrawerValue.Open)
+    }
     var refreshingConversation by remember(activeThreadId) { mutableStateOf(false) }
     var conversationRefreshError by remember(activeThreadId) { mutableStateOf<String?>(null) }
     var conversationRefreshJob by remember(activeThreadId) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -202,7 +224,7 @@ fun MainShell(
     var showNothingToCommit by remember { mutableStateOf(false) }
     var showPathDialog by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
-    val showTurnStop =
+    val isActiveTurnRunning =
         ready &&
             activeThreadId?.let { tid ->
                 runningTurnByThread.containsKey(tid) || protectedRunningFallback.contains(tid)
@@ -267,7 +289,8 @@ fun MainShell(
                         }
                     }
                     Lifecycle.Event.ON_RESUME -> {
-                        viewModel.onAppForegrounded()
+                        if (backgroundedWhileReady && currentReady) viewModel.catchUpAfterBackground()
+                        else viewModel.onAppForegrounded()
                         if (backgroundedWhileReady) {
                             backgroundedWhileReady = false
                             scope.launch {
@@ -324,7 +347,7 @@ fun MainShell(
         showGitControls &&
             ready &&
             activeThreadId != null &&
-            !showTurnStop &&
+            !isActiveTurnRunning &&
             !handingOffWorktree &&
             (
                 (isWorktreeProject && localWorktreeHandoffTargetPath != null) ||
@@ -736,7 +759,7 @@ fun MainShell(
     fun handoffCurrentThreadWorktree(skipPreflight: Boolean = false) {
         val tid = activeThreadId ?: return
         val cwd = gitCwd ?: return
-        if (!showGitControls || showTurnStop || handingOffWorktree) return
+        if (!showGitControls || isActiveTurnRunning || handingOffWorktree) return
         val baseBranch =
             defaultGitBaseBranch?.trim()?.takeIf { it.isNotEmpty() }
                 ?: branchesWithStatusSnapshot?.currentBranch?.trim()?.takeIf { it.isNotEmpty() }
@@ -842,7 +865,7 @@ fun MainShell(
             enqueueGitPreflightIfNeeded(cwd, TurnGitPreflightOperation.discardRuntimeChanges)
             return
         }
-        if (!showGitControls || showTurnStop) return
+        if (!showGitControls || isActiveTurnRunning) return
         when (action) {
             TurnGitActionKind.commit -> {
                 gitActionSheetMode = GitActionSheetMode.commit
@@ -910,14 +933,14 @@ fun MainShell(
 
     fun executeGitActionSheet(submission: GitActionSheetSubmission) {
         val cwd = gitCwd ?: return
-        if (!showGitControls || showTurnStop || gitActionBusy) return
+        if (!showGitControls || isActiveTurnRunning || gitActionBusy) return
         if (enqueueGitPreflightIfNeeded(cwd, operationForSubmission(submission), submission)) return
         scope.launch {
             executeGitActionSheetNow(submission, cwd)
         }
     }
 
-    LaunchedEffect(activeThreadId, ready, gitCwd, showTurnStop, gitToolbarRefreshNonce) {
+    LaunchedEffect(activeThreadId, ready, gitCwd, isActiveTurnRunning, gitToolbarRefreshNonce) {
         if (!FeatureFlags.gitIntegrationEnabled) return@LaunchedEffect
         gitStatusFailed = false
         if (!ready) {
@@ -997,7 +1020,7 @@ fun MainShell(
         val listener =
             androidx.navigation.NavController.OnDestinationChangedListener { _, _, _ ->
                 if (drawerState.isOpen) {
-                    scope.launch { drawerState.close() }
+                    scope.launch { drawerState.moveToSessionDrawer(DrawerValue.Closed) }
                 }
             }
         navController.addOnDestinationChangedListener(listener)
@@ -1009,13 +1032,13 @@ fun MainShell(
     // The conversation is the root route; Back should reveal the chat list.
     // Register before child content so dialogs and nested navigation take priority.
     BackHandler(enabled = showShellHeader && activeThreadId != null && drawerState.isClosed) {
-        scope.launch { drawerState.open() }
+        scope.launch { drawerState.moveToSessionDrawer(DrawerValue.Open) }
     }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            val drawerWidth = LocalConfiguration.current.screenWidthDp.dp
+            val drawerWidth = (LocalConfiguration.current.screenWidthDp.dp * 0.90f).coerceAtMost(360.dp)
             ModalDrawerSheet(
                 modifier =
                     Modifier
@@ -1024,6 +1047,13 @@ fun MainShell(
                 drawerContainerColor = sidebarColors.background,
                 drawerContentColor = sidebarColors.primaryText,
             ) {
+                if (pendingShare != null) {
+                    androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.share_choose_thread), Modifier.weight(1f))
+                        TextButton(onClick = { shareInbox?.take(pendingShare.id) }) { Text(stringResource(R.string.auth_profiles_cancel)) }
+                    }
+                }
                 SidebarDrawerContent(
                     repository = repository,
                     navController = navController,
@@ -1032,7 +1062,7 @@ fun MainShell(
                     onOpenPairingScanner = onOpenPairingScanner,
                     onReconnectSavedPairing = viewModel::reconnectSavedPairingManually,
                     onWakeSavedComputer = viewModel::wakeSavedComputerDisplay,
-                    closeDrawer = { drawerState.close() },
+                    closeDrawer = { drawerState.moveToSessionDrawer(DrawerValue.Closed) },
                     sessionReady = ready,
                     connectionState = connectionState,
                     reconnectUiState = reconnectUiState,
@@ -1043,46 +1073,14 @@ fun MainShell(
     ) {
         Scaffold(
             modifier = modifier.fillMaxSize(),
-            containerColor = MaterialTheme.colorScheme.background,
-            // Home overlays ConversationHeader inside content; do not reserve root top-bar height.
-            contentWindowInsets =
-                WindowInsets.safeDrawing.only(
-                    WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
-                ),
-        ) { innerPadding ->
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-            ) {
-                CompositionLocalProvider(
-                    LocalOpenRepoDiffForMarkdownLink provides ::openRepoDiffSheetFromMarkdown,
-                    com.remodex.mobile.ui.turn.LocalConversationVisible provides (drawerState.isClosed && !drawerState.isAnimationRunning),
-                    com.remodex.mobile.ui.turn.LocalTimelineRenderingEnabled provides timelineRenderingEnabled,
-                    com.remodex.mobile.ui.turn.LocalHistoryPresentationReceipt provides { receipt ->
-                        if (receipt.threadId == activeThreadId && receipt.revision >= (historyPresentationReceipt?.revision ?: 0L)) {
-                            historyPresentationReceipt = receipt
-                        }
-                    },
-                ) {
-                    AppNavHost(
-                        navController = navController,
-                        repository = repository,
-                        reconnectUiState = reconnectUiState,
-                        onReconnectSavedPairing = viewModel::reconnectSavedPairingManually,
-                        onWakeSavedComputer = viewModel::wakeSavedComputerDisplay,
-                        onOpenPairingScanner = onOpenPairingScanner,
-                        onOpenPairingCode = onOpenPairingCode,
-                        onGitContextChanged = { gitToolbarRefreshNonce++ },
-                        modifier =
-                            Modifier
-                                .fillMaxSize(),
-                    )
-                }
+            containerColor = if (showShellHeader) MaterialTheme.colorScheme.conversationColors().reading else MaterialTheme.colorScheme.background,
+            topBar = {
                 if (showShellHeader) {
                     ConversationHeader(
+                        onOpenSettings = { navController.navigate(AppRoutes.Settings) { launchSingleTop = true } },
                         title = activeThreadTitle,
+                        threadId = activeThreadId,
+                        environment = environment.content,
                         refreshingConversation = refreshingConversation,
                         onRefreshConversation = activeThreadId?.let { tid ->
                             {
@@ -1124,7 +1122,7 @@ fun MainShell(
                             threadPathFull?.let {
                                 { showPathDialog = true }
                             },
-                        showRunningPill = showTurnStop,
+                        running = isActiveTurnRunning,
                         repoDiffTotals = repoDiffTotals,
                         isLoadingRepoDiff = isLoadingRepoDiff,
                         canViewRepoDiff =
@@ -1135,15 +1133,14 @@ fun MainShell(
                         onGitAction = { handleGitAction(it) },
                         gitActionsBusy = gitActionBusy,
                         showsDiscardRuntimeRecovery = repoStatusSnapshot?.isDirty == true,
-                        isGitActionEnabled = showGitControls && !showTurnStop,
+                        isGitActionEnabled = showGitControls && !isActiveTurnRunning,
                         showDesktopHandoff = showDesktopHandoff,
                         handingOffToDesktop = handingOffToDesktop,
                         showWorktreeHandoff = showWorktreeHandoff,
                         handingOffWorktree = handingOffWorktree,
                         isWorktreeProject = isWorktreeProject,
-                        showTurnStop = showTurnStop,
                         onOpenDrawer = {
-                            scope.launch { drawerState.open() }
+                            scope.launch { drawerState.moveToSessionDrawer(DrawerValue.Open) }
                         },
                         onContinueDesktop = {
                             val tid = activeThreadId
@@ -1162,15 +1159,44 @@ fun MainShell(
                             }
                         },
                         onWorktreeHandoff = { handoffCurrentThreadWorktree() },
-                        onStopTurn = {
-                            val tid = activeThreadId
-                            if (tid != null) {
-                                scope.launch {
-                                    runCatching { repository.interruptTurn(threadId = tid) }
-                                }
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.TopCenter),
+                    )
+                }
+            },
+            contentWindowInsets =
+                WindowInsets.safeDrawing.only(
+                    WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                ),
+        ) { innerPadding ->
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding).consumeWindowInsets(innerPadding),
+            ) {
+                CompositionLocalProvider(
+                    com.remodex.mobile.LocalChooseShareThread provides { scope.launch { drawerState.moveToSessionDrawer(DrawerValue.Open) }; Unit },
+                    com.remodex.mobile.ui.turn.LocalSessionEnvironment provides environment,
+                    LocalOpenRepoDiffForMarkdownLink provides ::openRepoDiffSheetFromMarkdown,
+                    com.remodex.mobile.ui.turn.LocalConversationVisible provides (drawerState.isClosed && !drawerState.isAnimationRunning),
+                    com.remodex.mobile.ui.turn.LocalTimelineRenderingEnabled provides timelineRenderingEnabled,
+                    com.remodex.mobile.ui.turn.LocalHistoryPresentationReceipt provides { receipt ->
+                        if (receipt.threadId == activeThreadId && receipt.revision >= (historyPresentationReceipt?.revision ?: 0L)) {
+                            historyPresentationReceipt = receipt
+                        }
+                    },
+                ) {
+                    AppNavHost(
+                        navController = navController,
+                        repository = repository,
+                        reconnectUiState = reconnectUiState,
+                        onReconnectSavedPairing = viewModel::reconnectSavedPairingManually,
+                        onWakeSavedComputer = viewModel::wakeSavedComputerDisplay,
+                        onOpenPairingScanner = onOpenPairingScanner,
+                        onOpenPairingCode = onOpenPairingCode,
+                        onGitContextChanged = { gitToolbarRefreshNonce++ },
+                        modifier =
+                            Modifier
+                                .fillMaxSize(),
                     )
                 }
                 if (showShellHeader) {
@@ -1190,8 +1216,7 @@ fun MainShell(
                         modifier =
                             Modifier
                                 .align(Alignment.TopCenter)
-                                .statusBarsPadding()
-                                .padding(top = 92.dp),
+                                .padding(top = 8.dp),
                     )
                 }
                 PetCompanionOverlay(
@@ -1208,7 +1233,7 @@ fun MainShell(
     if (showPathDialog) {
         val fullPath = threadPathFull
         if (fullPath != null) {
-            AlertDialog(
+            RemodexAlertDialog(
                 onDismissRequest = { showPathDialog = false },
                 title = { Text(stringResource(R.string.turn_thread_path_dialog_title)) },
                 text = {
@@ -1289,7 +1314,7 @@ fun MainShell(
     )
 
     if (showNothingToCommit) {
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { showNothingToCommit = false },
             title = { Text(stringResource(R.string.git_action_section_write)) },
             text = { Text(stringResource(R.string.git_nothing_to_commit)) },
@@ -1307,7 +1332,7 @@ fun MainShell(
             pendingGitOperation = null
         }
 
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { dismissGitAlert() },
             title = { Text(alert.title) },
             text = { Text(alert.message) },
@@ -1362,7 +1387,7 @@ fun MainShell(
     }
 
     gitActionError?.let { err ->
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { gitActionError = null },
             title = { Text(stringResource(R.string.git_error_title)) },
             text = { Text(err) },
@@ -1375,7 +1400,7 @@ fun MainShell(
     }
 
     conversationRefreshError?.let { error ->
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { conversationRefreshError = null },
             title = { Text(stringResource(R.string.conversation_refresh_failed)) },
             text = { Text(error) },
@@ -1388,7 +1413,7 @@ fun MainShell(
     }
 
     if (desktopHandoffError != null) {
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { desktopHandoffError = null },
             title = { Text(stringResource(R.string.turn_open_desktop_error_title)) },
             text = { Text(desktopHandoffError ?: "") },
@@ -1401,7 +1426,7 @@ fun MainShell(
     }
 
     if (worktreeHandoffError != null) {
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { worktreeHandoffError = null },
             title = { Text(stringResource(R.string.worktree_handoff_failed)) },
             text = { Text(worktreeHandoffError ?: "") },
@@ -1415,14 +1440,27 @@ fun MainShell(
 
     pendingApprovalRequest?.let { request ->
         val supportsSession = PendingRequestPresentation.supportsAcceptForSession(request.method)
+        var replyError by remember(request.id) { mutableStateOf<String?>(null) }
         fun resolve(decision: PendingApprovalDecision) {
-            scope.launch { runCatching { repository.resolvePendingApproval(request.id, decision) } }
+            scope.launch {
+                try { repository.resolvePendingApproval(request.id, decision) }
+                catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                catch (failure: Exception) {
+                    android.util.Log.e("RemodexApproval", "reply id=${request.id}", failure)
+                    replyError = failure.message ?: failure.javaClass.name
+                }
+            }
         }
-        AlertDialog(
+        RemodexAlertDialog(
             onDismissRequest = { resolve(PendingApprovalDecision.Decline) },
             title = { Text(stringResource(R.string.approval_dialog_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    replyError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    request.permissions?.let { permissions ->
+                        Text(com.remodex.mobile.core.model.JSONValue.toJsonElement(permissions).toString(),
+                            modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()))
+                    }
                     val cmdLine =
                         request.command
                             ?.trim()

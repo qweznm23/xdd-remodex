@@ -17,7 +17,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -28,7 +27,6 @@ import com.remodex.mobile.ui.onboarding.OnboardingIconTile
 
 private data class OnboardingFeatureRow(
     @param:DrawableRes val iconRes: Int,
-    val glowColor: Color,
     @param:StringRes val titleRes: Int,
     @param:StringRes val bodyRes: Int,
 )
@@ -39,31 +37,21 @@ fun OnboardingFeaturesPage(modifier: Modifier = Modifier) {
         listOf(
             OnboardingFeatureRow(
                 iconRes = LucideR.drawable.lucide_ic_zap,
-                glowColor = Color(0xFFFFD60A),
                 titleRes = R.string.onboarding_feature_fast_title,
                 bodyRes = R.string.onboarding_feature_fast_body,
             ),
             OnboardingFeatureRow(
                 iconRes = LucideR.drawable.lucide_ic_git_branch,
-                glowColor = Color(0xFF35C76A),
                 titleRes = R.string.onboarding_feature_git_title,
                 bodyRes = R.string.onboarding_feature_git_body,
             ),
             OnboardingFeatureRow(
                 iconRes = LucideR.drawable.lucide_ic_shield,
-                glowColor = Color(0xFF64B5F6),
                 titleRes = R.string.onboarding_feature_encrypted_title,
                 bodyRes = R.string.onboarding_feature_encrypted_body,
             ),
             OnboardingFeatureRow(
-                iconRes = LucideR.drawable.lucide_ic_audio_lines,
-                glowColor = Color(0xFFB388FF),
-                titleRes = R.string.onboarding_feature_voice_title,
-                bodyRes = R.string.onboarding_feature_voice_body,
-            ),
-            OnboardingFeatureRow(
                 iconRes = LucideR.drawable.lucide_ic_blocks,
-                glowColor = Color(0xFFFF9B45),
                 titleRes = R.string.onboarding_feature_subagents_title,
                 bodyRes = R.string.onboarding_feature_subagents_body,
             ),
@@ -73,20 +61,20 @@ fun OnboardingFeaturesPage(modifier: Modifier = Modifier) {
             modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+                .padding(horizontal = 4.dp, vertical = 24.dp),
+        horizontalAlignment = Alignment.Start,
     ) {
         Text(
             text = stringResource(R.string.onboarding_features_title),
             style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Start,
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = stringResource(R.string.onboarding_features_subtitle),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Start,
         )
         Spacer(modifier = Modifier.height(24.dp))
         Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -106,7 +94,7 @@ private fun OnboardingFeatureItem(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        OnboardingIconTile(iconRes = feature.iconRes, glowColor = feature.glowColor)
+        OnboardingIconTile(iconRes = feature.iconRes)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = stringResource(feature.titleRes),

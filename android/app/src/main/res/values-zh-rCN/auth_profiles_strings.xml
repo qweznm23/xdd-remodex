@@ -1,8 +1,8 @@
 <resources>
-    <string name="auth_profiles_title">备用授权</string>
+    <string name="auth_profiles_title">全部授权</string>
     <string name="auth_profiles_hint">仅显示当前 Codex 未选用的账号。查询使用独立进程，不切换当前账号。</string>
     <string name="auth_profiles_refresh">刷新列表</string>
-    <string name="auth_profiles_empty">没有其他已保存的账号</string>
+    <string name="auth_profiles_empty">还没有已保存的授权</string>
     <string name="auth_profiles_unavailable">这台电脑尚未配置兼容的授权管理工具。</string>
     <string name="auth_profiles_number">%1$s 号授权</string>
     <string name="auth_profiles_expiry">访问令牌到期：%1$s</string>
@@ -17,7 +17,20 @@
     <string name="auth_profiles_queried">查询时间：%1$s</string>
     <string name="auth_profiles_switch">切换</string>
     <string name="auth_profiles_switch_title">切换到 %1$s 号授权？</string>
-    <string name="auth_profiles_switch_body">服务端会保存较新的当前凭据并切换账号。Codex 会在 10 秒后重启，正在执行的任务可能中断，Remodex 会重新连接。</string>
+    <string name="auth_profiles_switch_body">服务端确认可以重启 Codex 后才会应用新授权。重启预计在 10 秒后开始，正在执行的任务可能中断。</string>
+    <string name="auth_restart_action">重启 Codex</string>
+    <string name="auth_restart_history">重启记录</string>
+    <string name="auth_restart_confirm_body">服务端会用当前授权重启本机 Codex。正在执行的任务可能中断，Remodex 会重新连接。</string>
+    <string name="auth_restart_empty">暂无重启记录</string>
+    <string name="auth_restart_details">查看详情</string>
+    <string name="auth_restart_summary">%1$s · %2$s</string>
+    <string name="auth_restart_ready">重启成功，账号已核验</string>
+    <string name="auth_restart_recovered">出错后已确认账号</string>
+    <string name="auth_restart_pending">进行中</string>
+    <string name="auth_restart_superseded">授权已另行变更</string>
+    <string name="auth_restart_unverified">运行账号待核验</string>
+    <string name="auth_restart_rolled_back">重启失败，已保留原授权</string>
+    <string name="auth_restart_failed">失败</string>
     <string name="auth_profiles_switch_confirm">切换账号</string>
     <string name="auth_profiles_cancel">取消</string>
     <string name="auth_profiles_switch_ready">已确认 Codex 正在使用选中的账号</string>
@@ -34,4 +47,19 @@
     <string name="auth_progress_restored">已重新连接电脑</string>
     <string name="auth_progress_verify">正在确认 Codex 使用的账号</string>
     <string name="auth_progress_confirmed">已确认 Codex 正在使用 %1$s 号授权</string>
+    <string name="auth_library_add">添加授权</string>
+    <string name="auth_library_rename">重命名</string>
+    <string name="auth_library_name">备注名称（选填）</string>
+    <string name="auth_library_replace">替换文件</string>
+    <string name="auth_library_remove">从授权库移除</string>
+    <string name="auth_library_remove_confirm">将“%1$s”从授权库移除并停止定时检查？电脑会保留一份恢复副本。</string>
+    <string name="auth_library_save">保存</string>
+    <string name="auth_library_in_use">使用中</string>
+    <string name="auth_library_unknown">文件未提供账号名称或邮箱</string>
+    <string name="auth_library_account">文件所属账号</string>
+    <string name="auth_profile_account_line">账号：%1$s</string>
+    <string name="auth_library_switch">切换到“%1$s”？</string>
+    <string name="auth_action_renamed">授权备注已保存</string>
+    <string name="auth_action_removed">已移除 %1$s 号授权</string>
+    <string name="auth_action_reason">%1$s失败：%2$s</string>
 </resources>

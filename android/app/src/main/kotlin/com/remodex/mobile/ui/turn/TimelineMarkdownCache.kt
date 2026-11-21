@@ -52,17 +52,22 @@ internal suspend fun prepareTimelineMarkdown(presentation: TimelinePresentation,
     val previousItems = previous?.items?.associateBy { it.stableKey }.orEmpty()
     for (item in presentation.items) {
         if (previousItems[item.stableKey] === item) continue
-        val message = when (item) {
-            is TimelineListItem.Single -> item.message
-            is TimelineListItem.MessageChunk -> item.toRenderMessage()
-            else -> continue // Collapsed tool groups do not render Markdown bodies.
-        }
-        val body = settledTimelineMarkdown(message)?.takeIf { it.isNotEmpty() } ?: continue
-        val rich = TurnTimelineRichContentCache.parseMermaidMarkdown(body)
-        val markdown = rich?.filter { it.kind == TurnMarkdownSegmentKind.markdown }?.map { it.text } ?: listOf(body)
-        for (part in markdown) for (segment in TurnMarkdownRenderCache.fenceSegments(TurnMarkdownRenderCache.visibleProse(part))) {
-            if (segment is MarkdownFenceSegment.Text) timelineMarkdownCache.get(segment.markdown)
-        }
+        prepareTimelineItemMarkdown(item)
+    }
+}
+
+internal suspend fun prepareTimelineItemMarkdown(item: TimelineListItem, activityDetail: Boolean = false) {
+    val message = when (item) {
+        is TimelineListItem.Single -> item.message
+        is TimelineListItem.MessageChunk -> item.toRenderMessage()
+        else -> return // Collapsed tool groups do not render Markdown bodies.
+    }
+    val body = settledTimelineMarkdown(message)?.takeIf { it.isNotEmpty() } ?: return
+    if (activityDetail && isPlainActivityParagraph(body)) return
+    val rich = TurnTimelineRichContentCache.parseMermaidMarkdown(body)
+    val markdown = rich?.filter { it.kind == TurnMarkdownSegmentKind.markdown }?.map { it.text } ?: listOf(body)
+    for (part in markdown) for (segment in TurnMarkdownRenderCache.fenceSegments(TurnMarkdownRenderCache.visibleProse(part))) {
+        if (segment is MarkdownFenceSegment.Text) timelineMarkdownCache.get(segment.markdown)
     }
 }
 

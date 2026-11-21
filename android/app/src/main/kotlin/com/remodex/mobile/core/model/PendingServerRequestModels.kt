@@ -16,6 +16,7 @@ data class PendingApprovalRequest(
     val itemId: String?,
     val command: String?,
     val reason: String?,
+    val permissions: JSONValue.Obj? = null,
 )
 
 data class PendingStructuredInputRequest(

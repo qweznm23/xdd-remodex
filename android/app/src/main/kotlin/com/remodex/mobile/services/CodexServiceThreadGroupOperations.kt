@@ -3,6 +3,8 @@ package com.remodex.mobile.services
 import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.CodexThread
 import com.remodex.mobile.core.model.CodexThreadSyncState
+import com.remodex.mobile.core.model.JSONValue
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -23,7 +25,7 @@ internal suspend fun CodexService.deleteLocalThreadGroupForRepository(threadIds:
 internal suspend fun CodexService.archiveThreadGroupInternal(threadIds: List<String>): List<String> {
     val rootThreadIds = collectRootThreadIds(threadIds)
     for (rootId in rootThreadIds) {
-        archiveThreadInternal(rootId)
+        changeThreadArchive(rootId, true)
     }
     return rootThreadIds
 }
@@ -65,24 +67,16 @@ private fun CodexService.collectSubtreeThreadIds(parentId: String): List<String>
     return descendants
 }
 
-private suspend fun CodexService.archiveThreadInternal(threadId: String) {
-    val subtreeIds = collectSubtreeThreadIds(threadId)
-    val allIds = listOf(threadId) + subtreeIds
-    for (tid in allIds) {
-        setThreadArchivedLocally(tid, isArchived = true)
-    }
-    sendThreadArchiveRpc(threadId, unarchive = false)
-}
-
-private suspend fun CodexService.sendThreadArchiveRpc(threadId: String, unarchive: Boolean) {
-    if (!sessionReady) return
-    runCatching {
-        sendRequestImpl(
-            "thread/archive",
-            com.remodex.mobile.core.model.JSONValue.Obj(
-                mapOf("thread_id" to com.remodex.mobile.core.model.JSONValue.Str(threadId))
-            ),
-        )
+internal suspend fun CodexService.changeThreadArchive(threadId: String, archived: Boolean) {
+    threadRefreshMutex.withLock {
+        val connection = webSocket
+        val device = resolvedMacScopedPersistenceDeviceId()
+        sendRequestImpl(if (archived) "thread/archive" else "thread/unarchive",
+            JSONValue.Obj(mapOf("threadId" to JSONValue.Str(threadId))))
+        if (connection !== webSocket || device != resolvedMacScopedPersistenceDeviceId()) throw CodexServiceError.Disconnected
+        for (id in listOf(threadId) + collectSubtreeThreadIds(threadId)) {
+            setThreadArchivedLocally(id, archived)
+        }
     }
 }
 
@@ -90,18 +84,20 @@ private suspend fun CodexService.setThreadArchivedLocally(
     threadId: String,
     isArchived: Boolean,
 ) {
-    noteTurnFinished(threadId)
-    resumedThreadIds.remove(threadId)
-    hydratedThreadIds.remove(threadId)
-    loadingHistory.remove(threadId)
-    messageTimelineStore.removeThreadMessages(threadId)
-    persistedThreadRenameById.remove(threadId)
-    sessionPersistence.removeThreadRename(threadId)
-    associatedManagedWorktreePathByThreadId.remove(threadId)
-    sessionPersistence.removeAssociatedManagedWorktreePath(threadId)
-    resolvedMacScopedPersistenceDeviceId()?.let { device ->
-        macScopedSessionStore.saveThreadRenames(device, persistedThreadRenameById.toMap())
-        macScopedSessionStore.saveAssociatedManagedWorktreePaths(device, associatedManagedWorktreePathByThreadId.toMap())
+    if (isArchived) {
+        noteTurnFinished(threadId)
+        resumedThreadIds.remove(threadId)
+        hydratedThreadIds.remove(threadId)
+        loadingHistory.remove(threadId)
+        messageTimelineStore.removeThreadMessages(threadId)
+        persistedThreadRenameById.remove(threadId)
+        sessionPersistence.removeThreadRename(threadId)
+        associatedManagedWorktreePathByThreadId.remove(threadId)
+        sessionPersistence.removeAssociatedManagedWorktreePath(threadId)
+        resolvedMacScopedPersistenceDeviceId()?.let { device ->
+            macScopedSessionStore.saveThreadRenames(device, persistedThreadRenameById.toMap())
+            macScopedSessionStore.saveAssociatedManagedWorktreePaths(device, associatedManagedWorktreePathByThreadId.toMap())
+        }
     }
     if (isArchived) {
         setScopedLocallyArchivedThreadId(threadId, isArchived = true)
@@ -117,7 +113,7 @@ private suspend fun CodexService.setThreadArchivedLocally(
         )
     }
 
-    if (_activeThreadId.value == threadId) {
+    if (isArchived && _activeThreadId.value == threadId) {
         _activeThreadId.value = null
         persistActiveThreadId(null)
     }

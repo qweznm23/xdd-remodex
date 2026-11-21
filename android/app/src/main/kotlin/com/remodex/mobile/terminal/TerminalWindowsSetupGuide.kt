@@ -2,17 +2,17 @@ package com.remodex.mobile.terminal
 
 import android.content.ClipData
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
@@ -24,13 +24,11 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
 import com.remodex.mobile.ui.sidebar.rememberSidebarColorPalette
-import com.remodex.mobile.ui.sidebar.remodexFlatControlChrome
 import kotlinx.coroutines.launch
 
 @Composable
@@ -119,24 +117,8 @@ private fun TerminalWindowsGuideStep(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Box(
-            modifier =
-                Modifier
-                    .size(26.dp)
-                    .remodexFlatControlChrome(TerminalFieldShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = number,
-                style =
-                    MaterialTheme.typography.labelMedium.copy(
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                color = colors.secondaryText,
-                textAlign = TextAlign.Center,
-            )
-        }
+        Badge(containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer) { Text(number) }
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -159,21 +141,7 @@ private fun TerminalWindowsGuideStep(
                     ),
                 color = colors.secondaryText,
             )
-            Text(
-                text = command,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .remodexFlatControlChrome(TerminalFieldShape)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                style =
-                    MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    ),
-                color = colors.secondaryText,
-            )
+            TerminalCommandExample(command)
         }
     }
 }
@@ -211,40 +179,38 @@ private fun TerminalWindowsGuideHelp(
                 ),
             color = colors.secondaryText,
         )
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .remodexFlatControlChrome(TerminalFieldShape)
-                    .padding(start = 10.dp, end = 2.dp, top = 8.dp, bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            Text(
-                text = prompt,
-                modifier = Modifier.weight(1f),
-                style =
-                    MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    ),
-                color = colors.secondaryText,
-            )
-            IconButton(
-                onClick = {
-                    scope.launch {
-                        clipboard.setClipEntry(
-                            ClipData.newPlainText("windows-ssh-setup-prompt", prompt).toClipEntry(),
-                        )
-                    }
-                },
+        Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainer) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top,
             ) {
-                Icon(
-                    painter = painterResource(LucideR.drawable.lucide_ic_copy),
-                    contentDescription = copyContentDescription,
-                    tint = colors.secondaryText,
+                Text(
+                    text = prompt,
+                    modifier = Modifier.weight(1f),
+                    style =
+                        MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                        ),
+                    color = colors.secondaryText,
                 )
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            clipboard.setClipEntry(
+                                ClipData.newPlainText("windows-ssh-setup-prompt", prompt).toClipEntry(),
+                            )
+                        }
+                    },
+                ) {
+                    Icon(
+                        painter = painterResource(LucideR.drawable.lucide_ic_copy),
+                        contentDescription = copyContentDescription,
+                        tint = colors.secondaryText,
+                    )
+                }
             }
         }
     }

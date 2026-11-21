@@ -1,31 +1,26 @@
 package com.remodex.mobile.ui.sidebar
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Badge
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.remodex.mobile.ui.turn.QuestionReplyIndicator
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.JSONValue
 import com.remodex.mobile.core.model.CodexThread
@@ -38,11 +33,12 @@ data class SidebarActiveChatMetadata(
     val model: String? = null,
 )
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SidebarThreadRow(
     thread: CodexThread,
     selected: Boolean,
+    projectLabel: String? = null,
     isRunning: Boolean,
     activeMetadata: SidebarActiveChatMetadata? = null,
     onSelect: () -> Unit,
@@ -54,165 +50,53 @@ fun SidebarThreadRow(
     needsAnswer: Boolean = false,
     hasQuestions: Boolean = false,
     onAnswerRequest: (() -> Unit)? = null,
+    colors: SidebarColorPalette = rememberSidebarColorPalette(),
 ) {
-    val colors = rememberSidebarColorPalette()
-    val rowShape = RoundedCornerShape(12.dp)
-    val metadataTokens =
-        remember(thread, selected, activeMetadata, colors) {
-            if (selected) thread.activeMetadataTokens(colors, activeMetadata) else emptyList()
-        }
-    Column(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 2.dp),
+    val subtitle = when {
+        thread.syncState == CodexThreadSyncState.archivedLocal ->
+            SidebarMetadataToken(stringResource(R.string.sidebar_thread_archived_hint), colors.mutedText)
+        !projectLabel.isNullOrBlank() -> SidebarMetadataToken(projectLabel, colors.mutedText)
+        selected -> remember(thread, activeMetadata, colors) { thread.activeMetadataTokens(colors, activeMetadata).firstOrNull() }
+        else -> null
+    }
+    val showQuestion = needsAnswer || hasQuestions
+    val relativeTime = SidebarRelativeTimeFormatter.compactLabel(thread)
+    ListItem(
+        selected = selected,
+        onClick = onSelect,
+        onLongClick = onActionsRequest ?: onRenameRequest,
+        onLongClickLabel = stringResource(R.string.sidebar_thread_actions_cd),
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent, contentColor = colors.primaryText,
+            selectedContainerColor = colors.selectedRow, selectedContentColor = colors.primaryText,
+            trailingContentColor = colors.mutedText, selectedTrailingContentColor = colors.mutedText),
+        supportingContent = subtitle?.let {
+            { Text(it.text, style = MaterialTheme.typography.labelSmall, color = it.color,
+                maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        },
     ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 40.dp)
-                    .clip(rowShape)
-                    .background(if (selected) colors.selectedRow else Color.Transparent)
-                    .combinedClickable(
-                        onClick = onSelect,
-                        onLongClick = { if (onActionsRequest != null) onActionsRequest() else onRenameRequest?.invoke() },
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Reserve the status slot so starting/stopping a turn never shifts the title.
-            Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                SidebarThreadRunBadge(isRunning = isRunning)
-            }
-            Text(
-                text = thread.displayTitle,
-                style =
-                    MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = 14.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = colors.primaryText,
-                modifier = Modifier.weight(1f),
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (metadataTokens.isNotEmpty() && selected) {
-                    Text(
-                        text = metadataTokens.first().text,
-                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
-                        color = metadataTokens.first().color,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 60.dp),
-                    )
-                }
-                val rel = SidebarRelativeTimeFormatter.compactLabel(thread)
-                if (rel != null) {
-                    Text(
-                        text = rel,
-                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
-                        color = colors.mutedText,
-                        maxLines = 1,
-                    )
-                }
-                if (isUnread) {
-                    Text(
-                        text = stringResource(R.string.sidebar_unread_badge),
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        ),
-                        color = colors.unread,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .background(colors.unreadBackground, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 6.dp, vertical = 3.dp),
-                    )
-                }
-                if (needsAnswer || hasQuestions) {
-                    com.remodex.mobile.ui.turn.QuestionReplyIndicator(onAnswerRequest ?: onSelect)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(thread.displayTitle, modifier = Modifier.weight(1f).alignByBaseline(),
+                style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (relativeTime != null || showQuestion || isRunning || isUnread) {
+                // Align the whole status group using the time's first baseline, including on wrapped titles.
+                Row(modifier = if (relativeTime != null) Modifier.alignByBaseline() else Modifier.align(Alignment.Top),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (showQuestion) QuestionReplyIndicator(onAnswerRequest ?: onSelect)
+                    if (isRunning) SidebarThreadRunBadge(colors.secondaryText)
+                    if (isUnread) {
+                        val description = stringResource(R.string.sidebar_unread_badge)
+                        Badge(modifier = Modifier.semantics { contentDescription = description }, containerColor = colors.unread)
+                    }
+                    relativeTime?.let {
+                        Text(it, style = MaterialTheme.typography.labelSmall, color = colors.mutedText,
+                            maxLines = 1, softWrap = false)
+                    }
                 }
             }
-        }
-        if (thread.syncState == CodexThreadSyncState.archivedLocal) {
-            Text(
-                text = stringResource(R.string.sidebar_thread_archived_hint),
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.mutedText,
-                maxLines = 1,
-                modifier = Modifier.padding(start = 44.dp, top = 2.dp),
-            )
         }
     }
-}
-
-@Composable
-fun ActiveChatRow(
-    thread: CodexThread,
-    isRunning: Boolean,
-    activeMetadata: SidebarActiveChatMetadata? = null,
-    onSelect: () -> Unit,
-    onRenameRequest: (() -> Unit)?,
-    onDeleteLocalRequest: (() -> Unit)?,
-    modifier: Modifier = Modifier,
-    onActionsRequest: (() -> Unit)? = null,
-    isUnread: Boolean = false,
-    needsAnswer: Boolean = false,
-    hasQuestions: Boolean = false,
-    onAnswerRequest: (() -> Unit)? = null,
-) {
-    SidebarThreadRow(
-        thread = thread,
-        selected = true,
-        isRunning = isRunning,
-        activeMetadata = activeMetadata,
-        onSelect = onSelect,
-        onRenameRequest = onRenameRequest,
-        onDeleteLocalRequest = onDeleteLocalRequest,
-        modifier = modifier,
-        onActionsRequest = onActionsRequest,
-        isUnread = isUnread,
-        needsAnswer = needsAnswer,
-        hasQuestions = hasQuestions,
-        onAnswerRequest = onAnswerRequest,
-    )
-}
-
-@Composable
-fun ChatRow(
-    thread: CodexThread,
-    isRunning: Boolean,
-    onSelect: () -> Unit,
-    onRenameRequest: (() -> Unit)?,
-    onDeleteLocalRequest: (() -> Unit)?,
-    modifier: Modifier = Modifier,
-    onActionsRequest: (() -> Unit)? = null,
-    isUnread: Boolean = false,
-    needsAnswer: Boolean = false,
-    hasQuestions: Boolean = false,
-    onAnswerRequest: (() -> Unit)? = null,
-) {
-    SidebarThreadRow(
-        thread = thread,
-        selected = false,
-        isRunning = isRunning,
-        activeMetadata = null,
-        onSelect = onSelect,
-        onRenameRequest = onRenameRequest,
-        onDeleteLocalRequest = onDeleteLocalRequest,
-        modifier = modifier,
-        onActionsRequest = onActionsRequest,
-        isUnread = isUnread,
-        needsAnswer = needsAnswer,
-        hasQuestions = hasQuestions,
-        onAnswerRequest = onAnswerRequest,
-    )
 }
 
 private data class SidebarMetadataToken(

@@ -4,7 +4,7 @@
 
 ## 准备电脑
 
-1. 从 [fix74 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix74) 下载 `xdd-remodex-server-0.1.7-ws-fix74.tar.gz`，解压到长期使用的目录。中继和桥接所需的 Node 依赖已包含在包里。
+1. 从 [fix139 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix139) 下载 `xdd-remodex-server-0.1.7-ws-fix139.tar.gz`，解压到长期使用的目录。中继和桥接所需的 Node 依赖已包含在包里。
 2. 安装适合电脑芯片的 [Node.js 24](https://nodejs.org/en/download)。用平时使用 Codex 的账户打开终端，运行 `node -v` 确认显示 v24，再运行 `codex` 确认能正常进入已登录的会话，然后退出 Codex。
 3. 查电脑的局域网 IPv4 地址。Linux 可以用 `ip -brief -4 address` 查看当前网卡，Mac 可以在「系统设置 → 网络 → 当前连接 → 详细信息 → TCP/IP」查看。下面所有 `192.168.1.20` 都换成这个地址。
 
@@ -28,13 +28,19 @@ cd .local/runtime/workspace
 REMODEX_RELAY=ws://192.168.1.20:10004/relay node ../../../scripts/launch-bridge.cjs
 ```
 
-**macOS**：在第二个终端运行以下命令，二维码会直接显示在终端中。此方式用于连接和聊天。fix74 的账号切换依赖 Linux 的 systemd-run，Mac 示例关闭了自动授权维护。macOS 真机配对尚未验证。
+**macOS**：在第二个终端运行以下命令，二维码会直接显示在终端中。此方式用于连接和聊天。账号切换依赖 Linux 的 systemd-run，Mac 示例关闭了自动授权维护。macOS 真机配对尚未验证。
 
 ```sh
 REMODEX_AUTH_SCHEDULE_ENABLED=0 REMODEX_RELAY=ws://192.168.1.20:10004/relay node phodex-bridge/bin/remodex.js run
 ```
 
 在 Android 手机上打开 **Remodex 的扫码配对**，扫描电脑上的二维码，连接后打开一个会话。使用期间保持这两个终端运行。局域网 IP 改变后，按新地址重新启动并扫码。
+
+### 从 Android 管理 Mac 桥接
+
+fix77 在手机「设置 → 组件」中提供「保持 Mac 唤醒」。远程更新需要使用 XDD 的版本化服务端目录，并将桥接作为当前 macOS 用户的 LaunchAgent 运行。保留解压后的目录名，例如 `xdd-remodex-server-0.1.7-ws-fix77`。在该目录中，用 `node phodex-bridge/bin/remodex.js up` 代替上面的 `run`，沿用启动时的中继和授权维护环境配置。中继继续使用自己的启动方式。
+
+点「更新 XDD 桥接」并确认后，桥接会检查 XDD 仓库的最新稳定 Release。找到更高版本时，它按发布资产的大小和 SHA-256 校验服务端包，将其解压到同级新目录，并安排使用新版 CLI 重启桥接。手机重新连接后可在组件信息中核对已安装的 XDD 版本。旧版目录保留，回退时可在旧目录执行 `node phodex-bridge/bin/remodex.js restart`。使用前台 `run` 或从源码启动时，可按下文的手动升级流程操作。
 
 ## 已有部署和可选功能
 

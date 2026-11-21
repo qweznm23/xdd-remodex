@@ -66,6 +66,18 @@ test('running PID alone or wrong runtime account never marks the switch ready', 
   assert.equal(await verifySwitchedRuntime(pending, file, () => assert.fail('must not probe old daemon')), pending);
 });
 
+test('legacy restart failure stays in its original record when the selected runtime has recovered', async () => {
+  const failure = { stage: 'daemon_restart', exit_code: 1, stderr: 'fixture daemon rejected restart' };
+  const legacy = { operationId: 'old', legacy: true, selectedOnDisk: true, status: 'failed', failure };
+  const result = { restartStatus: 'failed', operationId: 'old', restartHistory: [legacy] };
+  const expected = async () => JSON.stringify({ tokens: { access_token: 'fixture-token', account_id: 'id' } });
+  const verified = await verifySwitchedRuntime(result, file, async () => ({ authToken: 'fixture-token' }), expected);
+  assert.equal(verified.restartStatus, 'ready');
+  assert.equal(verified.restartHistory[0].status, 'recovered');
+  assert.deepEqual(verified.restartHistory[0].failure, failure);
+  assert.equal(await verifySwitchedRuntime(result, file, async () => ({}), expected), result);
+});
+
 test('rotated runtime token for same account works and concurrent file switches are rejected', async () => {
   const token = 'header.' + Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'same-id' } })).toString('base64url') + '.signature';
   const raw = JSON.stringify({ tokens: { access_token: 'old', account_id: 'same-id' } });

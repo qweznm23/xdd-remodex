@@ -10,6 +10,43 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class AuthProfilesStateTest {
+    @Test fun quotaErrorStaysWithItsButtonAcrossOtherFileActionsAndListRefresh() = runTest {
+        val report = JSONValue.Obj(mapOf("stage" to JSONValue.Str("query_rate_limits"),
+            "rpc" to JSONValue.Obj(mapOf("code" to JSONValue.NumLong(-32603), "message" to JSONValue.Str("Access denied"))),
+            "runtime" to JSONValue.Obj(mapOf("httpStatuses" to JSONValue.Arr(listOf(JSONValue.Str("403")))))))
+        val error = CodexServiceError.RpcFailure(RPCError(-32000, "Query rejected",
+            JSONValue.Obj(mapOf("errorCode" to JSONValue.Str("QUOTA_FAILED"), "diagnostic" to report))))
+        val state = AuthProfilesState(repo { method, _ -> when (method.substringAfterLast('/')) {
+            "list" -> managedList()
+            "status" -> managedStatus()
+            "query" -> throw error
+            "check" -> JSONValue.Obj(profile.map + ("accessTokenState" to JSONValue.Str("expired")))
+            else -> error(method)
+        } })
+        state.refresh()
+        val row = state.profiles.single()
+        state.query(row)
+        state.checkFile(row)
+        state.refresh()
+        assertSame(error, state.result("query:${row.id}")?.error)
+        assertNull(state.result("query:99"))
+        assertNull(state.result("list")?.error)
+        assertEquals("expired", state.result("file:${row.id}")?.validity)
+        val summary = authFailureSummary(error)
+        for (detail in listOf("Access denied", "query_rate_limits", "HTTP 403", "QUOTA_FAILED", "-32603")) {
+            assertTrue(summary, summary.contains(detail))
+        }
+    }
+
+    @Test fun accountLineIsIndependentOfAliasEvenWhenTheNamesMatch() {
+        val row = AuthProfile("4", "1:2", "", displayName = "工作", accountName = "工作", email = "user@example.test")
+        assertEquals("工作 · user@example.test", row.accountIdentity())
+        assertEquals(row.accountIdentity(), row.copy(displayName = "备用").accountIdentity())
+        assertEquals("工作", row.copy(email = null).accountIdentity())
+        assertEquals("user@example.test", row.copy(accountName = null).accountIdentity())
+        assertNull(row.copy(accountName = null, email = null).accountIdentity())
+    }
+
     private fun managedList() = JSONValue.Obj(list().map + mapOf("managedBy" to JSONValue.Str("remodex"),
         "supportsImportExport" to JSONValue.Bool(true)))
     private fun managedStatus(row: JSONValue = profile) = JSONValue.Obj(mapOf(
@@ -39,13 +76,69 @@ class AuthProfilesStateTest {
         assertNull(state.failure)
         assertEquals(listOf("account/profiles/list", "account/profiles/status", "account/profiles/check"), calls)
         assertEquals("expired", state.profiles.single().accessTokenState)
-        assertEquals("checked", state.notice)
+        assertEquals("check:1", state.result("file:1")?.operation)
         assertTrue(state.management!!.entries.single().diagnostic!!.contains("403"))
         assertEquals("already_attempted_today", state.management!!.activeState)
         assertTrue(state.management!!.activeDiagnostic!!.contains("refresh_current_request"))
         assertTrue(state.management!!.activeDiagnostic!!.contains("403"))
         assertEquals(java.time.Instant.parse("2026-11-18T20:00:00Z"), state.management!!.nextCheck)
         assertFalse(state.management.toString().contains("must-not-display"))
+    }
+
+    @Test fun dynamicLibraryUsesServerIdsAndReadsNamesWithoutQuotaOrTokenRefresh() = runTest {
+        var name = "工作"
+        var removed = false
+        val calls = mutableListOf<String>()
+        val state = AuthProfilesState(repo { method, params ->
+            val action = method.substringAfterLast('/')
+            calls += action
+            when (action) {
+                "list" -> managedList()
+                "status" -> {
+                    val row = JSONValue.Obj(profile.map + mapOf("id" to JSONValue.Str("17"),
+                        "displayName" to JSONValue.Str(name), "accountName" to JSONValue.Str("Test User"),
+                        "email" to JSONValue.Str("user@example.test")))
+                    val status = managedStatus(row).map.toMutableMap()
+                    status["nextProfileId"] = JSONValue.Str("18")
+                    if (removed) status["profiles"] = JSONValue.Arr(emptyList())
+                    JSONValue.Obj(status)
+                }
+                "rename", "remove" -> {
+                    val request = params!!.objectValue!!
+                    assertEquals("17", request["profile"]?.stringValue)
+                    if (action == "rename") {
+                        assertEquals(name, request["expectedName"]?.stringValue)
+                        name = request["displayName"]!!.stringValue!!
+                    } else removed = true
+                    JSONValue.Obj(mapOf("status" to JSONValue.Str(if (removed) "removed" else "renamed"),
+                        "profile" to JSONValue.Str("17")))
+                }
+                else -> error(action)
+            }
+        })
+        state.refresh()
+        assertEquals("18", state.management?.nextProfileId)
+        assertEquals("Test User", state.profiles.single().accountName)
+        assertEquals("user@example.test", state.profiles.single().email)
+        state.rename(state.profiles.single(), "私人")
+        assertEquals("私人", state.profiles.single().displayName)
+        state.remove(state.profiles.single())
+        assertNull(state.failure)
+        assertTrue(state.profiles.isEmpty())
+        assertEquals(listOf("list", "status", "rename", "status", "remove", "status"), calls)
+    }
+
+    @Test fun priorFailedSwitchStillLoadsTheAuthorizationLibrary() = runTest {
+        val state = AuthProfilesState(repo { method, _ -> when (method.substringAfterLast('/')) {
+            "list" -> JSONValue.Obj(managedList().map + mapOf("restartStatus" to JSONValue.Str("failed"),
+                "restartError" to JSONValue.Str("fixture restart error")))
+            "status" -> JSONValue.Obj(managedStatus().map + ("nextProfileId" to JSONValue.Str("4")))
+            else -> error(method)
+        } })
+        state.refresh()
+        assertEquals("fixture restart error", state.failure?.message)
+        assertEquals("4", state.management?.nextProfileId)
+        assertEquals("failed", state.restartStatus)
     }
 
     @Test fun oversizedImportNeverUploadsAndPreservesTheExistingAuthorization() = runTest {
@@ -60,7 +153,7 @@ class AuthProfilesStateTest {
         assertEquals("invalid_size", (state.failure as com.remodex.mobile.services.FileTransferFailure).code)
         assertEquals(before, state.profiles)
         assertEquals(2, calls.size)
-        assertNull(state.notice)
+        assertSame(state.failure, state.result("file:1")?.error)
     }
 
     @Test fun importUsesProtectedUploadAndExactRevisionBeforeReloadingStatus() = runTest {
@@ -93,7 +186,7 @@ class AuthProfilesStateTest {
         assertNull(state.failure)
         assertTrue(committed)
         assertEquals("2:201", state.profiles.single().revision)
-        assertEquals("imported", state.notice)
+        assertEquals("import:1", state.result("file:1")?.operation)
     }
 
     @Test fun exportRefusesMismatchedSnapshotBeforeWritingDestination() = runTest {
@@ -108,7 +201,7 @@ class AuthProfilesStateTest {
         state.exportFile(state.profiles.single()) { _, _, _ -> saved = true }
         assertFalse(saved)
         assertTrue(state.failure!!.message!!.contains("export_response"))
-        assertNull(state.notice)
+        assertSame(state.failure, state.result("file:1")?.error)
     }
 
     @Test fun refreshedRevisionAlsoUpdatesManagementAndIsUsedByExport() = runTest {
@@ -136,7 +229,7 @@ class AuthProfilesStateTest {
         }
         assertNull(state.failure)
         assertTrue(saved)
-        assertEquals("exported", state.notice)
+        assertEquals("export:1", state.result("file:1")?.operation)
     }
     private val profile = JSONValue.Obj(mapOf("id" to JSONValue.Str("1"), "path" to JSONValue.Str("/profiles/1/auth.json"),
         "revision" to JSONValue.Str("1:200"), "accessExpiresAt" to JSONValue.Str("2026-11-22T01:20:26Z"),
@@ -200,6 +293,32 @@ class AuthProfilesStateTest {
         assertTrue(authProfileDiagnostic(state.failure!!).contains("401"))
         assertNull(state.busy)
     }
+    @Test fun recoveryForRejectedQueryRetainsRpcAndSecondaryFailure() = runTest {
+        val http = JSONValue.Obj(mapOf("httpStatuses" to JSONValue.Arr(listOf(JSONValue.NumLong(403)))))
+        val report = JSONValue.Obj(mapOf("stage" to JSONValue.Str("quota_read"), "runtime" to http))
+        val remote = CodexServiceError.RpcFailure(RPCError(-32000, "denied", JSONValue.Obj(mapOf("diagnostic" to report))))
+        val failure = IllegalStateException("query failed", remote).apply { addSuppressed(IllegalStateException("cleanup failed")) }
+        val state = AuthProfilesState(repo { method, _ -> if (method.endsWith("list")) list() else throw failure })
+        state.refresh()
+        state.query(state.profiles.single())
+        val stored = state.result("query:1")!!.error!!
+        val chain = generateSequence<Throwable>(stored) { it.cause }.toList()
+        assertTrue(chain.any { it === failure })
+        assertEquals(AuthRecovery(com.remodex.mobile.R.string.auth_recovery_denied), authRecovery("query", stored))
+        assertSame(remote, failure.cause)
+        assertTrue(chain.any { it === remote })
+        val detail = authProfileDiagnostic(stored)
+        for (fact in listOf("quota_read", "403", "cleanup failed", "-32000")) assertTrue(detail.contains(fact))
+    }
+
+    @Test fun timeoutRecoveryOnlyRepeatsReads() {
+        val error = java.util.concurrent.TimeoutException("stage=request")
+        assertEquals(AuthRecoveryAction.Query, authRecovery("query", error).action)
+        for (op in listOf("switch", "refreshToken", "remove", "import", "restart")) {
+            assertEquals(AuthRecoveryAction.Reload, authRecovery(op, error).action)
+        }
+    }
+
     @Test fun cancellationPropagatesAndDoesNotBecomeFailure() = runTest {
         val state = AuthProfilesState(repo { _, _ -> throw CancellationException("user left") })
         try { state.refresh(); fail("expected cancellation") } catch (expected: CancellationException) { }
@@ -284,6 +403,40 @@ class AuthProfilesStateTest {
         "restartStatus" to JSONValue.Str(status), "operationId" to JSONValue.Str(operation),
         "restartError" to JSONValue.Str("stage=runtime-account-verification: selected auth not confirmed")))
 
+    @Test fun manualRestartShowsPersistedOutcomeAndKeepsPriorFailure() = runTest {
+        fun record(id: String, status: String, kind: String) = JSONValue.Obj(mapOf(
+            "kind" to JSONValue.Str(kind), "operationId" to JSONValue.Str(id), "status" to JSONValue.Str(status),
+            "requestedAt" to JSONValue.Str("2026-11-20T16:01:14.225637+08:00"),
+        ))
+        val failed = JSONValue.Obj(record("old", "failed", "switch").map + mapOf(
+            "recovery" to JSONValue.Obj(mapOf("status" to JSONValue.Str("verification_required"))),
+            "failure" to JSONValue.Obj(mapOf("stage" to JSONValue.Str("daemon_restart"))),
+        ))
+        fun response(vararg history: JSONValue) = JSONValue.Obj(list().map + mapOf(
+            "supportsManualRestart" to JSONValue.Bool(true), "restartHistory" to JSONValue.Arr(history.toList()),
+        ))
+        var current = response(failed)
+        val state = AuthProfilesState(repo { method, params ->
+            if (method == "account/profiles/restart") {
+                assertTrue(params!!.objectValue!!.isEmpty())
+                record("manual-1", "restart_scheduled", "manual")
+            } else current
+        })
+        state.refresh()
+        assertTrue(state.verifyingIdentity)
+        state.restartCodex()
+        assertTrue(state.switching)
+        assertEquals("1", state.profiles.single().id)
+        current = JSONValue.Obj(response(record("manual-1", "ready", "manual"), failed).map + mapOf(
+            "restartStatus" to JSONValue.Str("ready"), "operationId" to JSONValue.Str("manual-1"),
+        ))
+        state.refresh()
+        assertFalse(state.switching)
+        assertFalse(state.verifyingIdentity)
+        assertEquals(listOf("manual-1", "old"), state.restartHistory.map { it.operationId })
+        assertEquals(failed, state.restartHistory.last().detail)
+    }
+
     @Test fun switchStaysPendingUntilTheSameOperationIsRuntimeVerified() = runTest {
         var response = list()
         val state = AuthProfilesState(repo { method, _ -> if (method.endsWith("switch")) ack() else response })
@@ -298,6 +451,23 @@ class AuthProfilesStateTest {
         assertFalse(state.switching)
         assertNull(state.pendingOperationId)
         assertNull(state.switchDeadline)
+        assertNull(state.failure)
+    }
+
+    @Test fun liveConfirmationClearsRestoredFailureWithoutStartingAnotherSwitch() = runTest {
+        var status = "failed"
+        val state = AuthProfilesState(repo { method, _ ->
+            assertEquals("account/profiles/list", method)
+            JSONValue.Obj(switchList(status).map + ("selectedProfile" to JSONValue.Str("1")))
+        })
+        state.refresh()
+        assertTrue(state.verifyingIdentity)
+        assertNotNull(state.result("switch:1")?.error)
+        assertNull(state.pendingOperationId)
+        status = "ready"
+        state.refresh()
+        assertFalse(state.verifyingIdentity)
+        assertNull(state.result("switch:1"))
         assertNull(state.failure)
     }
 

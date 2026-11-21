@@ -21,6 +21,26 @@ import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class IncomingEventRouterServerRequestTest {
+    @Test fun permissionRequestsReturnOnlyTheTurnGrantFromThisRequest() = runTest {
+        val rights = JSONValue.Obj(mapOf("network" to JSONValue.Obj(mapOf("enabled" to JSONValue.Bool(true)))))
+        for ((decision, automatic) in listOf(PendingApprovalDecision.Accept to false,
+            PendingApprovalDecision.Decline to false, PendingApprovalDecision.Accept to true)) {
+            val response = CompletableDeferred<RPCMessage>()
+            val queued = CompletableDeferred<Pair<PendingApprovalRequest, (PendingApprovalDecision) -> Unit>>()
+            newRouter(shouldAutoApproveRequests = { automatic }, onApprovalRequest = { r, reply -> queued.complete(r to reply) })
+                .dispatchServerRequest("item/permissions/requestApproval", JSONValue.Str("p"),
+                    JSONValue.Obj(mapOf("permissions" to rights))) { response.complete(it) }
+            if (!automatic) {
+                val (request, reply) = queued.await()
+                assertEquals(rights, request.permissions)
+                reply(decision)
+            }
+            assertEquals(JSONValue.Obj(mapOf("scope" to JSONValue.Str("turn"),
+                "permissions" to if (decision == PendingApprovalDecision.Accept) rights else JSONValue.Obj(emptyMap()))),
+                response.await().result)
+        }
+    }
+
     @Test
     fun dispatchServerRequest_enqueuesCommandApprovalAndReturnsDecisionObject() =
         runTest {

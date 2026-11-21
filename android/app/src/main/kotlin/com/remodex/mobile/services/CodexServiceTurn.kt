@@ -1,5 +1,6 @@
 package com.remodex.mobile.services
 
+import kotlinx.coroutines.sync.withLock
 import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CodexImageAttachment
@@ -31,12 +32,10 @@ internal suspend fun CodexService.startTurnInternal(
     collaborationMode: CodexCollaborationModeKind? = null,
 ) {
     if (!sessionReady) throw CodexServiceError.Disconnected
+    if (supportsSettingsSync) runtimeWriteMutex.withLock { Unit } // Apply any preceding picker acknowledgement before reading the selection.
     val targetThreadId = threadId.trim()
     val trimmed = userText.trim()
-    val readyAttachments =
-        attachments.filter { attachment ->
-            !attachment.payloadDataURL.isNullOrBlank()
-        }
+    val readyAttachments = attachments.filter(CodexImageAttachment::isTurnInput)
     if (targetThreadId.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
     if (trimmed.isEmpty() && readyAttachments.isEmpty()) {
         throw CodexServiceError.InvalidInput("Message is empty")
@@ -94,7 +93,7 @@ internal suspend fun CodexService.startTurnInternal(
                 return response
             } catch (e: Throwable) {
                 if (imageUrlKey == "url" &&
-                    readyAttachments.isNotEmpty() &&
+                    readyAttachments.any { it.remotePath.isNullOrBlank() } &&
                     shouldRetryTurnStartWithImageURLField(e)
                 ) {
                     imageUrlKey = "image_url"
@@ -218,10 +217,7 @@ internal suspend fun CodexService.steerTurnInternal(
     val tid = threadId.trim()
     val turnId = expectedTurnId.trim()
     val trimmed = userText.trim()
-    val readyAttachments =
-        attachments.filter { attachment ->
-            !attachment.payloadDataURL.isNullOrBlank()
-        }
+    val readyAttachments = attachments.filter(CodexImageAttachment::isTurnInput)
     if (tid.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
     if (turnId.isEmpty()) throw CodexServiceError.InvalidInput("Missing active turn id")
     if (trimmed.isEmpty() && readyAttachments.isEmpty()) {
@@ -265,7 +261,7 @@ internal suspend fun CodexService.steerTurnInternal(
                 return
             } catch (e: Throwable) {
                 if (imageUrlKey == "url" &&
-                    readyAttachments.isNotEmpty() &&
+                    readyAttachments.any { it.remotePath.isNullOrBlank() } &&
                     shouldRetryTurnStartWithImageURLField(e)
                 ) {
                     imageUrlKey = "image_url"
@@ -336,6 +332,7 @@ private fun CodexService.buildTurnStartRequestParams(
             ),
         )
 
+    if (supportsSettingsSync) params["remodexRuntimeSettingsVersion"] = JSONValue.NumLong(2)
     val runtimeSelection = runtimeSelectionForThread(threadId)
     val threadModel = runtimeSelection.modelId
     if (threadModel != null) {
@@ -350,7 +347,9 @@ private fun CodexService.buildTurnStartRequestParams(
         null -> Unit
     }
     if (includesServiceTier) {
-        _selectedServiceTier.value?.let { params["serviceTier"] = JSONValue.Str(it.name) }
+        if (supportsSettingsSync) {
+            if (threadRuntimeSelection.fastTier(threadId)) params["serviceTier"] = JSONValue.Str("priority")
+        } else _selectedServiceTier.value?.let { params["serviceTier"] = JSONValue.Str(it.name) }
     }
     if (collaborationMode != null) {
         params["collaborationMode"] =
@@ -399,6 +398,11 @@ internal fun makeTurnInputPayload(
 ): List<JSONValue> {
     val inputItems = ArrayList<JSONValue>()
     attachments.forEach { attachment ->
+        val path = attachment.remotePath
+        if (!path.isNullOrBlank()) {
+            inputItems += JSONValue.Obj(mapOf("type" to JSONValue.Str("localImage"), "path" to JSONValue.Str(path)))
+            return@forEach
+        }
         val payloadDataUrl = attachment.payloadDataURL?.trim().orEmpty()
         if (payloadDataUrl.isEmpty()) return@forEach
         inputItems +=
@@ -608,11 +612,15 @@ private suspend fun CodexService.sendInterruptRpc(
     sendRequestImpl("turn/interrupt", JSONValue.Obj(params))
 }
 
-internal suspend fun CodexService.fetchThreadTurnInterruptSnapshotImpl(threadId: String): ThreadTurnInterruptSnapshot {
-    val metadata = fetchThreadMetadata(threadId) { method, params -> sendRequestImpl(method, params) }
-    val page = fetchThreadHistoryPage(threadId, null, limit = 1, itemsView = "summary") { method, params ->
-        sendRequestImpl(method, params)
-    }
+internal suspend fun CodexService.fetchThreadTurnInterruptSnapshotImpl(threadId: String): ThreadTurnInterruptSnapshot =
+    fetchLatestTurnSnapshot(threadId) { method, params -> sendRequestImpl(method, params) }
+
+internal suspend fun fetchLatestTurnSnapshot(
+    threadId: String,
+    request: suspend (String, JSONValue.Obj) -> RPCMessage,
+): ThreadTurnInterruptSnapshot {
+    val metadata = fetchThreadMetadata(threadId, request)
+    val page = fetchThreadHistoryPage(threadId, null, limit = 1, itemsView = "summary", request = request)
     val snapshot = ThreadTurnSnapshot.fromThreadObject(page.threadObject(metadata.map))
     val latest = page.turns.lastOrNull()?.objectValue
     return snapshot.copy(latestSuccessfulTurnId = latest?.get("id")?.stringValue?.takeIf {

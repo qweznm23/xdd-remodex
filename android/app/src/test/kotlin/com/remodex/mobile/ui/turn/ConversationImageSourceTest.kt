@@ -5,6 +5,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class ConversationImageSourceTest {
+    @Test fun completedUploadKeepsLiteralFilenameCharacters() {
+        val path = "/home/user/.codex/remodex_uploads/1f1ce835-3c10-42c4-a286-e23d6da38d29/screen #2%20.png"
+        assertEquals(ConversationImageSource.Workspace(path), conversationImageSource(path))
+    }
+
     @Test fun watchScreenshotUsesComputerFileRoute() {
         val path = "/data/projects/xdd/mywidget/mywidget-watch-android/app/build/home-hero/actual-home.png"
         assertEquals(ConversationImageSource.Workspace(path), conversationImageSource(path))

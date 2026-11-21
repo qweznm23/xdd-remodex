@@ -1,5 +1,9 @@
 package com.remodex.mobile.ui.beta
+import com.remodex.mobile.ui.theme.singleOwnerPageEntry
 
+import com.remodex.mobile.ui.theme.RemodexGroup
+import com.remodex.mobile.ui.theme.RemodexPageHeader
+import com.remodex.mobile.ui.theme.conversationColors
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -24,7 +28,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.CardGiftcard
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -35,18 +38,15 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Whatshot
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,8 +74,6 @@ import com.remodex.mobile.beta.BetaMissionStatus
 import com.remodex.mobile.beta.DEFAULT_BETA_REWARD_COPY
 import com.remodex.mobile.beta.TesterHqPresentation
 import com.remodex.mobile.beta.TesterHqPresentationBuilder
-import com.remodex.mobile.ui.theme.RemodexPopupSurface
-import com.remodex.mobile.ui.theme.remodexScreenTopAppBarColors
 import kotlinx.coroutines.launch
 
 private enum class TesterHqMode {
@@ -90,11 +88,13 @@ fun TesterHqScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    BackHandler(onBack = onNavigateBack)
     val state by repository.uiState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var showFeedback by rememberSaveable { mutableStateOf(false) }
     var mode by rememberSaveable { mutableStateOf(TesterHqMode.Hq) }
+
+    val back = { if (mode == TesterHqMode.Leaderboard) mode = TesterHqMode.Hq else onNavigateBack() }
+    BackHandler(onBack = back)
 
     LaunchedEffect(state.joinState.optedIn) {
         if (state.enabled && state.joinState.optedIn) {
@@ -114,33 +114,9 @@ fun TesterHqScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = MaterialTheme.colorScheme.conversationColors().reading,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = if (mode == TesterHqMode.Leaderboard) "Leaderboard" else "Tester HQ",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-                colors = remodexScreenTopAppBarColors(),
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            if (mode == TesterHqMode.Leaderboard) {
-                                mode = TesterHqMode.Hq
-                            } else {
-                                onNavigateBack()
-                            }
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                        )
-                    }
-                },
-            )
+            RemodexPageHeader(if (mode == TesterHqMode.Leaderboard) "Leaderboard" else "Tester HQ", back)
         },
     ) { innerPadding ->
         Column(
@@ -148,7 +124,7 @@ fun TesterHqScreen(
                 Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .navigationBarsPadding()
+                    .singleOwnerPageEntry(mode) { _, to -> to == TesterHqMode.Hq }
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 18.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -195,7 +171,7 @@ fun TesterHqScreen(
                     Text(
                         text = "Feedback sent",
                         style = MaterialTheme.typography.titleSmall,
-                        fontFamily = FontFamily.Monospace,
+
                     )
                     Text(
                         text =
@@ -241,7 +217,7 @@ private fun JoinBetaCard(
     var nickname by rememberSaveable { mutableStateOf("") }
 
     TerminalPanel {
-        TerminalHeader(title = "Help shape Remodex Android", icon = ">_")
+        TerminalHeader(title = "Help shape Remodex Android")
         Text(
             text = "Join the beta loop to see daily missions, send in-app feedback, and track useful testing contribution with an anonymous tester ID.",
             style = MaterialTheme.typography.bodyMedium,
@@ -289,7 +265,7 @@ private fun TesterHqContent(
 
     hq?.currentBuild?.let { build ->
         TerminalPanel {
-            TerminalHeader(title = "Latest update", icon = ">_")
+            TerminalHeader(title = "Latest update")
             TwoColumnBlock(
                 leftTitle = "Fixed",
                 leftIcon = Icons.Outlined.BugReport,
@@ -389,8 +365,8 @@ private fun LeaderboardContent(
 
 @Composable
 private fun SummaryPanel(presentation: TesterHqPresentation) {
-    TerminalPanel(borderAccent = true) {
-        TerminalHeader(title = presentation.buildLabel, icon = ">_")
+    TerminalPanel {
+        TerminalHeader(title = presentation.buildLabel)
         DividerLine()
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             if (maxWidth < 520.dp) {
@@ -475,7 +451,7 @@ private fun MissionRow(mission: BetaMission) {
             Text(
                 text = mission.title,
                 style = MaterialTheme.typography.titleSmall,
-                fontFamily = FontFamily.Monospace,
+
             )
             mission.description?.let {
                 Text(
@@ -490,7 +466,7 @@ private fun MissionRow(mission: BetaMission) {
             text = "+${mission.points}",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.secondary,
-            fontFamily = FontFamily.Monospace,
+
         )
     }
 }
@@ -501,7 +477,7 @@ private fun LeaderboardSummaryPanel(
     hq: BetaHqResponse?,
 ) {
     val profile = leaderboard?.profile ?: hq?.profile
-    TerminalPanel(borderAccent = true) {
+    TerminalPanel {
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             LeaderboardMetric(
                 icon = Icons.Outlined.Person,
@@ -590,7 +566,7 @@ private fun LeaderboardRow(row: BetaLeaderboardRow) {
         Text(
             text = row.displayName,
             style = MaterialTheme.typography.bodyLarge,
-            fontFamily = FontFamily.Monospace,
+
             modifier = Modifier.weight(1f),
         )
         Text(
@@ -602,7 +578,7 @@ private fun LeaderboardRow(row: BetaLeaderboardRow) {
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
-            fontFamily = FontFamily.Monospace,
+
         )
     }
 }
@@ -626,7 +602,7 @@ private fun RankBadge(rank: Int) {
         Text(
             text = rank.toString(),
             style = MaterialTheme.typography.labelMedium,
-            fontFamily = FontFamily.Monospace,
+
         )
     }
 }
@@ -653,7 +629,7 @@ private fun LeaderboardMetric(
             text = value,
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.secondary,
-            fontFamily = FontFamily.Monospace,
+
         )
     }
 }
@@ -673,7 +649,7 @@ private fun CompactBuildPill(version: String?) {
             text = ">_ Build ${version ?: "-"}",
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.secondary,
-            fontFamily = FontFamily.Monospace,
+
         )
     }
 }
@@ -723,7 +699,7 @@ private fun BulletList(
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
-                fontFamily = FontFamily.Monospace,
+
             )
         }
         if (items.isEmpty()) {
@@ -738,7 +714,7 @@ private fun BulletList(
                     text = "- $item",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace,
+
                 )
             }
         }
@@ -761,14 +737,14 @@ private fun StatTile(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontFamily = FontFamily.Monospace,
+
             modifier = Modifier.weight(1f),
         )
         Text(
             text = value,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.secondary,
-            fontFamily = FontFamily.Monospace,
+
             textAlign = TextAlign.End,
         )
     }
@@ -777,14 +753,9 @@ private fun StatTile(
 @Composable
 private fun TerminalPanel(
     modifier: Modifier = Modifier,
-    borderAccent: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    RemodexPopupSurface(
-        modifier = modifier.fillMaxWidth(),
-        panel = true,
-        accentBorder = borderAccent,
-    ) {
+    RemodexGroup(modifier) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -794,39 +765,8 @@ private fun TerminalPanel(
 }
 
 @Composable
-private fun TerminalHeader(
-    title: String,
-    icon: String,
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier =
-                Modifier
-                    .size(54.dp)
-                    .border(
-                        BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.75f)),
-                        RoundedCornerShape(14.dp),
-                    ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = icon,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.titleMedium,
-                fontFamily = FontFamily.Monospace,
-            )
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.secondary,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
+private fun TerminalHeader(title: String) {
+    Text(title, style = MaterialTheme.typography.titleLarge)
 }
 
 @Composable
@@ -842,7 +782,7 @@ private fun SectionTitle(
         Text(
             text = title,
             style = MaterialTheme.typography.titleLarge,
-            fontFamily = FontFamily.Monospace,
+
             fontWeight = FontWeight.SemiBold,
         )
     }
@@ -879,16 +819,10 @@ private fun PrimaryTerminalButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    Button(
+    FilledTonalButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.height(56.dp),
-        shape = RoundedCornerShape(28.dp),
-        colors =
-            ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            ),
     ) {
         Icon(imageVector = icon, contentDescription = null)
         Spacer(modifier = Modifier.width(10.dp))

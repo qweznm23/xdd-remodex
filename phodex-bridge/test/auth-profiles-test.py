@@ -15,8 +15,10 @@ def load(name, path):
     spec.loader.exec_module(module)
     return module
 
+sys.path.insert(0, str(Path(__file__).parents[1] / 'src'))
 api = load('profiles_api', Path(__file__).parents[1] / 'src/auth-profiles.py')
 m = load('manager', Path(__file__).parents[1] / 'src/auth_store.py')
+from auth_restarts import RestartError
 def credential(account, refresh):
     claims = base64.urlsafe_b64encode(json.dumps({'iat': 1700000000, 'exp': 2000000000}).encode()).decode().rstrip('=')
     return {'auth_mode': 'chatgpt', 'last_refresh': '2026-11-01T12:00:00Z', 'tokens': {
@@ -43,6 +45,31 @@ class ProfileTests(unittest.TestCase):
         for p in reversed(self.patches): p.stop()
         self.temp.cleanup()
 
+    def test_manually_restarted_runtime_recovers_only_the_matching_selection(self):
+        self.api.socket = str(m.BASE / 'test.sock')
+        selection = {'profile': '2', 'unit': 'test-switch'}
+        report = {'status': 'failed', 'operationId': 'test-switch', 'stage': 'daemon_restart', 'exit_code': 1}
+        m.save_json(m.STATE / 'last-switch.json', selection)
+        m.save_json(m.STATE / 'last-restart.json', report)
+        history = (m.STATE / 'last-restart.json').read_bytes()
+        with patch('auth_runtime.matches_runtime', return_value=False):
+            self.assertEqual(self.api.list()['restartStatus'], 'failed')
+        with patch('auth_runtime.matches_runtime', side_effect=TimeoutError('fixture runtime read timed out')):
+            snapshot = self.api.list()
+            self.assertEqual(snapshot['restartStatus'], 'failed')
+            self.assertEqual(snapshot['runtimeVerification']['diagnostic']['stage'], 'runtime_account_reconciliation')
+        with patch('auth_runtime.matches_runtime', return_value=True):
+            recovered = self.api.list()
+            self.assertEqual(recovered['restartStatus'], 'ready')
+            self.assertEqual(recovered['runtimeVerification']['previousStatus'], 'failed')
+            self.assertEqual(recovered['restartHistory'][0]['failure']['exit_code'], 1)
+            self.assertEqual(recovered['restartHistory'][0]['status'], 'recovered')
+        self.assertEqual((m.STATE / 'last-restart.json').read_bytes(), history)
+        m.save_json(m.STATE / 'last-switch.json', dict(selection, profile='1'))
+        with patch('auth_runtime.matches_runtime') as probe:
+            self.assertNotEqual(self.api.list()['restartStatus'], 'ready')
+            probe.assert_not_called()
+
     def test_filters_by_identity_not_token_bytes_and_returns_only_dates(self):
         result = self.api.list()
         self.assertEqual([x['id'] for x in result['profiles']], ['1'])
@@ -63,6 +90,26 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue(report['suppressed'][0]['context']['cycle'])
         self.assertEqual((m.BASE/'auth.json').read_bytes(), self.active)
 
+    def test_empty_library_first_add_and_account_display_fallback(self):
+        for number in self.api.registered():
+            (m.PROFILES / number / 'auth.json').unlink()
+            (m.PROFILES / number).rmdir()
+        status = self.api.status()
+        self.assertEqual((status['profiles'], status['nextProfileId']), ([], '1'))
+        record = credential('test-account', 'not-a-display-value')
+        payload = {'https://api.openai.com/profile': {'email': 'first@example.test'}}
+        part = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+        record['tokens'].update(access_token='h.' + part + '.s', id_token='opaque')
+        upload = m.BASE / 'remodex_uploads' / 'file.json'
+        m.save_json(upload, record)
+        result = self.api.import_profile('1', 'missing', upload, '')['profileInfo']
+        self.assertEqual(result['email'], 'first@example.test')
+        self.assertIsNone(result['accountName'])
+        self.assertIsNone(result['displayName'])
+        exported = self.api.export('1', result['revision'])
+        self.assertEqual(Path(exported['path']).read_bytes(), upload.read_bytes())
+        self.assertEqual((m.BASE/'auth.json').read_bytes(), self.active)
+
     def test_restart_timeout_retains_stage_and_original_exception(self):
         m.save_json(m.STATE/'last-switch.json', {'unit': 'test-operation'})
         failure = m.subprocess.TimeoutExpired(['codex', 'app-server', 'daemon', 'restart'], 120)
@@ -77,12 +124,18 @@ class ProfileTests(unittest.TestCase):
         rows = self.api.list()['profiles']
         self.assertEqual([row['id'] for row in rows], ['1', '3'])
         self.assertNotIn('third-private', json.dumps(rows))
-        with patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stderr='')):
+        self.api.socket = str(api.RestartOperations(self.api).canonical_socket)
+        with patch.object(api.RestartOperations, 'owner', return_value='restart'), patch.object(m.subprocess, 'run'):
             result = self.api.switch('3', rows[1]['revision'])
+        self.assertEqual(result['status'], 'restart_scheduled')
         self.assertEqual(result['profile'], '3')
-        self.assertNotIn('3', [row['id'] for row in self.api.list()['profiles']])
-        m.save_json(m.BASE/'auth.json', credential('active-account', 'newer-selection'))
-        self.assertEqual(self.api.list()['restartStatus'], 'superseded_by_newer_switch')
+        self.assertIn('3', [row['id'] for row in self.api.list()['profiles']])
+        m.save_json(m.BASE/'auth.json', credential('active-account', 'newer-credential-version'))
+        with patch.object(api.RestartOperations, 'owner', return_value='restart'), patch.object(api.RestartOperations, 'command') as command:
+            final = api.RestartOperations(self.api).run(result['operationId'])
+        command.assert_not_called()
+        self.assertEqual(final['failure']['code'], 'RESTART_SELECTION_CHANGED')
+        self.assertEqual(m.read(m.BASE/'auth.json')[1]['tokens']['refresh_token'], 'newer-credential-version')
 
     def test_new_profile_query_uses_registry_without_changing_active_account(self):
         m.save_json(m.PROFILES/'3/auth.json', credential('third-account', 'third-private'))
@@ -92,25 +145,32 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(result['profile'], '3')
         self.assertEqual((m.BASE/'auth.json').read_bytes(), self.active)
 
-    def test_unregistered_files_and_noncanonical_ids_cannot_be_selected(self):
+    def test_additional_files_are_discovered_but_links_and_noncanonical_ids_cannot_be_selected(self):
         m.save_json(m.PROFILES/'4/auth.json', credential('fourth-account', 'fourth-private'))
-        self.assertNotIn('4', [row['id'] for row in self.api.list()['profiles']])
-        for number in ('4', '03', '3\n', '../3'):
+        (m.PROFILES / '5').symlink_to(m.PROFILES / '4', target_is_directory=True)
+        self.assertIn('4', [row['id'] for row in self.api.list()['profiles']])
+        for number in ('5', '6', '03', '3\n', '../3'):
             with self.assertRaises(api.ProfileError) as caught:
                 self.api.target(number, '1:2')
             self.assertEqual(caught.exception.code, 'INVALID_PROFILE')
 
-    def test_switch_uses_existing_manager_save_and_delayed_restart(self):
-        with patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stderr='')) as run:
+    def test_switch_defers_writing_authorization_until_the_worker_runs(self):
+        self.api.socket = str(api.RestartOperations(self.api).canonical_socket)
+        with patch.object(api.RestartOperations, 'owner', return_value='restart'), patch.object(m.subprocess, 'run') as run:
             result = self.api.switch('1', self.revision)
         self.assertEqual(result['status'], 'restart_scheduled')
         self.assertIn('--on-active=10s', run.call_args.args[0])
         self.assertIn('--property=ExitType=cgroup', run.call_args.args[0])
         self.assertIn('--property=Type=exec', run.call_args.args[0])
         self.assertEqual(result['operationId'], self.api.list()['operationId'])
+        self.assertEqual((m.BASE/'auth.json').read_bytes(), self.active)
+        self.assertEqual(self.api.list()['profiles'][0]['id'], '1')
+        self.assertEqual(self.api.list()['restartStatus'], 'restart_scheduled')
+        ops = api.RestartOperations(self.api)
+        with patch.object(ops, 'owner', return_value='restart'), patch.object(ops, 'runtime_matches', return_value=True), patch.object(ops, 'command'):
+            self.assertEqual(ops.run(result['operationId'])['status'], 'ready')
         self.assertEqual((m.PROFILES/'2/auth.json').read_bytes(), self.active)
         self.assertEqual(self.api.list()['profiles'][0]['id'], '2')
-        self.assertEqual(self.api.list()['restartStatus'], 'restart_scheduled')
 
     def test_stale_selection_and_active_account_are_rejected_without_writes(self):
         for number, revision, code in [('1', 'old', 'PROFILE_CHANGED'), ('2', self.revision, 'PROFILE_CHANGED'), ('../auth', self.revision, 'INVALID_PROFILE')]:
@@ -127,8 +187,9 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual((m.STATE/'last-restart.json').read_bytes(), before)
 
     def test_switch_preserves_proxy_environment_for_delayed_daemon(self):
+        self.api.socket = str(api.RestartOperations(self.api).canonical_socket)
         with patch.dict(m.os.environ, {'HTTPS_PROXY': 'http://127.0.0.1:7897'}):
-            with patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stderr='')) as run:
+            with patch.object(api.RestartOperations, 'owner', return_value='restart'), patch.object(m.subprocess, 'run') as run:
                 result = self.api.switch('1', self.revision)
         args = run.call_args.args[0]
         self.assertIn('--setenv=HTTPS_PROXY=http://127.0.0.1:7897', args)
@@ -142,10 +203,61 @@ class ProfileTests(unittest.TestCase):
         self.assertIn('selection-verification', result['restartError'])
 
     def test_failed_restart_scheduling_rolls_back_and_keeps_original_evidence(self):
-        with patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stderr='scheduler failure 42')):
-            with self.assertRaises(RuntimeError) as caught: self.api.switch('1', self.revision)
-        self.assertIn('scheduler failure 42', self.api.error(caught.exception)['message'])
+        self.api.socket = str(api.RestartOperations(self.api).canonical_socket)
+        error = m.subprocess.CalledProcessError(42, 'systemd-run', stderr='scheduler failure 42')
+        with patch.object(api.RestartOperations, 'owner', return_value='restart'), patch.object(m.subprocess, 'run', side_effect=error):
+            result = self.api.switch('1', self.revision)
+        self.assertEqual(result['failure']['exitCode'], 42)
+        self.assertEqual(result['failure']['stage'], 'restart_schedule')
+        self.assertEqual(result['failure']['stderr'], 'scheduler failure 42')
         self.assertEqual((m.BASE/'auth.json').read_bytes(), self.active)
+
+    def test_host_manual_restart_can_start_a_stopped_daemon_without_writing_auth(self):
+        ops = api.RestartOperations(self.api)
+        self.api.socket = str(ops.canonical_socket)
+        absent = m.subprocess.CalledProcessError(1, 'version', stderr='socket not found')
+        running = SimpleNamespace(stdout=json.dumps({'status': 'running', 'socketPath': self.api.socket, 'backend': 'pid'}))
+        with patch.object(ops, 'command', side_effect=[absent, absent, None, running]) as command, \
+                patch.object(m.subprocess, 'run'), patch.object(ops, 'runtime_matches', return_value=True):
+            pending = ops.schedule(allow_stopped=True)
+            final = ops.run(pending['operationId'])
+        self.assertEqual([call.args[0] for call in command.call_args_list], ['version', 'version', 'start', 'version'])
+        self.assertEqual((final['status'], final['command'], final['kind']), ('ready', 'start', 'manual'))
+        self.assertEqual((m.BASE/'auth.json').read_bytes(), self.active)
+
+    def test_ambiguous_switch_timeout_retains_evidence_and_protected_original(self):
+        ops = api.RestartOperations(self.api)
+        self.api.socket = str(ops.canonical_socket)
+        timed_out = m.subprocess.TimeoutExpired('restart', 120, stderr=b'active-new')
+        with patch.object(ops, 'owner', return_value='restart'), patch.object(m.subprocess, 'run'):
+            pending = ops.schedule('1', self.revision)
+            with patch.object(ops, 'command', side_effect=timed_out), patch.object(ops, 'runtime_matches', return_value=True):
+                final = ops.run(pending['operationId'])
+        self.assertEqual(final['failure']['timeoutSeconds'], 120)
+        self.assertEqual(final['failure']['stage'], 'daemon_restart')
+        self.assertEqual(final['failure']['stderr'], '[REDACTED]')
+        self.assertEqual(final['recovery']['status'], 'verification_required')
+        self.assertEqual(m.read(m.BASE/'auth.json')[1]['tokens']['account_id'], 'other-account')
+        retained = m.STATE/'restart-recovery'/pending['operationId']/'auth.json'
+        self.assertEqual(retained.read_bytes(), self.active)
+
+    def test_expired_worker_cannot_restart_after_a_new_manual_operation(self):
+        ops = api.RestartOperations(self.api)
+        self.api.socket = str(ops.canonical_socket)
+        with patch.object(ops, 'owner', return_value='restart'), patch.object(m.subprocess, 'run'):
+            first = ops.schedule()
+            with self.assertRaises(RestartError) as busy:
+                ops.schedule()
+            self.assertEqual(busy.exception.code, 'RESTART_ALREADY_PENDING')
+            record = ops.records()[0]
+            record['_expires'] = 0
+            ops.save(record)
+            second = ops.schedule()
+        with patch.object(ops, 'command') as command:
+            self.assertIsNone(ops.run(first['operationId']))
+        command.assert_not_called()
+        self.assertEqual(second['previousOperationId'], first['operationId'])
+        self.assertEqual(ops.history()[1]['failure']['code'], 'RESTART_QUEUE_EXPIRED')
 
     def rpc(self, fail=False, conflict=False, close_fail=False, compat=False, account='other-account'):
         owner = self

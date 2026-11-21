@@ -1,7 +1,5 @@
 package com.remodex.mobile.ui.sidebar
 
-import com.remodex.mobile.core.config.FeatureFlags
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,7 +35,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.R
-import com.remodex.mobile.core.model.GitBranchesWithStatusResult
+import com.remodex.mobile.core.config.FeatureFlags
 import com.remodex.mobile.core.model.GitWorktreeChangeTransferMode
 import com.remodex.mobile.data.CodexRepository
 import com.remodex.mobile.data.GitBranchDisplayMapper
@@ -142,33 +140,9 @@ fun SidebarNewWorktreeSheet(
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        Surface(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = !busy) { showBranchMenu = true },
-                            shape = MaterialTheme.shapes.medium,
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = branch,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Icon(
-                                    imageVector = Icons.Filled.KeyboardArrowDown,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                        OutlinedButton(onClick = { showBranchMenu = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                            Text(branch, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Icon(Icons.Filled.KeyboardArrowDown, null)
                         }
                         RemodexDropdownMenu(
                             expanded = showBranchMenu,

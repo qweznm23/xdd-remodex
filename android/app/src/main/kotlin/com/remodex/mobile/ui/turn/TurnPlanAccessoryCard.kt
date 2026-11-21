@@ -40,35 +40,20 @@ internal fun TurnPlanBar(
     modifier: Modifier = Modifier,
 ) {
     val snapshot = PlanAccessorySnapshot.fromMessage(message)
-    val lightChrome = isAgentLightChrome()
-    val statusTint =
-        if (lightChrome) {
-            when (snapshot.status) {
-                PlanAccessoryStatus.Pending -> Color(0xFFE4C25F)
-                PlanAccessoryStatus.InProgress -> Color(0xFFF1D475)
-                PlanAccessoryStatus.Completed -> Color(0xFFAED2C0)
-            }
-        } else {
-            when (snapshot.status) {
-                PlanAccessoryStatus.Pending -> MaterialTheme.colorScheme.tertiary
-                PlanAccessoryStatus.InProgress -> MaterialTheme.colorScheme.primary
-                PlanAccessoryStatus.Completed -> MaterialTheme.colorScheme.secondary
-            }
-        }
-    val background =
-        if (lightChrome) {
-            Color(0xFF202326).copy(alpha = 0.95f)
-        } else {
-            Color(0xFF5A4312).copy(alpha = 0.56f)
-        }
-    val contentTint = if (lightChrome) Color(0xFFF4F2EC) else MaterialTheme.colorScheme.onPrimaryContainer
-    val secondaryTint = contentTint.copy(alpha = 0.72f)
+    val colors = MaterialTheme.colorScheme
+    val statusTint = when (snapshot.status) {
+        PlanAccessoryStatus.Pending -> colors.onSurfaceVariant
+        PlanAccessoryStatus.InProgress -> colors.primary
+        PlanAccessoryStatus.Completed -> com.remodex.mobile.ui.sidebar.rememberSidebarColorPalette().green
+    }
+    val background = colors.surfaceVariant
+    val contentTint = colors.onSurface
+    val secondaryTint = colors.onSurfaceVariant
 
     Surface(
         modifier =
             modifier
-                .fillMaxWidth()
-                .shimmer(),
+                .fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         color = background,
         contentColor = contentTint,

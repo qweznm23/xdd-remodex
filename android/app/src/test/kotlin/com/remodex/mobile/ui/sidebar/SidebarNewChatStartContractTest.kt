@@ -50,7 +50,7 @@ class SidebarNewChatStartContractTest {
     fun floatingChatDraftTarget_usesQuickChatWhenChatsTabIsSelected() {
         val target =
             sidebarFloatingChatDraftTarget(
-                listTab = SidebarListTab.Chats,
+                listTab = SidebarListTab.Home,
                 activeThreadId = "project-thread",
                 threads = listOf(CodexThread(id = "project-thread", cwd = "/repo")),
             )

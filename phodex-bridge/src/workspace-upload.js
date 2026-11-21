@@ -12,7 +12,18 @@ function uploadError(code, message) {
   return Object.assign(new Error(message), { errorCode: code });
 }
 
-function createWorkspaceUploadHandler({ root = path.join(resolveCodexHome(), 'remodex_uploads'), maxBytes = MAX_UPLOAD_BYTES } = {}) {
+function workspaceUploadRoot() {
+  return path.resolve(resolveCodexHome(), 'remodex_uploads');
+}
+
+function isCompletedUploadPath(root, candidate) {
+  if (typeof candidate !== 'string' || !path.isAbsolute(candidate)) return false;
+  const [id, name, ...rest] = path.relative(root, candidate).split(path.sep);
+  return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)
+    && Boolean(name && name !== '.upload-part' && rest.length === 0);
+}
+
+function createWorkspaceUploadHandler({ root = workspaceUploadRoot(), maxBytes = MAX_UPLOAD_BYTES } = {}) {
   const sessions = new Map();
   let cleanupTimer;
   async function discard(id, state) {
@@ -109,4 +120,4 @@ function createWorkspaceUploadHandler({ root = path.join(resolveCodexHome(), 're
   };
 }
 
-module.exports = { createWorkspaceUploadHandler, MAX_UPLOAD_BYTES, UPLOAD_CHUNK_BYTES, uploadMethods: methods };
+module.exports = { createWorkspaceUploadHandler, workspaceUploadRoot, isCompletedUploadPath, MAX_UPLOAD_BYTES, UPLOAD_CHUNK_BYTES, uploadMethods: methods };

@@ -9,6 +9,14 @@ import kotlinx.coroutines.test.runTest
 class HistoryPaginationProgressTest {
     private fun page(cursor: String?) = ThreadHistoryPage(emptyList(), cursor?.let(JSONValue::Str), itemPage = true)
 
+    @Test fun provisionalEmptyStateDoesNotDiscardFirstRealTurnCursor() {
+        val provisional = ThreadHistoryPaginationState(initialTurnsLoaded = true, waitingForFirstMessage = true)
+        val actual = historyPaginationAfterPage(provisional, page("older").copy(itemPage = false), "a", "b", true)
+        assertTrue(actual.canLoadOlder)
+        assertFalse(actual.waitingForFirstMessage)
+        assertEquals(JSONValue.Str("older"), actual.olderCursor)
+    }
+
     @Test fun refreshThenFirstLoadMoreUsesTheFurthestCursorNotTheFirstPageAgain() {
         val initial = historyPaginationAfterPage(ThreadHistoryPaginationState(), page("page-2"), "turn-90", "row-90", true, 1)
         val older = historyPaginationAfterPage(initial, page("page-3"), "turn-60", "row-60", false)

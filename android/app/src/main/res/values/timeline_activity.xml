@@ -1,0 +1,11 @@
+<resources>
+    <string name="activity_working">Working…</string>
+    <string name="activity_replying">Writing reply…</string>
+    <string name="activity_patch">Applying patch…</string>
+    <string name="activity_files">Editing files…</string>
+    <string name="activity_edit_file">Editing %1$s…</string>
+    <string name="activity_checks">Running checks…</string>
+    <string name="activity_changes">Checking changes…</string>
+    <string name="activity_search">Searching…</string>
+    <string name="activity_reading">Reading files…</string>
+</resources>

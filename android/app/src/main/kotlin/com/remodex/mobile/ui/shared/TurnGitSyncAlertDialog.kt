@@ -1,7 +1,7 @@
 package com.remodex.mobile.ui.shared
 
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -19,7 +19,7 @@ fun TurnGitSyncAlertDialog(
 ) {
     if (alert == null) return
 
-    AlertDialog(
+    RemodexAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(alert.title) },
         text = { Text(alert.message) },

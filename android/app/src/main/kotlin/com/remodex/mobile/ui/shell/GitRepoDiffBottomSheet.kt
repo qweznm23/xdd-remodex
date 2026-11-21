@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.shell
 
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -31,12 +32,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -246,7 +249,6 @@ fun GitRepoDiffBottomSheet(
                 RemodexCircleIconButton(
                     onClick = onDismiss,
                     contentDescription = stringResource(android.R.string.ok),
-                    colors = colors,
                 ) {
                     Icon(
                         painter = painterResource(LucideR.drawable.lucide_ic_x),
@@ -260,14 +262,13 @@ fun GitRepoDiffBottomSheet(
             GitRepoDiffTabRow(
                 selectedTab = selectedTab,
                 onSelected = { selectedTabIx = it.ordinal },
-                colors = colors,
             )
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                GitRepoDiffScopeChip(
+                GitRepoDiffFilterChip(
                     selected = scope == GitRepoDiffScope.LastTurn,
                     onClick = {
                         edits.clear()
@@ -275,9 +276,8 @@ fun GitRepoDiffBottomSheet(
                     },
                     iconRes = LucideR.drawable.lucide_ic_clock,
                     label = stringResource(R.string.git_repo_diff_scope_last_turn),
-                    colors = colors,
                 )
-                GitRepoDiffScopeChip(
+                GitRepoDiffFilterChip(
                     selected = scope == GitRepoDiffScope.FullWorkingTree,
                     onClick = {
                         edits.clear()
@@ -285,7 +285,6 @@ fun GitRepoDiffBottomSheet(
                     },
                     iconRes = LucideR.drawable.lucide_ic_git_branch,
                     label = stringResource(R.string.git_repo_diff_scope_full_tree),
-                    colors = colors,
                 )
             }
 
@@ -363,94 +362,33 @@ fun GitRepoDiffBottomSheet(
 private fun GitRepoDiffTabRow(
     selectedTab: GitRepoDiffUiTab,
     onSelected: (GitRepoDiffUiTab) -> Unit,
-    colors: SidebarColorPalette,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        GitRepoDiffUiTab.entries.forEach { tab ->
-            GitRepoDiffTabChip(
-                label = stringResource(tab.stringRes),
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        GitRepoDiffUiTab.entries.forEachIndexed { index, tab ->
+            SegmentedButton(
                 selected = tab == selectedTab,
-                colors = colors,
                 onClick = { onSelected(tab) },
-            )
+                shape = SegmentedButtonDefaults.itemShape(index, GitRepoDiffUiTab.entries.size),
+            ) { Text(stringResource(tab.stringRes)) }
         }
     }
 }
 
 @Composable
-private fun GitRepoDiffTabChip(
-    label: String,
-    selected: Boolean,
-    colors: SidebarColorPalette,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val shape = RoundedCornerShape(999.dp)
-    Box(
-        modifier =
-            modifier
-                .height(32.dp)
-                .clip(shape)
-                .background(if (selected) colors.accent else colors.surface)
-                .border(1.dp, if (selected) colors.accent else colors.border, shape)
-                .clickable(onClick = onClick)
-                .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style =
-                MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                ),
-            color = if (selected) colors.onAccent else colors.primaryText,
-        )
-    }
-}
-
-@Composable
-private fun GitRepoDiffScopeChip(
+private fun GitRepoDiffFilterChip(
     selected: Boolean,
     onClick: () -> Unit,
     iconRes: Int,
     label: String,
-    colors: SidebarColorPalette,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(999.dp)
-    Row(
-        modifier =
-            modifier
-                .height(32.dp)
-                .clip(shape)
-                .background(if (selected) colors.selectedRow else colors.surface)
-                .border(1.dp, if (selected) colors.accent.copy(alpha = 0.55f) else colors.border, shape)
-                .clickable(onClick = onClick)
-                .padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            modifier = Modifier.size(14.dp),
-            tint = if (selected) colors.accent else colors.secondaryText,
-        )
-        Text(
-            text = label,
-            style =
-                MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                    fontSize = 12.sp,
-                ),
-            color = if (selected) colors.primaryText else colors.secondaryText,
-            maxLines = 1,
-        )
-    }
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        modifier = modifier,
+        leadingIcon = { Icon(painterResource(iconRes), null, Modifier.size(18.dp)) },
+        label = { Text(label) },
+    )
 }
 
 @Composable
@@ -657,7 +595,7 @@ private fun GitRepoDiffPathCopyDialog(
     onDismiss: () -> Unit,
     onCopy: () -> Unit,
 ) {
-    AlertDialog(
+    RemodexAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.turn_thread_path_dialog_title)) },
         text = {
@@ -801,20 +739,18 @@ private fun GitRepoDiffExpandableFile(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                GitRepoDiffPatchModeButton(
+                                GitRepoDiffFilterChip(
                                     selected = !diffPatchEditMode,
                                     onClick = { diffPatchEditMode = false },
                                     iconRes = LucideR.drawable.lucide_ic_eye,
                                     label = stringResource(R.string.git_repo_diff_mode_preview),
-                                    colors = colors,
                                     modifier = Modifier.weight(1f),
                                 )
-                                GitRepoDiffPatchModeButton(
+                                GitRepoDiffFilterChip(
                                     selected = diffPatchEditMode,
                                     onClick = { diffPatchEditMode = true },
                                     iconRes = LucideR.drawable.lucide_ic_square_pen,
                                     label = stringResource(R.string.git_repo_diff_mode_edit),
-                                    colors = colors,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
@@ -867,49 +803,6 @@ private fun GitRepoDiffExpandableFile(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun GitRepoDiffPatchModeButton(
-    selected: Boolean,
-    onClick: () -> Unit,
-    iconRes: Int,
-    label: String,
-    colors: SidebarColorPalette,
-    modifier: Modifier = Modifier,
-) {
-    val shape = RoundedCornerShape(999.dp)
-    Row(
-        modifier =
-            modifier
-                .height(32.dp)
-                .clip(shape)
-                .background(if (selected) colors.accent else colors.surface)
-                .border(1.dp, if (selected) colors.accent else colors.border, shape)
-                .clickable(onClick = onClick)
-                .padding(horizontal = 10.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            modifier = Modifier.size(14.dp),
-            tint = if (selected) colors.onAccent else colors.secondaryText,
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            text = label,
-            style =
-                MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                ),
-            color = if (selected) colors.onAccent else colors.primaryText,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 

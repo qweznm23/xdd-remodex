@@ -9,6 +9,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import com.remodex.mobile.core.model.CodexMessage
+import com.remodex.mobile.core.model.hasConversationContent
 import com.remodex.mobile.data.CodexRepository
 import com.remodex.mobile.ui.agent.TimelineListItem
 import com.remodex.mobile.ui.agent.TimelinePresentation
@@ -32,8 +33,14 @@ internal class TimelineHistoryAutoLoadGate {
 }
 
 internal fun timelineWindowStartIndex(messages: List<CodexMessage>, firstId: String?, tailCount: Int, following: Boolean): Int {
-    if (!following && firstId != null) messages.indexOfFirst { it.id == firstId }.takeIf { it >= 0 }?.let { return it }
-    return (messages.size - tailCount).coerceAtLeast(0)
+    val readerStart = if (!following && firstId != null) messages.indexOfFirst { it.id == firstId } else -1
+    val start = readerStart.takeIf { it >= 0 } ?: (messages.size - tailCount).coerceAtLeast(0)
+    if (start == 0) return 0
+    // Activity rows can occupy the whole tail of a long-running turn.
+    for (i in messages.lastIndex downTo 0) {
+        if (messages[i].hasConversationContent()) return minOf(start, i)
+    }
+    return start
 }
 
 private fun TimelineListItem.messageIds(): List<String> = when (this) {

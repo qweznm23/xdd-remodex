@@ -16,6 +16,7 @@ internal object TurnFileAttachmentCodec {
         uri: Uri,
         service: WorkspaceFileUploadService,
         tooLargeMessage: String,
+        mimeType: String?,
         onProgress: suspend (Long, Long?) -> Unit,
     ): CodexFileAttachment = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
@@ -30,7 +31,6 @@ internal object TurnFileAttachmentCodec {
             }
         }
         if ((size ?: 0) > MAX_FILE_UPLOAD_BYTES) throw FileTransferFailure("upload_metadata", "upload_too_large", tooLargeMessage)
-        val mime = resolver.getType(uri)
         onProgress(0, size)
         val input = resolver.openInputStream(uri)
             ?: throw FileTransferFailure("upload_open", "file_unavailable", "Cannot open selected file")
@@ -39,7 +39,7 @@ internal object TurnFileAttachmentCodec {
                 onProgress(completed, size)
             }
         }
-        CodexFileAttachment(fileName = fileName, mimeType = mime, sizeBytes = result.byteLength.toInt(),
+        CodexFileAttachment(fileName = fileName, mimeType = mimeType, sizeBytes = result.byteLength.toInt(),
             textContent = null, sourceUri = uri.toString(), remotePath = result.path)
     }
 }

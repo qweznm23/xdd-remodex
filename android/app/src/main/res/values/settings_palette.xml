@@ -1,0 +1,19 @@
+<resources>
+    <string name="settings_palette">Theme colors</string>
+    <string name="settings_accent_chat">Chat gray</string>
+    <string name="settings_accent_blue">Azure</string>
+    <string name="settings_accent_green">Pine</string>
+    <string name="settings_accent_violet">Violet</string>
+    <string name="settings_accent_selected">Selected</string>
+    <string name="settings_week_left">Weekly remaining</string>
+    <string name="settings_manage_accounts">Manage accounts</string>
+    <string name="settings_environment">Workspace</string>
+    <string name="settings_no_quota">Not queried</string>
+    <string name="settings_app_hub">About and diagnostics</string>
+    <string name="palette_system">System colors</string>
+    <string name="palette_custom">Custom seed color</string>
+    <string name="palette_hex">Hex color · RRGGBB</string>
+    <string name="palette_preview">Theme preview</string>
+    <string name="settings_verifying_identity">Codex has not confirmed this authorization</string>
+    <string name="settings_checking_authorization">Confirming with Codex…</string>
+</resources>

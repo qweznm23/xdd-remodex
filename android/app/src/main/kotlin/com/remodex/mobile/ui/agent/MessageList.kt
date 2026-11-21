@@ -1,10 +1,8 @@
 package com.remodex.mobile.ui.agent
 
 import android.content.ClipData
-import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -20,30 +18,24 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.painterResource
@@ -58,14 +50,15 @@ import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexMessageDeliveryState
 import com.remodex.mobile.core.model.CodexMessageRole
 import com.remodex.mobile.core.model.CommandExecutionDetails
+import com.remodex.mobile.ui.turn.ReasoningSummaryRow
+import com.remodex.mobile.ui.turn.ChatDetailSheet
+import com.remodex.mobile.ui.turn.TimelineActionRow
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.rounded.ChevronRight
 import com.remodex.mobile.ui.turn.TurnMessageRow
+import com.remodex.mobile.ui.turn.CommandGroupRow
 import com.remodex.mobile.ui.turn.TurnTimelineGroupedRunsRow
 import kotlinx.coroutines.launch
-
-private val MessageListTopFadeStart = 84.dp
-private val MessageListTopFadeLength = 58.dp
-private val MessageListBottomFadeStart = 128.dp
-private val MessageListBottomFadeLength = 96.dp
 
 /**
  * Scrollable conversation timeline. SwiftUI: `ScrollView` + `LazyVStack` pattern.
@@ -156,7 +149,6 @@ internal fun MessageList(
     val scope = rememberCoroutineScope()
     val timelineItems = presentation.items
     val transientStatusText = presentation.statusText
-    val fadeColor = MaterialTheme.colorScheme.background
     val lastAssistantDisplayIndex =
         remember(timelineItems) {
             timelineItems.indexOfLast { item ->
@@ -182,7 +174,7 @@ internal fun MessageList(
     val undoActionLabel = stringResource(R.string.turn_message_action_undo_changes)
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (messages.isEmpty() && olderHistoryError.isNullOrBlank() && !canLoadOlderRemoteHistory) {
+        if (messages.isEmpty() && !presentation.hasActivityRow && olderHistoryError.isNullOrBlank() && !canLoadOlderRemoteHistory) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (showEmptyContent) emptyContent()
             }
@@ -191,16 +183,7 @@ internal fun MessageList(
                 state = listState,
                 // Chat should stop at its boundary without Android's edge stretch/rebound.
                 overscrollEffect = null,
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .verticalContentFadeMask(
-                            background = fadeColor,
-                            fadeStart = MessageListTopFadeStart,
-                            fadeLength = MessageListTopFadeLength,
-                            bottomFadeStart = MessageListBottomFadeStart,
-                            bottomFadeLength = MessageListBottomFadeLength,
-                        ),
+                modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(verticalItemSpacing),
                 contentPadding = contentPadding,
             ) {
@@ -241,15 +224,7 @@ internal fun MessageList(
                 itemsIndexed(
                     items = timelineItems,
                     key = { _, item -> item.stableKey },
-                    contentType = { _, item ->
-                        when (item) {
-                            is TimelineListItem.Single -> item.message.timelineContentType()
-                            is TimelineListItem.MessageChunk -> "assistant_chat_chunk"
-                            is TimelineListItem.AssistantWorkGroup -> "assistant_work_group"
-                            is TimelineListItem.CommandExecutionGroup -> "timeline_cmd_group"
-                            is TimelineListItem.FileChangeGroup -> "timeline_fc_group"
-                        }
-                    },
+                    contentType = { _, item -> item.contentType() },
                 ) { index, item ->
                     Column(
                         modifier = Modifier.fillMaxWidth(),
@@ -339,39 +314,18 @@ internal fun MessageList(
                         }
                     }
                 }
-                if (presentation.hasActivityRow) {
+                if (transientStatusText != null) {
                     item(key = "transient-activity-status") {
-                        TransientActivityStatusRow(
-                            statusText = transientStatusText,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        Column {
+                            TransientActivityStatusRow(transientStatusText, Modifier.fillMaxWidth())
+                            if (presentation.activeSummary.isNotEmpty()) {
+                                ReasoningSummaryRow(presentation.activeSummary)
+                            }
+                        }
                     }
                 }
             }
         }
-    }
-}
-
-/** Edge gradients paint over the background; the conversation needs no offscreen texture. */
-private fun Modifier.verticalContentFadeMask(
-    background: Color,
-    fadeStart: Dp,
-    fadeLength: Dp,
-    bottomFadeStart: Dp,
-    bottomFadeLength: Dp,
-): Modifier = drawWithCache {
-    val topStart = fadeStart.toPx().coerceIn(0f, size.height)
-    val topEnd = (topStart + fadeLength.toPx()).coerceAtMost(size.height)
-    val bottomEnd = (size.height - bottomFadeStart.toPx()).coerceAtLeast(0f)
-    val bottomStart = (bottomEnd - bottomFadeLength.toPx()).coerceAtLeast(0f)
-    val top = Brush.verticalGradient(listOf(background, background.copy(alpha = 0f)), topStart, topEnd)
-    val bottom = Brush.verticalGradient(listOf(background.copy(alpha = 0f), background), bottomStart, bottomEnd)
-    onDrawWithContent {
-        drawContent()
-        if (topEnd > topStart) drawRect(top, size = Size(size.width, topEnd))
-        if (bottomEnd > bottomStart) drawRect(
-            bottom, topLeft = Offset(0f, bottomStart), size = Size(size.width, size.height - bottomStart),
-        )
     }
 }
 
@@ -399,9 +353,8 @@ private fun TimelineListItemContent(
                 modifier = modifier,
             )
         is TimelineListItem.CommandExecutionGroup ->
-            TurnTimelineGroupedRunsRow(
+            CommandGroupRow(
                 groupKey = item.stableKey,
-                collapsedTitle = stringResource(R.string.turn_timeline_group_executed_commands),
                 messages = item.messages,
                 commandExecutionDetailsByItemId = commandExecutionDetailsByItemId,
             )
@@ -413,6 +366,14 @@ private fun TimelineListItemContent(
                 commandExecutionDetailsByItemId = commandExecutionDetailsByItemId,
             )
     }
+}
+
+internal fun TimelineListItem.contentType(): String = when (this) {
+    is TimelineListItem.Single -> message.timelineContentType()
+    is TimelineListItem.MessageChunk -> "assistant_chat_chunk"
+    is TimelineListItem.AssistantWorkGroup -> "assistant_work_group"
+    is TimelineListItem.CommandExecutionGroup -> "timeline_cmd_group"
+    is TimelineListItem.FileChangeGroup -> "timeline_fc_group"
 }
 
 private fun CodexMessage.timelineContentType(): String =
@@ -455,47 +416,18 @@ private fun AssistantWorkGroupRow(
     commandExecutionDetailsByItemId: Map<String, CommandExecutionDetails>,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by rememberSaveable(group.stableKey) { mutableStateOf(false) }
-    val colors = MaterialTheme.colorScheme
-    Column(modifier = modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded }
-                    .padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.turn_timeline_group_work_details),
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.onSurfaceVariant.copy(alpha = 0.74f),
-            )
-            Text(
-                text = if (expanded) "v" else ">",
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.onSurfaceVariant.copy(alpha = 0.62f),
-            )
-        }
-        HorizontalDivider(color = colors.outline.copy(alpha = 0.14f))
-        if (expanded) {
-            val detailItems = remember(group.messages) { group.messages.toActivityDetailTimelineListItems() }
-            Column(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                detailItems.forEach { item ->
-                    TimelineListItemContent(
-                        item = item,
-                        messageContent = messageContent,
-                        commandExecutionDetailsByItemId = commandExecutionDetailsByItemId,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
+    var showDetails by rememberSaveable(group.stableKey) { mutableStateOf(false) }
+    val title = stringResource(R.string.turn_timeline_group_work_details)
+    TimelineActionRow(
+        modifier = modifier,
+        onClick = { showDetails = true },
+        leading = { Icon(Icons.Outlined.Schedule, null, Modifier.size(18.dp)) },
+        trailing = { Icon(Icons.Rounded.ChevronRight, null, Modifier.size(18.dp)) },
+    ) { Text(title, style = MaterialTheme.typography.bodyMedium) }
+    if (showDetails) {
+        ChatDetailSheet(title, onDismiss = { showDetails = false }) {
+            ActivityDetailsList(group.detailItems) { item ->
+                TimelineListItemContent(item, messageContent, commandExecutionDetailsByItemId, Modifier.fillMaxWidth())
             }
         }
     }
@@ -503,7 +435,7 @@ private fun AssistantWorkGroupRow(
 
 @Composable
 private fun TransientActivityStatusRow(
-    statusText: String?,
+    statusText: TimelineActivityLabel,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -519,8 +451,8 @@ private fun TransientActivityStatusRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TimelineActivityDots(color = colors.onSurfaceVariant)
-        if (statusText != null) Text(
-            text = statusText,
+        Text(
+            text = statusText.filename?.let { stringResource(statusText.resource, it) } ?: stringResource(statusText.resource),
             modifier = Modifier.padding(start = 8.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.onSurfaceVariant.copy(alpha = 0.64f),

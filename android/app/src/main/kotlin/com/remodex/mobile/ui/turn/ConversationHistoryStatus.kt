@@ -1,11 +1,11 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -116,7 +116,7 @@ internal fun ConversationHistoryStatus(phase: HistoryLoadingPhase, error: String
             }
         }
     }
-    if (details) AlertDialog(
+    if (details) RemodexAlertDialog(
         onDismissRequest = { details = false },
         title = { Text(stringResource(R.string.history_load_failed)) },
         text = { Text(error.orEmpty()) },

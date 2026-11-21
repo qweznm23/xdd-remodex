@@ -1686,3 +1686,18 @@ test("async input tool history matches native question items without losing orig
   assert.deepEqual(turns[0].items[0].questions, questions);
   assert.equal(turns[0].items[0].text, "");
 });
+
+test("paired desktop user records retain canonical IDs and repeated steers in rollout order", () => {
+  const response = (id) => ({type: "response_item", payload: {type: "message", role: "user", id,
+    internal_chat_message_metadata_passthrough: {turn_id: "t"}, content: [{type: "input_text", text: "continue"}]}});
+  const completed = (id) => ({type: "event_msg", payload: {type: "item_completed", turn_id: "t",
+    item: {type: "UserMessage", id, content: [{type: "text", text: "continue"}]}}});
+  const records = [
+    {type: "event_msg", payload: {type: "task_started", turn_id: "t"}},
+    response("raw-1"), completed("first"),
+    {type: "response_item", payload: {type: "message", role: "assistant", id: "reply", text: "working"}},
+    completed("second"), response("raw-2"), completed("second"),
+  ];
+  const turns = parseSessionJsonlTurns(records.map(record => JSON.stringify(record)).join("\n"), {threadId: "desktop"});
+  assert.deepEqual(turns[0].items.map(item => item.id), ["first", "reply", "second"]);
+});

@@ -6,6 +6,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RuntimeModelControlsTest {
+    @Test fun sliderUsesOnlySupportedLevelsAndPreservesUnfamiliarProviderOrder() {
+        fun levels(vararg ids: String): List<String> {
+            val options = ids.map { TurnComposerRuntimeOption(it, it) }
+            return sliderEfforts(TurnComposerRuntimeSelectorState(options.first(), options)).map { it.id }
+        }
+        assertEquals(listOf("low", "mid", "high", "extra-high"),
+            levels("high", TURN_COMPOSER_RUNTIME_AUTO_ID, "extra-high", "low", "mid", "mid"))
+        assertEquals(listOf("custom-fast", "low", "custom-deep"), levels("custom-fast", "low", "custom-deep"))
+        assertEquals(emptyList<String>(), levels(TURN_COMPOSER_RUNTIME_AUTO_ID))
+    }
+
     @Test fun unknownConversationModelIsDisplayedInsteadOfAccountDefault() {
         val state = buildRuntimeControlsState(
             models = listOf(CodexModelOption("default", "gpt-6.1-sol", "GPT Sol", "", true, emptyList(), null)),

@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { createHash } = require('crypto');
 const { createWorkspaceUploadHandler, MAX_UPLOAD_BYTES, UPLOAD_CHUNK_BYTES } = require('../src/workspace-upload');
-const { handleWorkspaceRequest } = require('../src/workspace-handler');
+const { handleWorkspaceMethod, handleWorkspaceRequest, inlineUploadedTurnImages } = require('../src/workspace-handler');
 const hash = data => createHash('sha256').update(data).digest('hex');
 
 function setup(t, options = {}) {
@@ -13,6 +13,49 @@ function setup(t, options = {}) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return { root, upload: createWorkspaceUploadHandler({ root, ...options }) };
 }
+
+async function completeUpload(upload, fileName, bytes) {
+  const { uploadId } = await upload('workspace/uploadBegin', { fileName, byteLength: bytes.length });
+  await upload('workspace/uploadChunk', { uploadId, offset: 0, dataBase64: bytes.toString('base64'), sha256: hash(bytes) });
+  return upload('workspace/uploadFinish', { uploadId, byteLength: bytes.length, sha256: hash(bytes) });
+}
+
+test('uses the completed original for inline compatibility and preserves runtime-native paths', async t => {
+  const { root, upload } = setup(t);
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==', 'base64');
+  const uploaded = await completeUpload(upload, 'screen #1.png', png);
+  const native = { type: 'localImage', path: '/runtime/image.png' };
+  const original = { type: 'localImage', path: uploaded.path, detail: 'original' };
+  const request = { id: 1, method: 'turn/steer', params: { input: [original, native] } };
+  const result = await inlineUploadedTurnImages(request, root);
+  assert.deepEqual(result.params.input, [{ type: 'image', url: `data:image/png;base64,${png.toString('base64')}`, detail: 'original' }, native]);
+  assert.equal(request.params.input[0], original);
+  assert.deepEqual(await fs.promises.readFile(uploaded.path), png);
+  const outside = path.join(path.dirname(root), `${path.basename(root)}-outside.png`);
+  await fs.promises.writeFile(outside, png);
+  t.after(() => fs.rmSync(outside, { force: true }));
+  const alias = path.join(path.dirname(uploaded.path), 'outside.png');
+  await fs.promises.symlink(outside, alias);
+  await assert.rejects(inlineUploadedTurnImages({ ...request, params: { input: [{ ...original, path: alias }] } }, root), {
+    errorCode: 'image_path_not_allowed', attachmentStage: 'uploaded_image_input',
+  });
+});
+
+test('completed ordinary uploads are readable and downloadable with their exact name', async t => {
+  const { root } = setup(t);
+  const former = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = root;
+  t.after(() => { if (former === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = former; });
+  const upload = createWorkspaceUploadHandler({ root: path.join(root, 'remodex_uploads') });
+  const bytes = Buffer.from('manifest contents');
+  const saved = await completeUpload(upload, 'manifest #1.txt ', bytes);
+  const info = await handleWorkspaceMethod('workspace/fileInfo', { path: saved.path });
+  assert.equal(info.fileName, 'manifest #1.txt ');
+  assert.equal((await handleWorkspaceMethod('workspace/readFile', { path: saved.path })).content, bytes.toString());
+  const chunk = await handleWorkspaceMethod('workspace/readFileChunk', { path: saved.path, revision: info.revision, offset: 0 });
+  assert.equal(chunk.sha256, saved.sha256);
+  assert.deepEqual(Buffer.from(chunk.dataBase64, 'base64'), bytes);
+});
 
 test('100 MB file is uploaded in bounded chunks, verified, and retained on a late abort', async t => {
   const { upload } = setup(t);

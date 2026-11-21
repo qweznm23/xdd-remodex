@@ -1,7 +1,6 @@
 package com.remodex.mobile.ui.turn
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -23,21 +21,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,7 +65,6 @@ internal fun TurnFileChangeDetailCard(
     modifier: Modifier = Modifier,
 ) {
     val preview = TurnTimelineRichContentCache.parseFileChange(message)
-    val colors = MaterialTheme.colorScheme
     val summaryStyle =
         MaterialTheme.typography.bodyMedium.copy(
             fontFamily = FontFamily.Monospace,
@@ -106,7 +100,6 @@ internal fun TurnFileChangeDetailCard(
                     messageId = message.id,
                     preview = preview,
                     fallbackSummaryLine = fallbackSummaryLine,
-                    summaryStyle = summaryStyle,
                 )
         }
     }
@@ -125,39 +118,10 @@ private fun EmptyEntriesFileChange(
     var expanded by rememberSaveable(messageId) { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     val expandedEnabled = preview.hasDetails || preview.rawText.isNotBlank()
-    val rowChevronSize = 22.dp
-
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .clip(MaterialTheme.shapes.small)
-                .then(
-                    if (expandedEnabled) {
-                        Modifier.clickable { expanded = !expanded }
-                    } else {
-                        Modifier
-                    },
-                ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        DotLeadAligned()
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = fallbackSummaryLine,
-            style = summaryStyle,
-            color = colors.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier =
-                Modifier
-                    .weight(1f)
-                    .widthIn(min = 0.dp),
-        )
-        if (expandedEnabled) {
-            ChevronReveal(expanded = expanded, sizeDp = rowChevronSize)
-        }
+    val toggle = if (expandedEnabled) { { expanded = !expanded } } else null
+    FileSummaryRow(expanded, toggle) {
+        Text(fallbackSummaryLine, style = summaryStyle, color = colors.onSurfaceVariant,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 
     if (expanded && expandedEnabled) {
@@ -173,53 +137,14 @@ private fun SingleFileChange(
     messageId: String,
     preview: TurnFileChangePresentation,
     fallbackSummaryLine: String,
-    summaryStyle: androidx.compose.ui.text.TextStyle,
 ) {
     var expanded by rememberSaveable(messageId) { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     val expandedEnabled = preview.hasDetails || preview.rawText.isNotBlank()
-    val rowChevronSize = 22.dp
     val entry = preview.entries.single()
-
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .clip(MaterialTheme.shapes.small)
-                .then(
-                    if (expandedEnabled) {
-                        Modifier.clickable { expanded = !expanded }
-                    } else {
-                        Modifier
-                    },
-                ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        DotLeadAligned()
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = fileNameFromPath(entry.path),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(end = 8.dp),
-                )
-                FileChangeCountOrLabel(
-                    entry = entry,
-                    likelyHasDiff = preview.likelyHasDiff,
-                )
-            }
-        }
-        if (expandedEnabled) {
-            ChevronReveal(expanded = expanded, sizeDp = rowChevronSize)
-        }
+    val toggle = if (expandedEnabled) { { expanded = !expanded } } else null
+    FileSummaryRow(expanded, toggle) {
+        FileSummaryLabel(entry, preview.likelyHasDiff)
     }
 
     if (expanded && expandedEnabled) {
@@ -260,136 +185,69 @@ private fun MultipleFileChanges(
     preview: TurnFileChangePresentation,
 ) {
     val colors = MaterialTheme.colorScheme
-    val hideDetailsCd = stringResource(R.string.turn_timeline_hide_details)
-    val showDetailsCd = stringResource(R.string.turn_timeline_show_details)
     var expandedSlots by remember(messageId) { mutableStateOf(emptySet<Int>()) }
-    val rowChevronSize = 22.dp
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         preview.entries.forEachIndexed { index, entry ->
             key(entry.path, index) {
-            val patchChunk = entry.patchChunkText?.takeIf { it.isNotBlank() }
-            val combinedFencePatch = preview.rawPatchText?.takeIf { it.isNotBlank() }
-            val expandable = patchChunk != null || combinedFencePatch != null
-            val expanded = index in expandedSlots
-            val accordionCd =
-                "${fileNameFromPath(entry.path)}, " +
-                    if (expanded) hideDetailsCd else showDetailsCd
-
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                            .clip(MaterialTheme.shapes.small)
-                            .then(
-                                if (expandable) {
-                                    Modifier
-                                        .semantics {
-                                            contentDescription = accordionCd
-                                            role = Role.Button
-                                        }
-                                        .clickable {
-                                            expandedSlots =
-                                                if (expanded) {
-                                                    expandedSlots - index
-                                                } else {
-                                                    expandedSlots + index
-                                                }
-                                        }
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    DotLeadAligned()
-                    Spacer(Modifier.width(8.dp))
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = fileNameFromPath(entry.path),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = colors.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f).padding(end = 8.dp),
-                            )
-                            FileChangeCountOrLabel(
-                                entry = entry,
-                                likelyHasDiff = preview.likelyHasDiff,
-                            )
-                        }
-                        entry.label?.takeIf { it.isNotBlank() }?.let { label ->
-                            Text(
-                                text = label,
-                                style =
-                                    MaterialTheme.typography.bodySmall.copy(
-                                        lineHeight = 18.sp,
-                                    ),
-                                color = colors.onSurfaceVariant.copy(alpha = 0.72f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                val patchChunk = entry.patchChunkText?.takeIf { it.isNotBlank() }
+                val combinedFencePatch = preview.rawPatchText?.takeIf { it.isNotBlank() }
+                val expandable = patchChunk != null || combinedFencePatch != null
+                val expanded = index in expandedSlots
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    val toggle: (() -> Unit)? = if (expandable) {
+                        { expandedSlots = if (expanded) expandedSlots - index else expandedSlots + index }
+                    } else null
+                    FileSummaryRow(expanded, toggle) {
+                        Column {
+                            FileSummaryLabel(entry, preview.likelyHasDiff)
+                            entry.label?.takeIf { it.isNotBlank() }?.let { label ->
+                                Text(label, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
-                    if (expandable) {
-                        Icon(
-                            imageVector = Icons.Rounded.ChevronRight,
-                            contentDescription =
-                                if (expanded) {
-                                    stringResource(R.string.turn_timeline_hide_details)
-                                } else {
-                                    stringResource(R.string.turn_timeline_show_details)
-                                },
-                            tint = colors.onSurfaceVariant.copy(alpha = 0.5f),
-                            modifier =
-                                Modifier
-                                    .padding(start = 6.dp)
-                                    .size(rowChevronSize)
-                                    .rotate(
-                                        if (expanded) {
-                                            ChevronExpandedDegrees
-                                        } else {
-                                            ChevronCollapsedDegrees
-                                        },
-                                    ),
-                        )
-                    }
-                }
-
-                if (expanded) {
-                    Spacer(Modifier.height(6.dp))
-                    when {
-                        patchChunk != null -> FileChangeHighlightedPatch(patchText = patchChunk)
-                        combinedFencePatch != null -> {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(
-                                    text = stringResource(R.string.turn_timeline_file_change_full_patch_fallback),
-                                    style =
-                                        MaterialTheme.typography.bodySmall.copy(
-                                            lineHeight = 18.sp,
-                                        ),
-                                    color = colors.onSurfaceVariant.copy(alpha = 0.75f),
-                                )
-                                FileChangeHighlightedPatch(patchText = combinedFencePatch)
+                    if (expanded) {
+                        Spacer(Modifier.height(6.dp))
+                        when {
+                            patchChunk != null -> FileChangeHighlightedPatch(patchText = patchChunk)
+                            combinedFencePatch != null -> {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(
+                                        text = stringResource(R.string.turn_timeline_file_change_full_patch_fallback),
+                                        style =
+                                            MaterialTheme.typography.bodySmall.copy(
+                                                lineHeight = 18.sp,
+                                            ),
+                                        color = colors.onSurfaceVariant.copy(alpha = 0.75f),
+                                    )
+                                    FileChangeHighlightedPatch(patchText = combinedFencePatch)
+                                }
                             }
                         }
                     }
                 }
             }
-            }
         }
+    }
+}
+
+@Composable
+private fun FileSummaryRow(expanded: Boolean, toggle: (() -> Unit)?, content: @Composable () -> Unit) {
+    TimelineActionRow(
+        onClick = toggle,
+        leading = { DotLeadAligned() },
+        trailing = if (toggle != null) ({ ChevronReveal(expanded, 18.dp) }) else null,
+        content = content,
+    )
+}
+
+@Composable
+private fun FileSummaryLabel(entry: TurnFileChangeEntryPresentation, likelyHasDiff: Boolean) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(fileNameFromPath(entry.path), modifier = Modifier.weight(1f).padding(end = 6.dp),
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        FileChangeCountOrLabel(entry, likelyHasDiff)
     }
 }
 

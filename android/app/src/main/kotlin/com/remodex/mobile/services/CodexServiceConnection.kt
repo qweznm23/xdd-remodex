@@ -158,6 +158,12 @@ internal suspend fun CodexService.resetBridgeSession(preservePresentationState: 
     turnDraftQueueStore.clear()
     testRpcRequestHandler = null
     loadingHistory.clear()
+    liveFollowUps.clear()
+    turnPatches.clear()
+    catalogVerifier.reset()
+    sourceReplacements.clear()
+    latestCatalogEvents.clear()
+    supportsSettingsSync = false
     incomingRouter.resetCaches()
     if (!preservePresentationState) {
         commandExecutionDetailsStore.clear()
@@ -174,14 +180,7 @@ internal suspend fun CodexService.resetBridgeSession(preservePresentationState: 
         d.cancel(CancellationException("disconnected"))
     }
     pendingRpc.clear()
-    synchronized(rateLimitRefreshGuard) {
-        rateLimitRefreshGuard.reset()
-        _accountUsageDetails.value = com.remodex.mobile.core.model.AccountUsageDetails()
-        _rateLimitBuckets.value = emptyList()
-        _isLoadingRateLimits.value = false
-        _rateLimitsErrorMessage.value = null
-        _hasResolvedRateLimitsSnapshot.value = false
-    }
+    clearAccountQuota()
     _contextWindowUsageByThread.value = emptyMap()
     _contextWindowUsageLoadingThreads.value = emptySet()
     _contextWindowUsageErrorByThread.value = emptyMap()

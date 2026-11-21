@@ -46,12 +46,19 @@ function handleDesktopRequest(rawMessage, sendResponse, options = {}) {
     .catch((err) => {
       const errorCode = err.errorCode || "desktop_error";
       const message = err.userMessage || err.message || "Unknown desktop handoff error";
+      const diagnostics = {errorCode};
+      if (parsed.method === "desktop/bridge/updateAndRestart" && err.cause) {
+        diagnostics.stage = err.cause.stage || "prepare_update";
+        if (err.cause.httpStatus) diagnostics.httpStatus = err.cause.httpStatus;
+        if (err.cause.code) diagnostics.causeCode = err.cause.code;
+        console.error("[remodex] XDD update failed", err);
+      }
       sendResponse(JSON.stringify({
         id,
         error: {
           code: -32000,
           message,
-          data: { errorCode },
+          data: diagnostics,
         },
       }));
     });

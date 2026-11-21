@@ -1,6 +1,8 @@
 package com.remodex.mobile.services
 
+import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.JSONValue
+import com.remodex.mobile.core.model.RPCError
 import com.remodex.mobile.core.model.RPCMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -102,6 +104,18 @@ class WorkspaceFileUploadServiceTest {
         })
         val error = assertFailsWith<FileTransferFailure> { service.upload("a", 1, ByteArrayInputStream(byteArrayOf(1))) {} }
         assertEquals("invalid_offset", error.code); assertEquals("upload_verify", error.stage); assertTrue(aborted)
+    }
+
+    @Test fun bridgeRejectionKeepsItsOperationCodeAndCause() = runTest {
+        val rejection = RPCError(-32000, "Invalid upload filename", JSONValue.Obj(mapOf(
+            "errorCode" to JSONValue.Str("invalid_upload_name"),
+            "diagnostic" to JSONValue.Obj(mapOf("stage" to JSONValue.Str("workspace_file_transfer"))),
+        )))
+        val service = WorkspaceFileUploadService(MinimalSendRepository { _, _ -> RPCMessage.failure(null, rejection) })
+        val failure = assertFailsWith<FileTransferFailure> { service.upload("bad", null, ByteArrayInputStream(byteArrayOf())) {} }
+        assertEquals("invalid_upload_name", failure.code)
+        assertEquals("workspace/uploadBegin", failure.stage)
+        assertEquals(rejection, (failure.cause as CodexServiceError.RpcFailure).rpcError)
     }
 
     private fun hash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).hex()

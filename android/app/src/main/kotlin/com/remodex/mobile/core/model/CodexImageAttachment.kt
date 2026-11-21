@@ -10,4 +10,7 @@ data class CodexImageAttachment(
     val payloadDataURL: String? = null,
     val sourceURL: String? = null,
     val mimeType: String? = null,
-)
+    val remotePath: String? = null,
+) {
+    internal val isTurnInput: Boolean get() = !remotePath.isNullOrBlank() || !payloadDataURL.isNullOrBlank()
+}

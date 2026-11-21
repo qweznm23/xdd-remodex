@@ -65,7 +65,7 @@ class TimelineHistoryLoadingTest {
     }
 
     @Test fun expandedActivityNewGestureUnknownLayoutAndEndStopAutomaticContinuation() {
-        val group = TimelineListItem.AssistantWorkGroup("turn", listOf(row(1)))
+        val group = TimelineListItem.AssistantWorkGroup("turn", listOf(TimelineListItem.Single(row(1))))
         assertFalse(shouldContinueHistoryReveal(group, group, 300, 600, sameGesture = true, hasMore = true))
         assertFalse(shouldContinueHistoryReveal(group, group, 36, 36, sameGesture = false, hasMore = true))
         assertFalse(shouldContinueHistoryReveal(group, group, null, null, sameGesture = true, hasMore = true))

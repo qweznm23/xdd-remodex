@@ -1,15 +1,8 @@
 package com.remodex.mobile.ui.turn
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -20,14 +13,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,42 +50,15 @@ internal fun ToolExecutionCard(
             cdBase
         }
 
-    Row(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .clip(MaterialTheme.shapes.small)
-                .then(
-                    if (expandable) {
-                        Modifier
-                            .semantics {
-                                contentDescription = cd
-                                role = Role.Button
-                            }
-                            .clickable(onClick = openDetails)
-                    } else {
-                        Modifier.semantics { contentDescription = cd }
-                    },
-                ),
-        verticalAlignment = Alignment.CenterVertically,
+    TimelineActionRow(
+        onClick = openDetails,
+        modifier = modifier.semantics { contentDescription = cd },
+        leading = { Icon(statusIcon(ui.status), null, Modifier.size(20.dp), tint = accent) },
+        trailing = if (expandable) {
+            { Icon(Icons.Rounded.ChevronRight, null, Modifier.size(rowChevronSize), tint = colors.onSurfaceVariant) }
+        } else null,
     ) {
-        Box(
-            modifier = Modifier.width(TurnTimelineLeadSlotWidth),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = statusIcon(ui.status),
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = accent,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = ui.title,
                 style = MaterialTheme.typography.bodyMedium,
@@ -116,17 +78,6 @@ internal fun ToolExecutionCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-        if (expandable) {
-            Icon(
-                imageVector = Icons.Rounded.ChevronRight,
-                contentDescription = stringResource(R.string.turn_timeline_show_details),
-                tint = colors.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier =
-                    Modifier
-                        .padding(start = 6.dp)
-                        .size(rowChevronSize),
-            )
         }
     }
 }

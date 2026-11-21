@@ -1,20 +1,19 @@
 package com.remodex.mobile.ui.turn
 
 import com.remodex.mobile.core.config.FeatureFlags
-import android.Manifest
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.util.Log
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.runtime.produceState
 import com.remodex.mobile.ui.agent.rememberTimelinePresentation
+import com.remodex.mobile.ui.theme.conversationColors
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.gestures.stopScroll
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,7 +58,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -67,8 +65,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.AppContainer
@@ -102,49 +98,36 @@ import com.remodex.mobile.data.loadGitBranchesWithStatus
 import com.remodex.mobile.services.AiChangeSetRevertService
 import com.remodex.mobile.services.CodexService
 import com.remodex.mobile.services.GitActionsService
-import com.remodex.mobile.data.TurnAttachmentCodec
-import com.remodex.mobile.services.WorkspaceFileUploadService
-import com.remodex.mobile.services.MAX_FILE_UPLOAD_BYTES
 import androidx.compose.runtime.DisposableEffect
-import com.remodex.mobile.data.TurnFileAttachmentCodec
 import com.remodex.mobile.ui.LocalAIChangeSetPersistence
 import com.remodex.mobile.ui.agent.MessageList
 import com.remodex.mobile.ui.home.RootReconnectRecoveryAction
 import com.remodex.mobile.ui.home.RootReconnectUiState
-import com.remodex.mobile.ui.theme.AgentLightColors
 import com.remodex.mobile.ui.theme.RemodexModalBottomSheet
 import com.remodex.mobile.ui.theme.RemodexPopupChrome
 import com.remodex.mobile.services.CodexLookupService
 import com.remodex.mobile.services.isPluginListUnsupported
 import com.remodex.mobile.ui.theme.isAgentLightChrome
-import com.remodex.mobile.core.voice.BridgeVoiceRecorder
-import com.remodex.mobile.core.voice.VoiceDraftAppend
-import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
+import com.remodex.mobile.core.model.hasConversationContent
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.material3.rememberModalBottomSheetState
 
-private const val MAX_COMPOSER_ATTACHMENTS = 4
 private const val TIMELINE_INITIAL_RENDER_TAIL = 48
 private const val STARTUP_TRACE_TAG = "RemodexStartup"
-private const val SMART_SCROLL_FADE_JUMP_DISTANCE_ITEMS = 24
 private const val BETA_LONG_THREAD_MESSAGE_THRESHOLD = 18
 private const val BETA_LONG_THREAD_SCROLL_DISTANCE_ITEMS = 6
 private const val DEFAULT_MANUAL_PET_ID = "custom:relay"
-private val TurnConversationMessageListTopPadding = 84.dp
-private val TurnConversationMessageListBottomPadding = 200.dp
-private val TurnConversationSmartScrollBottomPadding = 172.dp
-private val TurnConversationComposerBottomLift = 20.dp
+
+private val TurnConversationComposerBottomLift = 8.dp
 
 private data class PetSlashCommand(
     val petId: String?,
@@ -182,6 +165,7 @@ private data class PendingSteerDraft(
 /**
  * Guscio conversazione: timeline + composer (testo, invio, allegati immagine).
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun TurnConversationPane(
     threadId: String,
@@ -227,9 +211,6 @@ fun TurnConversationPane(
     val olderHistoryErrorByThread by repository.olderHistoryErrorByThread.collectAsStateWithLifecycle()
     val threads by repository.threads.collectAsStateWithLifecycle()
     val connectionState by repository.connectionState.collectAsStateWithLifecycle()
-    val hasResolvedRateLimits by repository.hasResolvedRateLimitsSnapshot.collectAsStateWithLifecycle()
-    val isLoadingRateLimits by repository.isLoadingRateLimits.collectAsStateWithLifecycle()
-    val rateLimitsError by repository.rateLimitsErrorMessage.collectAsStateWithLifecycle()
     val runningTurnByThread by repository.runningTurnIdByThread.collectAsStateWithLifecycle()
     val protectedRunningFallback by repository.protectedRunningFallbackThreadIds.collectAsStateWithLifecycle()
     val queuedDraftDepthByThread by repository.turnDraftQueueDepthByThread.collectAsStateWithLifecycle()
@@ -242,6 +223,9 @@ fun TurnConversationPane(
     var keepEditing by remember(threadId, currentTrustedMacDeviceId) { mutableStateOf(false) }
     val aiChangeSetPersistence = LocalAIChangeSetPersistence.current
     var sending by remember(threadId) { mutableStateOf(false) }
+    var compactBusy by remember(threadId) { mutableStateOf(false) }
+    var goalsSupported by remember(repository, currentTrustedMacDeviceId, ready) { mutableStateOf(true) }
+    var showGoal by remember(threadId) { mutableStateOf(false) }
     var lastError by remember(threadId) { mutableStateOf<String?>(null) }
     var retryFailedSend by remember(threadId, currentTrustedMacDeviceId) { mutableStateOf<FailedTurnSend?>(null) }
     var draft by remember(threadId, currentTrustedMacDeviceId) { mutableStateOf("") }
@@ -249,39 +233,19 @@ fun TurnConversationPane(
     var pendingPlanModeEnabled by remember(threadId) { mutableStateOf<Boolean?>(null) }
     var hiddenPlanAccessoryMessageIds by rememberSaveable(threadId) { mutableStateOf<List<String>>(emptyList()) }
     var closedPlanAccessoryMessageIds by rememberSaveable(threadId) { mutableStateOf<List<String>>(emptyList()) }
-    var composerAttachments by remember(threadId) { mutableStateOf<List<TurnComposerAttachment>>(emptyList()) }
-    val fileUploadService = remember(repository) { WorkspaceFileUploadService(repository) }
-    val attachmentUploads = remember(threadId, currentTrustedMacDeviceId) {
-        AttachmentUploadRetryController(
-            scope,
-            onState = { id, state ->
-                composerAttachments = composerAttachments.map { if (it.id == id) it.copy(state = state) else it }
-            },
-            onFailure = { id, attempt, failure ->
-                val detail = (failure as? com.remodex.mobile.services.FileTransferFailure)?.let { "stage=${it.stage} code=${it.code}" }
-                    ?: "stage=read-or-upload category=unknown"
-                Log.e("RemodexUpload", "Attachment failed $detail attachment=$id attempt=$attempt", failure)
-                lastError = failure.message ?: failure.javaClass.name
-            },
-        )
-    }
-    DisposableEffect(attachmentUploads) { onDispose { attachmentUploads.clear() } }
-    LaunchedEffect(composerAttachments.map { it.id }) {
-        attachmentUploads.retain(composerAttachments.mapTo(hashSetOf()) { it.id })
-    }
+    val attachmentState = remember(threadId, currentTrustedMacDeviceId) { mutableStateOf<List<TurnComposerAttachment>>(emptyList()) }
+    var composerAttachments by attachmentState
 
     var mentionChips by remember(threadId) { mutableStateOf<List<ComposerMentionChipPayload>>(emptyList()) }
     var pendingSteerDrafts by remember(threadId) { mutableStateOf<List<PendingSteerDraft>>(emptyList()) }
-    var editingSteerDraftId by remember(threadId) { mutableStateOf<String?>(null) }
+    var sendingSteerDraftId by remember(threadId) { mutableStateOf<String?>(null) }
+    var queueEditFocusId by remember(threadId) { mutableStateOf<String?>(null) }
     var availableSkills by remember(threadId) { mutableStateOf<List<SkillAutocompleteSuggestion>>(emptyList()) }
     var availablePlugins by remember(threadId) { mutableStateOf<List<CodexPluginMetadata>>(emptyList()) }
     var pluginAutocompleteLoading by remember(threadId) { mutableStateOf(false) }
     var cachedPluginSearchIndexByRoot by remember(repository) { mutableStateOf<Map<String, List<CodexPluginMetadata>>>(emptyMap()) }
     var unsupportedPluginAutocompleteRoots by remember(repository) { mutableStateOf<Set<String>>(emptySet()) }
     var availableFileMatches by remember(threadId) { mutableStateOf<List<com.remodex.mobile.core.model.CodexFuzzyFileMatch>>(emptyList()) }
-    var voicePhase by remember(threadId) { mutableStateOf(TurnVoicePhase.Idle) }
-    var voiceAudioLevels by remember(threadId) { mutableStateOf<List<Float>>(emptyList()) }
-    var voiceRecordingDurationSeconds by remember(threadId) { mutableStateOf(0.0) }
     var showForkThreadSheet by remember(threadId) { mutableStateOf(false) }
     var showFeedbackDialog by remember(threadId) { mutableStateOf(false) }
     var showWorktreeHandoffSheet by remember(threadId) { mutableStateOf(false) }
@@ -291,32 +255,11 @@ fun TurnConversationPane(
     var fullTimelineMessage by remember(threadId) { mutableStateOf<com.remodex.mobile.core.model.CodexMessage?>(null) }
     var reviewTargetName by rememberSaveable(threadId) { mutableStateOf<String?>(null) }
     var reviewBaseBranch by rememberSaveable(threadId) { mutableStateOf<String?>(null) }
-    val voiceRecorder = remember(threadId) { BridgeVoiceRecorder() }
     val lookupService = remember(repository) { CodexLookupService(repository) }
-    var transcribeJob by remember(threadId) { mutableStateOf<Job?>(null) }
-    var threadChangeSets by remember(threadId, currentTrustedMacDeviceId) {
-        mutableStateOf(
-            TurnUsageSheetLogic.recentChangeSetsForThread(
-                threadId,
-                aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                limit = 50,
-            ),
-        )
-    }
+    val threadChangeSets by threadChangeLedger(aiChangeSetPersistence, currentTrustedMacDeviceId, threadId, 50)
     var applyingUndoChangeSetIds by remember(threadId) { mutableStateOf(emptySet<String>()) }
+    val previewUndo = rememberRevertPreview(repository, currentTrustedMacDeviceId, threadId)
     var inlineUndoError by remember(threadId) { mutableStateOf<String?>(null) }
-
-    fun appendVoiceAudioLevel(level: Float) {
-        scope.launch {
-            if (voicePhase != TurnVoicePhase.Recording) return@launch
-            voiceAudioLevels = (voiceAudioLevels + level.coerceIn(0f, 1f)).takeLast(240)
-        }
-    }
-
-    fun resetVoiceMeteringState() {
-        voiceAudioLevels = emptyList()
-        voiceRecordingDurationSeconds = 0.0
-    }
 
     val activeThread =
         remember(threadId, threads) {
@@ -348,7 +291,6 @@ fun TurnConversationPane(
     var gitBranchReloadNonce by remember(threadId) { mutableIntStateOf(0) }
     var isSwitchingGitBranch by remember(threadId) { mutableStateOf(false) }
     var isHandingOffWorktree by remember(threadId) { mutableStateOf(false) }
-    var isBranchPickerOpen by rememberSaveable(threadId) { mutableStateOf(false) }
     var gitBranchCheckoutError by remember(threadId) { mutableStateOf<String?>(null) }
     var worktreeHandoffError by remember(threadId) { mutableStateOf<String?>(null) }
 
@@ -447,17 +389,8 @@ fun TurnConversationPane(
             )
         }
 
-    val attachmentLimitMessage = stringResource(R.string.turn_attachment_limit, MAX_COMPOSER_ATTACHMENTS)
     val attachmentOverflowMessage = stringResource(R.string.turn_attachment_overflow, MAX_COMPOSER_ATTACHMENTS)
-    val attachmentLoadFailedMessage = stringResource(R.string.turn_attachment_load_failed)
-    val attachmentFileTooLargeMessage = stringResource(R.string.turn_attachment_file_too_large, MAX_FILE_UPLOAD_BYTES / (1024 * 1024))
     val attachmentFileBinarySummary = stringResource(R.string.turn_attachment_file_binary_summary)
-    val attachmentCameraUnavailableMessage = stringResource(R.string.turn_attachment_camera_unavailable)
-    val attachmentCameraPermissionDeniedMessage = stringResource(R.string.turn_attachment_camera_permission_denied)
-    val voiceMicDeniedMessage = stringResource(R.string.turn_voice_mic_permission_denied)
-    val voiceRecorderFailedMessage = stringResource(R.string.turn_voice_recorder_failed)
-    val voiceNoAudioMessage = stringResource(R.string.turn_voice_no_audio)
-    val voiceTranscriptionFailedMessage = stringResource(R.string.turn_voice_transcription_failed)
     val queuedDraftSendFailedMessage = stringResource(R.string.turn_queue_send_failed)
     val queuedDraftRestoreBlockedMessage = stringResource(R.string.turn_queue_restore_requires_empty)
     val planApplyRequiresEmptyMessage = stringResource(R.string.turn_plan_apply_requires_empty)
@@ -589,132 +522,35 @@ fun TurnConversationPane(
         }
     }
 
-    val voiceInteractionEnabled =
-        remember(ready, connectionState, sending) {
-            ready && connectionState is ConnectionState.Connected && !sending
-        }
+    val attachmentActions = key(threadId, currentTrustedMacDeviceId) {
+        rememberComposerAttachmentActions(repository, attachmentState,
+            blockedReason = reviewNoAttachmentsMessage.takeIf { reviewTarget != null },
+            onError = { lastError = it })
+    }
 
-    fun remainingAttachmentSlots(): Int = (MAX_COMPOSER_ATTACHMENTS - composerAttachments.size).coerceAtLeast(0)
-
-    fun appendLoadingAttachment(): String =
-        UUID.randomUUID().toString().also { attachmentId ->
-            composerAttachments = composerAttachments.withLoadingAttachment(attachmentId)
-        }
-
-    fun updateImageAttachmentResult(
-        attachmentId: String,
-        attachment: CodexImageAttachment?,
-    ) {
-        composerAttachments =
-            composerAttachments.withImageAttachmentResult(
-                attachmentId = attachmentId,
-                attachment = attachment,
-                failedMessage = attachmentLoadFailedMessage,
-            )
-        if (attachment == null) {
-            lastError = attachmentLoadFailedMessage
+    val shareInbox = com.remodex.mobile.LocalShareInbox.current
+    val sharedContent = shareInbox?.first
+    if (sharedContent != null && LocalConversationVisible.current && ready &&
+        loadedDraftKey == "${currentTrustedMacDeviceId.orEmpty()}|$threadId") {
+        key(sharedContent.id, currentTrustedMacDeviceId, threadId) {
+            val devices by repository.trustedDevices.collectAsStateWithLifecycle()
+            SharedDraftDialog(sharedContent, activeThread?.displayTitle ?: threadId, attachmentActions.remainingSlots(),
+                deviceName = devices.firstOrNull { it.macDeviceId == currentTrustedMacDeviceId }?.displayName,
+                enabled = !sending,
+                onCancel = { shareInbox.take(sharedContent.id) },
+                onChooseThread = com.remodex.mobile.LocalChooseShareThread.current,
+                onAdd = { selected ->
+                    if (repository.activeThreadId.value == threadId && repository.isSessionReady.value &&
+                        repository.currentTrustedMacDeviceId.value == currentTrustedMacDeviceId &&
+                        selected.size <= attachmentActions.remainingSlots() && shareInbox.take(sharedContent.id) != null) {
+                        if (sharedContent.text.isNotBlank()) draft = if (draft.isEmpty()) sharedContent.text else draft + "\n" + sharedContent.text
+                        selected.forEach { uri -> attachmentActions.addShared(android.net.Uri.parse(uri), sharedContent.mime) }
+                    }
+                })
         }
     }
 
-    fun loadSelectedAttachment(attachmentId: String, uri: android.net.Uri, imageOnly: Boolean) {
-        attachmentUploads.add(attachmentId) { onProgress ->
-            val contentType = withContext(Dispatchers.IO) { context.contentResolver.getType(uri).orEmpty() }
-            if (imageOnly || contentType.startsWith("image/")) {
-                val image = withContext(Dispatchers.IO) { TurnAttachmentCodec.makeAttachment(context, uri) }
-                    ?: throw java.io.IOException("$attachmentLoadFailedMessage (stage=image_decode_or_size)")
-                TurnComposerAttachmentState.ReadyImage(image)
-            } else {
-                val file = TurnFileAttachmentCodec.uploadAttachment(context, uri, fileUploadService, attachmentFileTooLargeMessage) { bytes, total ->
-                    withContext(Dispatchers.Main) { onProgress(bytes, total) }
-                }
-                TurnComposerAttachmentState.ReadyFile(file)
-            }
-        }
-    }
-
-    val photoPickerLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-            if (uris.isEmpty()) return@rememberLauncherForActivityResult
-            val remainingSlots = remainingAttachmentSlots()
-            if (remainingSlots <= 0) {
-                lastError = attachmentLimitMessage
-                return@rememberLauncherForActivityResult
-            }
-            val acceptedUris = uris.take(remainingSlots)
-            if (acceptedUris.size < uris.size) {
-                lastError = attachmentOverflowMessage
-            }
-            acceptedUris.forEach { uri ->
-                val attachmentId = appendLoadingAttachment()
-                loadSelectedAttachment(attachmentId, uri, imageOnly = true)
-            }
-        }
-
-    val filePickerLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            if (uris.isEmpty()) return@rememberLauncherForActivityResult
-            val remainingSlots = remainingAttachmentSlots()
-            if (remainingSlots <= 0) {
-                lastError = attachmentLimitMessage
-                return@rememberLauncherForActivityResult
-            }
-            val acceptedUris = uris.take(remainingSlots)
-            if (acceptedUris.size < uris.size) {
-                lastError = attachmentOverflowMessage
-            }
-            acceptedUris.forEach { uri ->
-                val attachmentId = appendLoadingAttachment()
-                loadSelectedAttachment(attachmentId, uri, imageOnly = false)
-            }
-        }
-
-    val cameraPreviewLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-            if (bitmap == null) return@rememberLauncherForActivityResult
-            if (remainingAttachmentSlots() <= 0) {
-                lastError = attachmentLimitMessage
-                return@rememberLauncherForActivityResult
-            }
-            val attachmentId = appendLoadingAttachment()
-            scope.launch {
-                val attachment =
-                    withContext(Dispatchers.IO) {
-                        TurnAttachmentCodec.makeAttachment(bitmap.toJpegByteArray() ?: return@withContext null)
-                    }
-                updateImageAttachmentResult(attachmentId, attachment)
-            }
-        }
-
-    val cameraPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                cameraPreviewLauncher.launch(null)
-            } else {
-                lastError = attachmentCameraPermissionDeniedMessage
-            }
-        }
-
-    val audioPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                scope.launch {
-                    if (voicePhase != TurnVoicePhase.Idle) return@launch
-                    resetVoiceMeteringState()
-                    val ok =
-                        withContext(Dispatchers.IO) {
-                            voiceRecorder.start(::appendVoiceAudioLevel)
-                        }
-                    if (ok) {
-                        voicePhase = TurnVoicePhase.Recording
-                    } else {
-                        resetVoiceMeteringState()
-                        lastError = voiceRecorderFailedMessage
-                    }
-                }
-            } else {
-                lastError = voiceMicDeniedMessage
-            }
-        }
+    if (showGoal) ThreadGoalDialog(repository, threadId, onUnsupported = { goalsSupported = false }) { showGoal = false }
 
     LaunchedEffect(threadId, ready) {
         if (ready) {
@@ -727,14 +563,9 @@ fun TurnConversationPane(
         }
     }
 
-    LaunchedEffect(threadId, ready, connectionState, hasResolvedRateLimits, rateLimitsError, isLoadingRateLimits) {
-        if (ready &&
-            connectionState is ConnectionState.Connected &&
-            rateLimitsError == null &&
-            !isLoadingRateLimits &&
-            repository.shouldAutoRefreshUsageStatus(threadId)
-        ) {
-            runCatching { repository.refreshUsageStatus(threadId) }
+    LaunchedEffect(threadId, ready, connectionState) {
+        if (ready && connectionState is ConnectionState.Connected && repository.contextWindowUsageByThread.value[threadId] == null) {
+            repository.refreshContextWindowUsage(threadId)
         }
     }
 
@@ -779,11 +610,6 @@ fun TurnConversationPane(
     LaunchedEffect(threadId, currentTrustedMacDeviceId) {
         val draftKey = "${currentTrustedMacDeviceId.orEmpty()}|$threadId"
         loadedDraftKey = null
-        transcribeJob?.cancel()
-        transcribeJob = null
-        voiceRecorder.cancel()
-        voicePhase = TurnVoicePhase.Idle
-        resetVoiceMeteringState()
         lastError = null
         draft = runCatching { repository.loadComposerDraft(threadId) }.getOrDefault("")
         composerAttachments = emptyList()
@@ -820,15 +646,6 @@ fun TurnConversationPane(
         }
     }
 
-    LaunchedEffect(threadId, voicePhase) {
-        if (voicePhase != TurnVoicePhase.Recording) return@LaunchedEffect
-        val startedAtNanos = System.nanoTime()
-        while (isActive && voicePhase == TurnVoicePhase.Recording) {
-            voiceRecordingDurationSeconds = (System.nanoTime() - startedAtNanos) / 1_000_000_000.0
-            delay(100)
-        }
-    }
-
     LaunchedEffect(threadId, gitCwd, connectionState, ready, gitBranchReloadNonce) {
         if (!FeatureFlags.gitIntegrationEnabled) return@LaunchedEffect
         when {
@@ -860,14 +677,6 @@ fun TurnConversationPane(
         }
     }
 
-    LaunchedEffect(threadId, messages.size, currentTrustedMacDeviceId) {
-        threadChangeSets =
-            TurnUsageSheetLogic.recentChangeSetsForThread(
-                threadId,
-                aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                limit = 50,
-            )
-    }
     val assistantUndoChangeSetsByMessageId =
         remember(messages, threadChangeSets) {
             assistantUndoChangeSetsByMessageId(messages = messages, changeSets = threadChangeSets)
@@ -973,6 +782,7 @@ fun TurnConversationPane(
             availablePlugins,
             pluginAutocompleteLoading,
             fileAutocompleteCandidates,
+            goalsSupported,
             availableFileMatches,
             isThreadRunning,
         ) {
@@ -984,13 +794,43 @@ fun TurnConversationPane(
                 fileMatches = availableFileMatches,
                 isThreadRunning = isThreadRunning,
                 isPluginLoading = pluginAutocompleteLoading,
+                goalsSupported = goalsSupported,
             )
         }
-    val presentation = rememberTimelinePresentation(threadId, visibleMessages, isThreadRunning, activeTurnId)
+    val presentation = rememberTimelinePresentation(threadId, visibleMessages, isThreadRunning, activeTurnId, allMessages = messages)
     val historyRevision = historyPaginationState?.initialLoadRevision ?: 0L
     val receivedHistory = remember(threadId, currentTrustedMacDeviceId, historyRevision) {
         repository.messagesByThread.value[threadId].orEmpty()
     }
+    val seekConversation = remember(receivedHistory, historyRevision) {
+        historyRevision > 0 && receivedHistory.asReversed().none { it.hasConversationContent() }
+    }
+    var seekFailure by remember(threadId, currentTrustedMacDeviceId, historyRevision) { mutableStateOf<String?>(null) }
+    LaunchedEffect(repository, threadId, currentTrustedMacDeviceId, historyRevision, ready, conversationVisible) {
+        if (!ready || !conversationVisible || !seekConversation) return@LaunchedEffect
+        seekFailure = null
+        try {
+            loadInitialConversationContent(
+                historyRevision,
+                messages = { repository.messagesByThread.value[threadId].orEmpty() },
+                pagination = { repository.threadHistoryPaginationByThread.value[threadId] },
+                loadPage = {
+                    repository.loadOlderThreadHistory(threadId)
+                    repository.loadingOlderHistoryThreadIds.first { threadId !in it }
+                    repository.olderHistoryErrorByThread.value[threadId]?.let { error(it) }
+                },
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            seekFailure = repository.olderHistoryErrorByThread.value[threadId] ?: run {
+                Log.e("RemodexHistoryUI", "thread=$threadId stage=initial-conversation-content", failure)
+                "initial-conversation-content: ${failure.message ?: failure.javaClass.name}"
+            }
+        }
+    }
+    val seekingContent = seekConversation && canLoadOlderRemoteHistory && seekFailure == null &&
+        presentation.messages.asReversed().none { it.hasConversationContent() }
     val expectedHistoryWindow = remember(receivedHistory, firstRenderedMessageId, visibleTailCount, shouldAutoFollowBottom) {
         receivedHistory.drop(timelineWindowStartIndex(receivedHistory, firstRenderedMessageId, visibleTailCount, shouldAutoFollowBottom))
     }
@@ -1001,8 +841,8 @@ fun TurnConversationPane(
         )
     }
     val reportHistoryPresentation by rememberUpdatedState(LocalHistoryPresentationReceipt.current)
-    LaunchedEffect(threadId, historyRevision, historyReadyToPresent) {
-        if (historyRevision > 0 && historyReadyToPresent) {
+    LaunchedEffect(threadId, historyRevision, historyReadyToPresent, seekingContent) {
+        if (historyRevision > 0 && historyReadyToPresent && !seekingContent) {
             androidx.compose.runtime.withFrameNanos { }
             presentedHistoryRevision = historyRevision
             reportHistoryPresentation(HistoryPresentationReceipt(threadId, historyRevision))
@@ -1010,10 +850,10 @@ fun TurnConversationPane(
     }
     val initialHistoryPhase = historyLoadingPhase(
         connected = ready,
-        loading = threadId in loadingHistoryThreadIds,
-        loaded = historyPaginationState?.initialTurnsLoaded == true,
+        loading = threadId in loadingHistoryThreadIds || (ready && seekingContent),
+        loaded = historyPaginationState?.initialTurnsLoaded == true && seekFailure == null,
         presented = presentedHistoryRevision >= historyRevision,
-        error = historyLoadError,
+        error = seekFailure ?: historyLoadError,
     )
     // The header and its offset must describe the published rows, not a page still being prepared.
     val displayedHiddenEarlierCount = remember(messages, presentation.messages, hiddenEarlierCount) {
@@ -1025,19 +865,10 @@ fun TurnConversationPane(
     val followThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
     val latestMessageId = visibleMessages.lastOrNull()?.id
     var lastAutoScrollThreadId by remember { mutableStateOf<String?>(null) }
-    var timelineContentVisible by remember(threadId) { mutableStateOf(true) }
-    var smartScrollJob by remember(threadId) { mutableStateOf<Job?>(null) }
-    DisposableEffect(threadId) {
-        onDispose { smartScrollJob?.cancel() }
-    }
     var emittedStreamingResponseMission by rememberSaveable(threadId) { mutableStateOf(false) }
     var emittedCommandCardMission by rememberSaveable(threadId) { mutableStateOf(false) }
     var emittedFileChangeCardMission by rememberSaveable(threadId) { mutableStateOf(false) }
     var emittedLongThreadScrollMission by rememberSaveable(threadId) { mutableStateOf(false) }
-    val timelineContentAlpha by animateFloatAsState(
-        targetValue = if (timelineContentVisible) 1f else 0.18f,
-        label = "timeline-content-alpha",
-    )
     val shouldFollowBottom by remember(listState, followThresholdPx) {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -1062,28 +893,6 @@ fun TurnConversationPane(
         } else {
             0
         }
-    val chatAnchors =
-        remember(presentation.items, timelineListItemOffset) {
-            buildChatAnchorsFromItems(
-                items = presentation.items,
-                listItemOffset = timelineListItemOffset,
-            )
-        }
-    val smartScrollNavigationState by remember(listState, chatAnchors, followThresholdPx) {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            buildSmartScrollNavigationState(
-                totalItemsCount = info.totalItemsCount,
-                firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                lastVisibleItemIndex = last?.index,
-                anchors = chatAnchors,
-                isNearBottom = timelineBottomOverflow(info.totalItemsCount, last?.index,
-                    last?.offset ?: 0, last?.size ?: 0, info.viewportEndOffset, info.afterContentPadding)
-                    ?.let { it <= followThresholdPx } == true,
-            )
-        }
-    }
     val historyLoading = rememberTimelineHistoryLoading(
         threadId, repository, listState, messages, visibleMessages, presentation,
         timelineListItemOffset, hiddenEarlierCount, canLoadOlderRemoteHistory,
@@ -1105,8 +914,8 @@ fun TurnConversationPane(
             lastAutoScrollThreadId = threadId
         }
     }
+    var awaitingUserScrollEnd by remember(threadId) { mutableStateOf(false) }
     LaunchedEffect(threadId, listState) {
-        var awaitingUserScrollEnd = false
         snapshotFlow { Triple(!listState.canScrollForward, isTimelineDragged, listState.isScrollInProgress) }
             .distinctUntilChanged()
             .collect { (isAtBottom, isDragging, isScrolling) ->
@@ -1279,9 +1088,7 @@ fun TurnConversationPane(
             draftWithMentions,
             composerAttachments,
             mentionChips,
-            voicePhase,
             isThreadRunning,
-            transcribeJob,
         ) {
             listOf<TurnComposerEvent>(
                     TurnComposerEvent.SetEnabled(ready),
@@ -1299,11 +1106,8 @@ fun TurnConversationPane(
                                 it.state is TurnComposerAttachmentState.Failed
                         },
                     ),
-                    TurnComposerEvent.SetVoicePhase(voicePhase),
                     TurnComposerEvent.SetThreadRunning(isThreadRunning),
-                    TurnComposerEvent.SetTranscribing(
-                        voicePhase == TurnVoicePhase.Transcribing || transcribeJob != null,
-                    ),
+
                 )
                 .fold(TurnComposerModel()) { state, evt ->
                     TurnComposerReducer.reduce(state, evt)
@@ -1477,27 +1281,20 @@ fun TurnConversationPane(
                 mentionChips = mentionChips,
                 composerAttachments = composerAttachments,
             )
-        val editingId = editingSteerDraftId
-        pendingSteerDrafts =
-            if (editingId != null && pendingSteerDrafts.any { it.id == editingId }) {
-                pendingSteerDrafts.map { queued ->
-                    if (queued.id == editingId) next.copy(id = editingId) else queued
-                }
-            } else {
-                pendingSteerDrafts + next
-            }
-        editingSteerDraftId = null
+        pendingSteerDrafts = pendingSteerDrafts + next
         draft = ""
         composerAttachments = emptyList()
         mentionChips = emptyList()
     }
 
     fun sendPendingSteerDraft(pending: PendingSteerDraft) {
-        if (sending) return
+        if (sending || sendingSteerDraftId != null || pendingSteerDrafts.none { it.id == pending.id }) return
         val expectedTurnId = activeTurnId
         val sendAsSteer = isThreadRunning && expectedTurnId != null
+        sendingSteerDraftId = pending.id
+        if (!sendAsSteer) sending = true
         scope.launch {
-            runCatching {
+            try {
                 if (sendAsSteer) {
                     repository.steerTurn(
                         threadId = threadId,
@@ -1508,7 +1305,6 @@ fun TurnConversationPane(
                         fileMentions = pending.fileMentions,
                     )
                 } else {
-                    sending = true
                     repository.startTurn(
                         threadId = threadId,
                         text = pending.wireText,
@@ -1517,17 +1313,14 @@ fun TurnConversationPane(
                         fileMentions = pending.fileMentions,
                     )
                 }
-            }.onSuccess {
                 pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
-                if (editingSteerDraftId == pending.id) {
-                    editingSteerDraftId = null
-                }
                 AppContainer.betaEngagementRepository.recordMissionEvent(
                     eventType = "turn_steered",
                     screen = "composer",
                 )
-            }.onFailure { e ->
-                if (e is CancellationException) throw e
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
                 if (e.isMissingSendTarget()) {
                     Log.e("RemodexSend", "Missing queued turn target thread=$threadId", e)
                     val saved = MissingThreadDraft(pending.wireText, pending.attachments, pending.skillMentions, pending.fileMentions,
@@ -1535,10 +1328,12 @@ fun TurnConversationPane(
                     retainMissingDraft(e, saved)
                     pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
                     if (draft.isBlank()) restoreUnsentDraft(saved)
-                    return@onFailure
+                } else {
+                    Log.e("RemodexSend", "Queued message failed stage=send-pending thread=$threadId draft=${pending.id}", e)
+                    lastError = com.remodex.mobile.ui.turn.formatTurnSendError(e)
                 }
-                lastError = com.remodex.mobile.ui.turn.formatTurnSendError(e)
-            }.also {
+            } finally {
+                sendingSteerDraftId = null
                 if (!sendAsSteer) {
                     sending = false
                 }
@@ -1560,10 +1355,10 @@ fun TurnConversationPane(
     }
 
     var wasThreadRunningForSteerQueue by remember(threadId) { mutableStateOf(false) }
-    LaunchedEffect(threadId, isThreadRunning, sending) {
+    LaunchedEffect(threadId, isThreadRunning, sending, sendingSteerDraftId) {
         if (isThreadRunning) {
             wasThreadRunningForSteerQueue = true
-        } else if (wasThreadRunningForSteerQueue && !sending) {
+        } else if (wasThreadRunningForSteerQueue && !sending && sendingSteerDraftId == null) {
             wasThreadRunningForSteerQueue = false
             pendingSteerDrafts.firstOrNull()?.let { pending ->
                 sendPendingSteerDraft(pending)
@@ -1592,50 +1387,43 @@ fun TurnConversationPane(
     }
 
     val imeBottomInset = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
-    val isImeVisible = imeBottomInset > 0.dp
-    // The bridge returns only the latest successful turn for each conversation.
-    val predictionPrefs = remember(context) {
-        context.getSharedPreferences("collapsed_composer_predictions", android.content.Context.MODE_PRIVATE)
-    }
-    val predictionThreadKey = "${currentTrustedMacDeviceId.orEmpty()}|$threadId"
-    var collapsedTurn by remember(predictionPrefs, predictionThreadKey) {
-        mutableStateOf(predictionPrefs.getString(predictionThreadKey, null))
-    }
-    fun collapseSuggestion(turnId: String) {
-        if (collapsedTurn == turnId) return
-        collapsedTurn = turnId
-        predictionPrefs.edit().putString(predictionThreadKey, turnId).apply()
-    }
-    val timelineSettled = lastAutoScrollThreadId == threadId && hasTimelineItems
-    val readerAway = isTimelineDragged || !shouldAutoFollowBottom
-    val verifiedSuggestion = currentSuggestion?.takeIf { repository.composerPredictions.value[threadId] == it }
-    LaunchedEffect(predictionThreadKey, verifiedSuggestion, readerAway, isImeVisible, draft.isNotEmpty()) {
-        verifiedSuggestion?.let {
-            if (readerAway || isImeVisible || draft.isNotEmpty() || it.collapsedByTyping) collapseSuggestion(it.sourceTurnId)
+    var compactComposer by remember(threadId) { mutableStateOf(false) }
+    var composerHeightPx by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val keyboardHeightPx by rememberUpdatedState(with(density) { imeBottomInset.toPx() })
+    val readingScroll = remember(threadId, listState, density) {
+        object : NestedScrollConnection {
+            private var distance = 0f
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                if (consumed.y <= 0f || compactComposer) {
+                    distance = 0f
+                } else {
+                    distance += consumed.y
+                    // Leave enough room for the viewport to grow without pushing its first line.
+                    val threshold = keyboardHeightPx + composerHeightPx - with(density) { 40.dp.toPx() }
+                    if (distance > threshold.coerceAtLeast(with(density) { 16.dp.toPx() })) {
+                        compactComposer = true
+                        distance = 0f
+                    }
+                }
+                return Offset.Zero
+            }
         }
     }
-    // Only the scrollable end margin reserves room for a three-line preview. Its size
-    // stays independent of result arrival, dismissal, and the manual full-text sheet.
-    val previewRoom = 65.dp + with(LocalDensity.current) { MaterialTheme.typography.bodyMedium.lineHeight.toDp() * 3 }
-    val inlineAllowed = timelineSettled && shouldFollowBottom && !readerAway
-    val previewAtBottom = inlineAllowed && ready && !isThreadRunning && !sending && !hasComposerDraftContent &&
-        !isImeVisible && verifiedSuggestion != null && !verifiedSuggestion.collapsedByTyping && collapsedTurn != verifiedSuggestion.sourceTurnId &&
-        loadedDraftKey == predictionThreadKey
-    val navigationBottom = TurnConversationSmartScrollBottomPadding + if (previewAtBottom) previewRoom else 0.dp
-    Box(
-        modifier =
-            modifier
-                .fillMaxSize()
-    ) {
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .fillMaxWidth(),
-        ) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-            ) {
+    LaunchedEffect(threadId, compactComposer) {
+        if (compactComposer) {
+            snapshotFlow { !listState.canScrollForward }.first { it }
+            shouldAutoFollowBottom = true
+            compactComposer = false
+        }
+    }
+    // The bridge returns only the latest successful turn for each conversation.
+    val predictionThreadKey = "${currentTrustedMacDeviceId.orEmpty()}|$threadId"
+    val verifiedSuggestion = currentSuggestion?.takeIf { repository.composerPredictions.value[threadId] == it }
+    val chatColors = MaterialTheme.colorScheme.conversationColors()
+    Column(modifier.fillMaxSize().background(chatColors.reading)) {
+            Box(Modifier.fillMaxWidth().weight(1f)) {
                 CompositionLocalProvider(LocalThreadGitProjectRoot provides activeThread?.gitWorkingDirectory) {
                     ConversationImageGalleryHost(threadId, messages) {
                     MessageList(
@@ -1668,10 +1456,10 @@ fun TurnConversationPane(
                         olderHistoryError = olderHistoryError ?: historyLoading.error,
                         contentPadding =
                             PaddingValues(
-                                top = TurnConversationMessageListTopPadding,
-                                bottom = TurnConversationMessageListBottomPadding + previewRoom,
-                                start = 2.dp,
-                                end = 2.dp,
+                                top = 8.dp,
+                                bottom = 12.dp,
+                                start = 14.dp,
+                                end = 14.dp,
                             ),
                         onLoadEarlierMessages = historyLoading.load.takeIf {
                             hiddenEarlierCount > 0 || canLoadOlderRemoteHistory || !olderHistoryError.isNullOrBlank() || historyLoading.error != null
@@ -1684,62 +1472,23 @@ fun TurnConversationPane(
                             inlineUndoError = context.getString(R.string.turn_usage_revert_reason_missing_cwd)
                             return@MessageList
                         }
+                        previewUndo(changeSet, workingDirectory) {
                         scope.launch {
                             applyingUndoChangeSetIds = applyingUndoChangeSetIds + changeSet.id
                             inlineUndoError = null
-                            runCatching {
-                                AiChangeSetRevertService(repository).apply(
-                                    changeSet = changeSet,
-                                    workingDirectory = workingDirectory,
-                                )
-                            }.onSuccess { applyResult ->
-                                if (applyResult.success) {
-                                    aiChangeSetPersistence.save(
-                                        TurnUsageSheetLogic.markChangeSetReverted(
-                                            changeSets = aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                                            changeSetId = changeSet.id,
-                                            now = Instant.now(),
-                                        ),
-                                        currentTrustedMacDeviceId,
-                                    )
-                                } else {
-                                    val message =
-                                        applyResult.unsupportedReasons.firstOrNull()
-                                            ?: applyResult.conflicts.firstOrNull()?.message
-                                            ?: context.getString(R.string.turn_message_action_undo_failed)
-                                    inlineUndoError = message
-                                    aiChangeSetPersistence.save(
-                                        TurnUsageSheetLogic.recordChangeSetRevertError(
-                                            changeSets = aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                                            changeSetId = changeSet.id,
-                                            message = message,
-                                            now = Instant.now(),
-                                        ),
-                                        currentTrustedMacDeviceId,
-                                    )
-                                }
-                            }.onFailure { error ->
-                                val message =
-                                    error.message?.ifBlank { null }
-                                        ?: context.getString(R.string.turn_message_action_undo_failed)
-                                inlineUndoError = message
-                                aiChangeSetPersistence.save(
-                                    TurnUsageSheetLogic.recordChangeSetRevertError(
-                                        changeSets = aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                                        changeSetId = changeSet.id,
-                                        message = message,
-                                        now = Instant.now(),
-                                    ),
-                                    currentTrustedMacDeviceId,
-                                )
+                            try {
+                                val result = AiChangeSetRevertService(repository).applyTracked(changeSet, workingDirectory,
+                                    aiChangeSetPersistence, currentTrustedMacDeviceId)
+                                if (!result.success) inlineUndoError = result.unsupportedReasons.firstOrNull()
+                                    ?: result.conflicts.firstOrNull()?.message ?: context.getString(R.string.turn_message_action_undo_failed)
+                            } catch (cancel: CancellationException) { throw cancel }
+                            catch (failure: Exception) {
+                                android.util.Log.e("RemodexLedger", "apply change set", failure)
+                                inlineUndoError = formatTurnSendError(failure)
+                            } finally {
+                                applyingUndoChangeSetIds = applyingUndoChangeSetIds - changeSet.id
                             }
-                            threadChangeSets =
-                                TurnUsageSheetLogic.recentChangeSetsForThread(
-                                    threadId,
-                                    aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                                    limit = 50,
-                                )
-                            applyingUndoChangeSetIds = applyingUndoChangeSetIds - changeSet.id
+                        }
                         }
                     },
                     onForkThread = {
@@ -1754,17 +1503,14 @@ fun TurnConversationPane(
                     modifier =
                         Modifier
                             .fillMaxSize()
-                            .then(historyLoading.modifier)
-                            .graphicsLayer {
-                                alpha = timelineContentAlpha
-                                compositingStrategy = CompositingStrategy.ModulateAlpha
-                            },
+                            .nestedScroll(readingScroll)
+                            .then(historyLoading.modifier),
                     )
                 }
                 }
                 ConversationHistoryStatus(
                     phase = initialHistoryPhase,
-                    error = historyLoadError,
+                    error = seekFailure ?: historyLoadError,
                     canRetry = ready && threadId !in loadingHistoryThreadIds,
                     onRetry = {
                         scope.launch {
@@ -1779,53 +1525,38 @@ fun TurnConversationPane(
                         }
                     },
                     modifier = Modifier.align(if (presentation.items.isEmpty()) Alignment.Center else Alignment.TopCenter)
-                        .padding(top = if (presentation.items.isEmpty()) 0.dp else TurnConversationMessageListTopPadding, start = 16.dp, end = 16.dp),
+                        .padding(top = if (presentation.items.isEmpty()) 0.dp else 8.dp, start = 16.dp, end = 16.dp),
                 )
-                ConversationQuestionInbox(threadId,
-                    Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = navigationBottom))
-                SmartScrollNavigationCta(
-                    state = smartScrollNavigationState,
-                    onNavigate = { requestedIndex ->
-                        val targetIndex =
-                            requestedIndex.coerceIn(
-                                minimumValue = 0,
-                                maximumValue = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0),
-                            )
-                        val previousNavigation = smartScrollJob
-                        shouldAutoFollowBottom = false
-                        smartScrollJob = scope.launch {
-                            previousNavigation?.cancelAndJoin()
-                            try {
-                                val distanceItems = kotlin.math.abs(targetIndex - listState.firstVisibleItemIndex)
-                                if (distanceItems >= SMART_SCROLL_FADE_JUMP_DISTANCE_ITEMS) {
-                                    timelineContentVisible = false
-                                    delay(90L)
-                                    listState.scrollToItem(targetIndex)
-                                    delay(120L)
-                                } else {
-                                    listState.animateScrollToItem(targetIndex)
-                                }
-                                shouldAutoFollowBottom =
-                                    targetIndex >= (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                            } finally {
-                                timelineContentVisible = true
-                            }
+                JumpToLatestButton(
+                    visible = showJumpToLatest(
+                        ready = lastAutoScrollThreadId == threadId,
+                        following = shouldAutoFollowBottom,
+                        canScrollForward = listState.canScrollForward,
+                    ),
+                    onClick = {
+                        awaitingUserScrollEnd = false
+                        scope.launch {
+                            listState.stopScroll()
+                            compactComposer = false
+                            shouldAutoFollowBottom = true
                         }
                     },
                     modifier =
                         Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = navigationBottom),
+                            .padding(bottom = 8.dp),
                 )
             }
             Column(
                 modifier =
                     Modifier
-                        .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .zIndex(1f)
                         .padding(bottom = TurnConversationComposerBottomLift),
             ) {
+        if (ready && goalsSupported && conversationVisible) key(currentTrustedMacDeviceId) {
+            ActiveGoalButton(repository, threadId, open = { showGoal = true }, unsupported = { goalsSupported = false })
+        }
+        ThreadFollowUpActions(repository, threadId) { lastError = it }
         lastError?.let { err ->
             Text(
                 text = err,
@@ -1942,6 +1673,8 @@ fun TurnConversationPane(
                                     state = TurnComposerAttachmentState.ReadyImage(it),
                                 )
                             }
+                        compactComposer = false
+                        queueEditFocusId = draftId
                         if (restored.attachments.size > MAX_COMPOSER_ATTACHMENTS) {
                             lastError = attachmentOverflowMessage
                         }
@@ -2082,19 +1815,26 @@ fun TurnConversationPane(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (pendingSteers.isNotEmpty()) {
+                    fun composerAvailableForEdit() = draft.isEmpty() && composerAttachments.isEmpty() &&
+                        mentionChips.isEmpty() && reviewTarget == null && !sending
                     PendingSteerDraftQueue(
                         pendingDrafts = pendingSteers,
+                        sendingId = sendingSteerDraftId,
+                        canEdit = composerAvailableForEdit(),
                         onSteer = { pending -> sendPendingSteerDraft(pending) },
-                        onEdit = { pending ->
-                            editingSteerDraftId = pending.id
+                        onEdit = edit@{ pending ->
+                            if (!composerAvailableForEdit() || sendingSteerDraftId == pending.id ||
+                                pending !in pendingSteerDrafts) return@edit
+                            pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
                             draft = pending.draftText
                             mentionChips = pending.mentionChips
                             composerAttachments = pending.composerAttachments
+                            compactComposer = false
+                            queueEditFocusId = pending.id
                         },
                         onDelete = { pending ->
-                            pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
-                            if (editingSteerDraftId == pending.id) {
-                                editingSteerDraftId = null
+                            if (sendingSteerDraftId != pending.id) {
+                                pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
                             }
                         },
                         modifier =
@@ -2104,20 +1844,79 @@ fun TurnConversationPane(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-                val prediction = verifiedSuggestion?.takeIf {
-                    ready && !isThreadRunning && !sending && !hasComposerDraftContent && draft.isEmpty() &&
-                        loadedDraftKey == "${currentTrustedMacDeviceId.orEmpty()}|$threadId"
+                val prediction = verifiedSuggestion
+                val canFillPrediction = ready && !isThreadRunning && !sending && !hasComposerDraftContent &&
+                    draft.isEmpty() && loadedDraftKey == predictionThreadKey
+                var changingAccess by remember(threadId) { mutableStateOf(false) }
+                var accessError by remember(threadId) { mutableStateOf<String?>(null) }
+                BindSessionEnvironment(threadId) {
+                    SessionEnvironmentSections(
+                        directory = activeThread?.cwd,
+                        threadId = threadId,
+                        isWorktreeProject = activeThread?.isManagedWorktreeProject == true,
+                        worktreeHandoffEnabled =
+                            gitCwd != null &&
+                                gitBranchPaneState is GitBranchPaneState.Loaded &&
+                                ready &&
+                                connectionState is ConnectionState.Connected &&
+                                !isThreadRunning &&
+                                !sending &&
+                                !isSwitchingGitBranch,
+                        isHandingOffWorktree = isHandingOffWorktree,
+                        onWorktreeHandoff = {
+                            showWorktreeHandoffSheet = true
+                            worktreeHandoffError = null
+                        },
+                        selectedAccessMode = selectedAccessMode,
+                        accessError = accessError,
+                        accessPickerEnabled =
+                            ready && !changingAccess &&
+                                !composerLocks.runtimeControlsLocked &&
+                                runtimeControls.accessMode.enabled,
+                        onSelectAccessMode = select@{ mode ->
+                            if (changingAccess) return@select
+                            changingAccess = true
+                            accessError = null
+                            scope.launch {
+                                try {
+                                    repository.setSelectedAccessMode(mode)
+                                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                    throw cancelled
+                                } catch (failure: Exception) {
+                                    android.util.Log.e("RemodexAccess", "stage=set_access_mode", failure)
+                                    accessError = failure.localizedMessage ?: failure.javaClass.name
+                                } finally {
+                                    changingAccess = false
+                                }
+                            }
+                        },
+                        gitBranchPaneState = gitBranchPaneState,
+                        branchPickerEnabled = branchPickerEnabled,
+                        isSwitchingGitBranch = isSwitchingGitBranch,
+                        onRefreshGitBranches = { gitBranchReloadNonce++ },
+                        onCheckoutGitBranch = onGitCheckout,
+                        onCreateGitBranch = onGitCreateBranch,
+                        onOpenBranchSelector = {
+                            scope.launch {
+                                AppContainer.betaEngagementRepository.recordMissionEvent(
+                                    eventType = "branch_selector_opened",
+                                    screen = "branch_selector",
+                                )
+                            }
+                        },
+                    )
                 }
                 TurnComposerBar(
+                    compact = compactComposer,
+                    queueEditFocusId = queueEditFocusId,
+                    onQueueEditFocused = { queueEditFocusId = null },
+                    isFollowUp = messages.isNotEmpty(),
+                    onExpand = { compactComposer = false },
                     draft = draft,
                     prediction = prediction,
-                    predictionCollapsed = prediction?.collapsedByTyping == true || prediction?.sourceTurnId == collapsedTurn,
-                    allowInlinePrediction = inlineAllowed,
-                    onCollapsePrediction = { prediction?.let { collapseSuggestion(it.sourceTurnId) } },
-                    isImeVisible = isImeVisible,
+                    canFillPrediction = canFillPrediction,
                     onAcceptPrediction = {
-                        if (prediction != null && draft.isEmpty() && repository.composerPredictions.value[threadId] == prediction) {
-                            collapseSuggestion(prediction.sourceTurnId)
+                        if (prediction != null && canFillPrediction && draft.isEmpty() && repository.composerPredictions.value[threadId] == prediction) {
                             draft = prediction.text
                             repository.dismissComposerPrediction(threadId, prediction.sourceTurnId)
                             true
@@ -2129,75 +1928,30 @@ fun TurnConversationPane(
                     runtimeControls = runtimeControls,
                     mentionChips = mentionChips,
                     autocomplete = autocompleteState,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().onSizeChanged { composerHeightPx = it.height },
             onDraftChange = { next ->
-                if (draft.isEmpty() && next.isNotEmpty()) {
-                    val suggestion = repository.composerPredictions.value[threadId]
-                    if (suggestion != null) collapseSuggestion(suggestion.sourceTurnId)
-                    else repository.dismissPredictionForTyping(threadId)
-                }
                 draft = next
                 val target = reviewTarget
                 if (target != null && next.trim() != reviewDraftText(target, reviewBaseBranch)) {
                     clearReviewTarget()
                 }
             },
-            onPickImages = {
-                if (reviewTarget != null) {
-                    lastError = reviewNoAttachmentsMessage
-                    return@TurnComposerBar
-                }
-                if (composerAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
-                    lastError = attachmentLimitMessage
-                } else {
-                    photoPickerLauncher.launch("image/*")
-                }
-            },
-            onPickFiles = {
-                if (reviewTarget != null) {
-                    lastError = reviewNoAttachmentsMessage
-                    return@TurnComposerBar
-                }
-                if (composerAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
-                    lastError = attachmentLimitMessage
-                } else {
-                    filePickerLauncher.launch(arrayOf("*/*"))
-                }
-            },
-            onTakePhoto = {
-                if (reviewTarget != null) {
-                    lastError = reviewNoAttachmentsMessage
-                    return@TurnComposerBar
-                }
-                if (composerAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
-                    lastError = attachmentLimitMessage
-                    return@TurnComposerBar
-                }
-                val hasCamera =
-                    context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
-                if (!hasCamera) {
-                    lastError = attachmentCameraUnavailableMessage
-                    return@TurnComposerBar
-                }
-                val hasPermission =
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                        PackageManager.PERMISSION_GRANTED
-                if (hasPermission) {
-                    cameraPreviewLauncher.launch(null)
-                } else {
-                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                }
-            },
+            onPickImages = attachmentActions.pickImages,
+            onPickFiles = attachmentActions.pickFiles,
+            onTakePhoto = attachmentActions.takePhoto,
             onSetPlanModeEnabled = { setPlanModeEnabled(it) },
+            onOpenModelPicker = {
+                if (ready && availableModels.isEmpty() && !isLoadingModels) scope.launch {
+                    try { repository.refreshModels() }
+                    catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                    catch (failure: Exception) { lastError = failure.localizedMessage }
+                }
+            },
             onSelectModel = { option ->
-                scope.launch { runCatching { repository.setSelectedModelId(option.id) } }
+                repository.setSelectedModelId(option.id)
             },
             onSelectReasoningEffort = { option ->
-                scope.launch {
-                    runCatching {
-                        repository.setSelectedReasoningEffort(option.id.takeUnless { it == TURN_COMPOSER_RUNTIME_AUTO_ID })
-                    }
-                }
+                repository.setSelectedReasoningEffort(option.id.takeUnless { it == TURN_COMPOSER_RUNTIME_AUTO_ID })
             },
             onSelectAccessMode = { option ->
                 CodexAccessMode.entries.firstOrNull { it.name == option.id }?.let { mode ->
@@ -2206,20 +1960,15 @@ fun TurnConversationPane(
             },
             onSelectServiceTier = { option ->
                 val tier = CodexServiceTier.entries.firstOrNull { it.name == option.id }
-                scope.launch { runCatching { repository.setSelectedServiceTier(tier) } }
+                repository.setSelectedServiceTier(tier)
             },
-            onRetryAttachment = { attachmentId ->
-                lastError = null
-                attachmentUploads.retry(attachmentId)
-            },
-            onRemoveAttachment = { attachmentId ->
-                attachmentUploads.remove(attachmentId)
-                composerAttachments = composerAttachments.filterNot { it.id == attachmentId }
-            },
+            onRetryAttachment = attachmentActions.retry,
+            onRemoveAttachment = attachmentActions.remove,
             onRemoveMentionChip = { chip ->
                 mentionChips = mentionChips.filterNot { it == chip }
             },
             onSelectAutocomplete = { item ->
+                val originalDraft = draft
                 val replaced =
                     TurnComposerTrailingTokens.replaceTrailingSegment(
                         text = draft,
@@ -2248,8 +1997,24 @@ fun TurnConversationPane(
                                 showFeedbackDialog = true
                                 lastError = null
                             }
+                            item.payload.semanticValue.equals("goal", ignoreCase = true) -> {
+                                draft = TurnComposerTrailingTokens.replaceTrailingSegment(originalDraft, parse = trailingToken).text
+                                showGoal = true
+                            }
                             item.payload.semanticValue.equals("compact", ignoreCase = true) -> {
-                                draft = (replaced.text.trimEnd() + " /compact").trim()
+                                draft = TurnComposerTrailingTokens.replaceTrailingSegment(originalDraft, parse = trailingToken).text
+                                if (!compactBusy && ready) {
+                                    compactBusy = true
+                                    scope.launch {
+                                        try {
+                                            repository.sendRequest("thread/compact/start", JSONValue.Obj(mapOf("threadId" to JSONValue.Str(threadId))))
+                                        } catch (cancel: CancellationException) { throw cancel }
+                                        catch (failure: Exception) {
+                                            android.util.Log.e("RemodexCompact", "thread/compact/start", failure)
+                                            lastError = formatTurnSendError(failure)
+                                        } finally { compactBusy = false }
+                                    }
+                                }
                                 mentionChips = mentionChips.filterNot { chip ->
                                     chip.kind == ComposerMentionKind.SlashCommand &&
                                         chip.semanticValue.equals("compact", ignoreCase = true)
@@ -2273,152 +2038,7 @@ fun TurnConversationPane(
                 }
             },
             onStopTurn = { stopActiveTurn() },
-            voiceUiEnabled = voiceInteractionEnabled,
-            voiceAudioLevels = voiceAudioLevels,
-            voiceRecordingDurationSeconds = voiceRecordingDurationSeconds,
-            onVoiceClick = {
-                when (voicePhase) {
-                    TurnVoicePhase.Idle -> {
-                        if (voiceInteractionEnabled) {
-                            val hasAudioPermission =
-                                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                                    PackageManager.PERMISSION_GRANTED
-                            if (!hasAudioPermission) {
-                                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            } else {
-                                scope.launch {
-                                    if (voicePhase != TurnVoicePhase.Idle) return@launch
-                                    resetVoiceMeteringState()
-                                    val ok =
-                                        withContext(Dispatchers.IO) {
-                                            voiceRecorder.start(::appendVoiceAudioLevel)
-                                        }
-                                    if (ok) {
-                                        voicePhase = TurnVoicePhase.Recording
-                                    } else {
-                                        resetVoiceMeteringState()
-                                        lastError = voiceRecorderFailedMessage
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    TurnVoicePhase.Recording -> {
-                        scope.launch {
-                            if (voicePhase != TurnVoicePhase.Recording) return@launch
-                            val encoded =
-                                withContext(Dispatchers.IO) {
-                                    voiceRecorder.stopAndEncodeWav()
-                                }
-                            val pair =
-                                encoded.getOrElse { err ->
-                                    voicePhase = TurnVoicePhase.Idle
-                                    resetVoiceMeteringState()
-                                    if (err.message != "not_recording") {
-                                        lastError =
-                                            when (err.message) {
-                                                "empty_audio" -> voiceNoAudioMessage
-                                                else -> voiceRecorderFailedMessage
-                                            }
-                                    }
-                                    return@launch
-                                }
-                            voicePhase = TurnVoicePhase.Transcribing
-                            resetVoiceMeteringState()
-                            transcribeJob =
-                                scope.launch {
-                                    try {
-                                        val text =
-                                            repository.transcribeBridgeVoiceWav(
-                                                pair.first,
-                                                pair.second,
-                                            )
-                                        if (isActive) {
-                                            draft = VoiceDraftAppend.append(draft, text)
-                                            AppContainer.betaEngagementRepository.recordMissionEvent(
-                                                eventType = "voice_input_used",
-                                                screen = "composer",
-                                            )
-                                        }
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        if (isActive) {
-                                            lastError = formatVoiceTranscriptionError(e, voiceTranscriptionFailedMessage)
-                                        }
-                                    } finally {
-                                        transcribeJob = null
-                                        if (isActive) {
-                                            voicePhase = TurnVoicePhase.Idle
-                                        }
-                                    }
-                                }
-                        }
-                    }
-                    TurnVoicePhase.Transcribing -> Unit
-                }
-            },
-            onCancelVoiceRecording = {
-                scope.launch {
-                    if (voicePhase != TurnVoicePhase.Recording) return@launch
-                    withContext(Dispatchers.IO) { voiceRecorder.cancel() }
-                    voicePhase = TurnVoicePhase.Idle
-                    resetVoiceMeteringState()
-                }
-            },
-            composerEnvironment = {
-                if (pendingSteers.isEmpty() && (!isImeVisible || isBranchPickerOpen)) {
-                    TurnComposerSecondaryBar(
-                        threadId = threadId,
-                        repository = repository,
-                        isWorktreeProject = activeThread?.isManagedWorktreeProject == true,
-                        worktreeHandoffEnabled =
-                            gitCwd != null &&
-                                gitBranchPaneState is GitBranchPaneState.Loaded &&
-                                ready &&
-                                connectionState is ConnectionState.Connected &&
-                                !isThreadRunning &&
-                                !sending &&
-                                !isSwitchingGitBranch,
-                        isHandingOffWorktree = isHandingOffWorktree,
-                        onWorktreeHandoff = {
-                            showWorktreeHandoffSheet = true
-                            worktreeHandoffError = null
-                        },
-                        selectedAccessMode = selectedAccessMode,
-                        accessPickerEnabled =
-                            ready &&
-                                !composerLocks.runtimeControlsLocked &&
-                                runtimeControls.accessMode.enabled,
-                        onSelectAccessMode = { mode ->
-                            scope.launch { runCatching { repository.setSelectedAccessMode(mode) } }
-                        },
-                        gitBranchPaneState = gitBranchPaneState,
-                        branchPickerEnabled = branchPickerEnabled,
-                        isSwitchingGitBranch = isSwitchingGitBranch,
-                        onRefreshGitBranches = { gitBranchReloadNonce++ },
-                        onCheckoutGitBranch = onGitCheckout,
-                        onCreateGitBranch = onGitCreateBranch,
-                        onOpenBranchSelector = {
-                            scope.launch {
-                                AppContainer.betaEngagementRepository.recordMissionEvent(
-                                    eventType = "branch_selector_opened",
-                                    screen = "branch_selector",
-                                )
-                            }
-                        },
-                        onBranchPickerOpenChange = { isOpen ->
-                            isBranchPickerOpen = isOpen
-                        },
-                    )
-                }
-            },
             onSend = {
-                transcribeJob?.cancel()
-                transcribeJob = null
-                voiceRecorder.cancel()
-                voicePhase = TurnVoicePhase.Idle
-                resetVoiceMeteringState()
                 lastError = null
                 val petSlashCommand = parsePetSlashCommand(draft)
                 if (petSlashCommand != null) {
@@ -2527,7 +2147,6 @@ fun TurnConversationPane(
                 )
             }
         }
-        }
     }
     com.remodex.mobile.ui.turn.ForkThreadActionSheet(
         visible = showForkThreadSheet,
@@ -2627,10 +2246,11 @@ private fun FullTimelineMessageSheet(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             TurnRichMarkdownBody(
-                markdown = message.text.trim(),
+                markdown = message.visibleAssistantText().trim(),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.fillMaxWidth(),
                 keyPrefix = "full-${message.id}",
+                assistantProse = message.role == CodexMessageRole.assistant && message.kind == CodexMessageKind.chat,
             )
         }
     }
@@ -2639,6 +2259,8 @@ private fun FullTimelineMessageSheet(
 @Composable
 private fun PendingSteerDraftQueue(
     pendingDrafts: List<PendingSteerDraft>,
+    sendingId: String?,
+    canEdit: Boolean,
     onSteer: (PendingSteerDraft) -> Unit,
     onEdit: (PendingSteerDraft) -> Unit,
     onDelete: (PendingSteerDraft) -> Unit,
@@ -2648,18 +2270,8 @@ private fun PendingSteerDraftQueue(
     val lightChrome = isAgentLightChrome()
     val shape = RoundedCornerShape(28.dp)
     val surfaceColor = RemodexPopupChrome.surfaceColor()
-    val iconTint =
-        if (lightChrome) {
-            AgentLightColors.IconMuted
-        } else {
-            colors.onSurfaceVariant
-        }
     val textTint =
-        if (lightChrome) {
-            AgentLightColors.TextSecondary
-        } else {
-            colors.onSurfaceVariant
-        }
+        colors.onSurfaceVariant
     Surface(
         modifier =
             modifier
@@ -2694,8 +2306,10 @@ private fun PendingSteerDraftQueue(
             pendingDrafts.forEach { pending ->
                 PendingSteerDraftQueueRow(
                     pending = pending,
+                    steerEnabled = sendingId == null,
+                    editEnabled = canEdit && sendingId != pending.id,
+                    deleteEnabled = sendingId != pending.id,
                     textTint = textTint,
-                    iconTint = iconTint,
                     onSteer = { onSteer(pending) },
                     onEdit = { onEdit(pending) },
                     onDelete = { onDelete(pending) },
@@ -2708,14 +2322,15 @@ private fun PendingSteerDraftQueue(
 @Composable
 private fun PendingSteerDraftQueueRow(
     pending: PendingSteerDraft,
+    steerEnabled: Boolean,
+    editEnabled: Boolean,
+    deleteEnabled: Boolean,
     textTint: Color,
-    iconTint: Color,
     onSteer: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val colors = MaterialTheme.colorScheme
     Row(
         modifier =
             modifier
@@ -2732,40 +2347,33 @@ private fun PendingSteerDraftQueueRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        TextButton(
-            onClick = onEdit,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-            modifier =
-                Modifier
-                    .heightIn(min = 26.dp)
-                    .clip(RoundedCornerShape(8.dp)),
-        ) {
-            Text(
-                text = "...",
-                color = colors.onSurface,
-                style = MaterialTheme.typography.labelMedium,
+        IconButton(onClick = onEdit, enabled = editEnabled, modifier = Modifier.size(36.dp)) {
+            Icon(
+                painter = painterResource(LucideR.drawable.lucide_ic_square_pen),
+                contentDescription = stringResource(R.string.turn_steer_edit_cd),
+                modifier = Modifier.size(19.dp),
             )
         }
         IconButton(
             onClick = onSteer,
+            enabled = steerEnabled,
             modifier = Modifier.size(28.dp),
         ) {
             Icon(
                 painter = painterResource(LucideR.drawable.lucide_ic_send_horizontal),
                 contentDescription = stringResource(R.string.turn_steer_cd),
                 modifier = Modifier.size(17.dp),
-                tint = iconTint,
             )
         }
         IconButton(
             onClick = onDelete,
+            enabled = deleteEnabled,
             modifier = Modifier.size(28.dp),
         ) {
             Icon(
                 painter = painterResource(LucideR.drawable.lucide_ic_trash_2),
                 contentDescription = stringResource(R.string.turn_steer_delete_cd),
                 modifier = Modifier.size(17.dp),
-                tint = iconTint,
             )
         }
     }

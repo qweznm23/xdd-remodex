@@ -89,6 +89,7 @@ class CodexService(
     internal val secureStore: SecureStore,
     internal val sessionPersistence: SessionPersistence,
     internal val messagePersistence: CodexMessagePersistence,
+    internal val changeLedger: com.remodex.mobile.core.persistence.AIChangeSetPersistence? = null,
 ) : CodexRepository {
     internal val appContext = context.applicationContext
 
@@ -213,6 +214,31 @@ class CodexService(
     internal val contextWindowUsageLoadingRevisionByThread = mutableMapOf<String, Long>()
 
     private val runtimeSelection = sessionPersistence.loadRuntimeSelection()
+    @Volatile internal var supportsSettingsSync = false
+    internal val _conversationEvents = kotlinx.coroutines.flow.MutableSharedFlow<Pair<String, Map<String, JSONValue>>>(extraBufferCapacity = 32)
+    override val conversationEvents = _conversationEvents
+    internal val liveFollowUps = com.remodex.mobile.data.ThreadFollowUps()
+    override val threadFollowUps = liveFollowUps.state
+    override suspend fun performFollowUp(threadId: String, row: com.remodex.mobile.data.ThreadFollowUp) {
+        val connection = webSocket
+        if (row.review) {
+            val event = requireNotNull(liveFollowUps.consume(threadId, row))
+            sendRequestImpl("thread/approveGuardianDeniedAction", JSONValue.Obj(mapOf("threadId" to JSONValue.Str(threadId), "event" to event)))
+        } else {
+            val result = sendRequestImpl("thread/turns/list", JSONValue.Obj(mapOf("threadId" to JSONValue.Str(threadId),
+                "sortDirection" to JSONValue.Str("desc"), "limit" to JSONValue.NumLong(1))))
+            val last = result.result?.objectValue?.get("data")?.arrayValue?.firstOrNull()?.objectValue
+            check(webSocket === connection && last?.get("id")?.stringValue == row.turn && last["status"]?.stringValue == "failed" &&
+                threadId !in _runningTurnIdByThread.value && threadId !in _protectedRunningFallbackThreadIds.value) {
+                "The conversation has changed. Refresh before continuing."
+            }
+            liveFollowUps.consume(threadId, row)
+            startTurnInternal(threadId, "Continue from where you stopped. Check what already completed before repeating any actions.")
+        }
+    }
+    internal val turnPatches = TurnPatchCapture()
+    internal val catalogVerifier = CatalogVerifier()
+    internal val runtimeWriteMutex = kotlinx.coroutines.sync.Mutex()
     internal val threadRuntimeSelection = ThreadRuntimeSelection(
         ThreadModelSelection(runtimeSelection.selectedModelId, runtimeSelection.selectedReasoningEffort),
     )
@@ -308,6 +334,7 @@ class CodexService(
 
     internal val turnDraftQueueStore = TurnDraftQueueStore()
 
+    internal val pendingApprovalQueue = linkedMapOf<String, PendingApprovalRequest>()
     internal val pendingApprovalResponders =
         ConcurrentHashMap<String, (PendingApprovalDecision) -> Unit>()
     internal val pendingStructuredInputResponders =
@@ -418,6 +445,9 @@ class CodexService(
      */
     @Volatile
     internal var testRpcRequestHandler: (suspend (String, JSONValue?) -> RPCMessage)? = null
+    internal val sourceReplacements = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    internal val latestCatalogEvents = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    internal val hostEventSequence = java.util.concurrent.atomic.AtomicLong()
     internal val loadingHistory = ThreadHistoryRequests()
     internal val historyLoadRevision = java.util.concurrent.atomic.AtomicLong()
     override val loadingHistoryThreadIds: StateFlow<Set<String>> get() = loadingHistory.activeThreadIds
@@ -459,7 +489,8 @@ class CodexService(
             onPredictionSource = { thread, turn ->
                 if (_activeThreadId.value == thread) predictionStore.completed(thread, turn)?.let { requestComposerPrediction(it) }
             },
-            onTurnCompletedActivity = { _, _ ->
+            onTurnCompletedActivity = { th, _ ->
+                recheckDeferredHistoryAfterTurn(th)
                 // Read/unread comes from Codex receipts, never from inferred local completions.
                 scope.launch {
                     if (sessionReady) try { refreshThreadsInternal() }
@@ -484,6 +515,14 @@ class CodexService(
             },
             onStructuredInputRequest = { request, respond ->
                 enqueuePendingStructuredInputRequest(request, respond)
+            },
+            onAccountUpdated = {
+                synchronized(rateLimitRefreshGuard) {
+                    if (!rateLimitRefreshGuard.awaitingReconnect) {
+                        clearAccountQuota()
+                        scope.launch(Dispatchers.IO) { refreshRateLimitsInternal() }
+                    }
+                }
             },
             onRateLimitsUpdated = { params -> handleRateLimitsUpdatedParams(params) },
             onThreadContextUsageLive = { tid, usage -> applyLiveContextWindowUsage(tid, usage) },
@@ -643,8 +682,8 @@ class CodexService(
     override suspend fun refreshContextWindowUsage(threadId: String) =
         refreshContextWindowUsageForRepository(threadId)
 
-    override suspend fun refreshUsageStatus(threadId: String?) =
-        refreshUsageStatusForRepository(threadId)
+    override suspend fun refreshUsageStatus(threadId: String?, force: Boolean) =
+        refreshUsageStatusForRepository(threadId, force)
 
     override fun shouldAutoRefreshUsageStatus(threadId: String?): Boolean =
         shouldAutoRefreshUsageStatusForRepository(threadId)
@@ -659,7 +698,14 @@ class CodexService(
                 "App Git integration is disabled (operation=$method, stage=client_policy)",
             )
         }
-        return sendRequestImpl(method, params)
+        val generation = connectionGeneration
+        val response = sendRequestImpl(method, params)
+        if (method == "account/profiles/switch" && response.result?.objectValue?.get("status")?.stringValue == "restart_scheduled") {
+            synchronized(rateLimitRefreshGuard) {
+                if (connectionGeneration == generation) clearAccountQuota(waitForReconnect = true)
+            }
+        }
+        return response
     }
 
     override suspend fun renameThread(
@@ -668,6 +714,8 @@ class CodexService(
     ) = renameThreadForRepository(threadId, name)
 
     override suspend fun deleteThreadLocally(threadId: String) = deleteThreadLocallyForRepository(threadId)
+
+    override suspend fun unarchiveThread(threadId: String) = changeThreadArchive(threadId, false)
 
     override suspend fun archiveThreadGroup(threadIds: List<String>) = archiveThreadGroupForRepository(threadIds)
 

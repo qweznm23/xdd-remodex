@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import subprocess
 import tempfile
 import threading
@@ -16,7 +17,6 @@ import traceback
 
 BASE = Path.home() / '.codex'
 PROFILES = BASE / 'auth-profiles'
-PROFILE_NUMBERS = ('1', '2', '3')
 STATE = PROFILES / 'maintenance'
 INTERVAL = 86400
 BEIJING = dt.timezone(dt.timedelta(hours=8))
@@ -57,6 +57,14 @@ def identity(auth):
     return auth['auth_mode'], auth['tokens']['account_id']
 
 
+def sync_directory(path):
+    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def atomic(path, data):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix='.auth-manager-', dir=path.parent)
@@ -67,11 +75,7 @@ def atomic(path, data):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        sync_directory(path.parent)
     except BaseException as error:
         failure = error
         raise
@@ -163,9 +167,16 @@ def state_read():
     return json.loads(p.read_text()) if p.exists() else {'profiles': {}}
 
 
+def valid_number(number):
+    return isinstance(number, str) and re.fullmatch(r'[1-9][0-9]{0,17}', number) is not None
+
+
 def registered_profiles():
-    # Slots 1 and 2 are established. Slot 3 is optional until imported.
-    return tuple(n for n in PROFILE_NUMBERS if (PROFILES / n / 'auth.json').is_file())
+    if not PROFILES.exists():
+        return ()
+    return tuple(sorted((p.name for p in PROFILES.iterdir()
+                         if valid_number(p.name) and not p.is_symlink() and p.is_dir()
+                         and not (p / 'auth.json').is_symlink() and (p / 'auth.json').is_file()), key=int))
 
 
 class RpcError(RuntimeError):
@@ -236,55 +247,8 @@ class RPC:
         self.err_reader.join(timeout=2)
 
 
-def switch(number, dry=False):
-    path = BASE / 'auth.json'
-    before, current = read(path)
-    target_path = PROFILES / number / 'auth.json'
-    data, target = read(target_path)
-    if dry:
-        print(f'Would select profile {number}; restart required={identity(current) != identity(target)}')
-        return
-    snapshots = {}
-    for n in registered_profiles():
-        saved_path = PROFILES / n / 'auth.json'
-        if identity(read(saved_path)[1]) == identity(current):
-            snapshots[n] = sync_active_snapshot(saved_path, before, current)
-    if identity(current) == identity(target):
-        print(f'Already using profile {number}; saved credential: {snapshots[number]}.')
-        return
-    if path.read_bytes() != before or target_path.read_bytes() != data:
-        raise RuntimeError('Credentials changed concurrently; switch cancelled')
-    atomic(path, data)
-    unit = f'codex-auth-restart-{time.time_ns()}'
-    previous_switch = (STATE / 'last-switch.json').read_bytes() if (STATE / 'last-switch.json').exists() else None
-    try:
-        save_json(STATE / 'last-switch.json', {'profile': number, 'time_beijing': timestamp(time.time()),
-                                             'status': 'restart_scheduled', 'unit': unit})
-        # Transient system services do not inherit the caller's proxy environment.
-        environment = ['--setenv=' + name + '=' + os.environ[name] for name in
-                       ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
-                        'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy') if name in os.environ]
-        run = subprocess.run(['systemd-run', '--unit=' + unit, '--on-active=10s',
-            '--timer-property=AccuracySec=1s', '--property=UMask=0077',
-            '--property=Type=exec', '--property=ExitType=cgroup',
-            *environment, '/usr/bin/python3', str(SCRIPT), '--home', str(BASE), 'restart', number, '--operation-id', unit], capture_output=True, text=True)
-        if run.returncode:
-            raise RuntimeError(f'Restart scheduling failed ({run.returncode}): {run.stderr}')
-    except Exception as primary:
-        try:
-            if path.read_bytes() == data:
-                atomic(path, before)
-            if previous_switch is None:
-                (STATE / 'last-switch.json').unlink(missing_ok=True)
-            else:
-                atomic(STATE / 'last-switch.json', previous_switch)
-        except Exception as cleanup:
-            primary.suppressed = getattr(primary, 'suppressed', []) + [cleanup]
-        raise
-    print(f'Selected profile {number}. Codex service restarts in 10 seconds; SSH desktop clients may reconnect.')
-
-
 def restart(number, operation_id=None, redact=lambda value: value):
+    # Compatibility for timers that were scheduled before per-operation records.
     report = {'operation': 'restart', 'profile': number, 'time_beijing': timestamp(time.time())}
     selection = json.loads((STATE / 'last-switch.json').read_text()) if (STATE / 'last-switch.json').exists() else {}
     report['operationId'] = operation_id or selection.get('unit')
@@ -332,9 +296,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--home', required=True)
     parser.add_argument('action', choices=['restart'])
-    parser.add_argument('profile', choices=PROFILE_NUMBERS)
+    parser.add_argument('profile')
     parser.add_argument('--operation-id', required=True)
     args = parser.parse_args()
+    if not valid_number(args.profile):
+        parser.error('Invalid authorization ID')
     configure(args.home)
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (STATE / 'manager.lock').open('a') as lock:
@@ -347,6 +313,8 @@ if __name__ == '__main__':
         import sys
         api = adapter.Profiles(sys.modules[__name__])
         try:
+            if args.profile not in registered_profiles():
+                raise adapter.ProfileError('INVALID_PROFILE', 'Unknown authorization')
             for number in registered_profiles():
                 api.read(PROFILES / number / 'auth.json')
             api.read(BASE / 'auth.json')

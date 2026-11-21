@@ -1,0 +1,16 @@
+<resources>
+    <string name="revert_preview_title">Preview undo</string>
+    <string name="revert_preview_ready">These changes can be undone.</string>
+    <string name="revert_preview_blocked">The changes cannot be undone.</string>
+    <string name="revert_preview_staged">Staged files: %1$s</string>
+    <string name="goal_state_active">Active</string>
+    <string name="goal_state_paused">Paused</string>
+    <string name="goal_state_done">Complete</string>
+    <string name="goal_inline">Goal · %1$s · %2$s</string>
+    <string name="mac_keep_awake">Keep Mac awake</string>
+    <string name="mac_bridge_update">Update XDD bridge</string>
+    <string name="mac_update_scheduled">Restart scheduled. Reconnect to verify the new version.</string>
+    <string name="mac_update_latest">Already on the latest published version.</string>
+    <string name="mac_update_managed">Remote updates require a versioned XDD release running as a Mac service.</string>
+    <string name="mac_update_confirm">Check the XDD release, verify the package, and restart the bridge if an update is available?</string>
+</resources>

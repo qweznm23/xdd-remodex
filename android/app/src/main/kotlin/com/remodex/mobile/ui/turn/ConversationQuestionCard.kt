@@ -1,7 +1,6 @@
 package com.remodex.mobile.ui.turn
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -66,36 +65,44 @@ internal fun ConversationQuestionDialog(threadId: String, open: Boolean, onDismi
 
 /** Old unanswered questions open only on an explicit tap; completed records remain read-only. */
 @Composable
-internal fun ConversationQuestionCard(threadId: String, request: CodexStructuredUserInputRequest) {
+internal fun ConversationQuestionCard(threadId: String, request: CodexStructuredUserInputRequest, modifier: Modifier = Modifier) {
     val requests = currentConversationQuestions(threadId)
     val active = requests.any { it.identity == request.identity && it.questions == request.questions }
     var expanded by rememberSaveable(threadId, request.identity) { mutableStateOf(false) }
     var open by rememberSaveable(threadId, request.identity) { mutableStateOf(false) }
     val label = when {
-        active -> R.string.questions_action
+        active -> R.string.questions_answer
         ConversationQuestionCodec.isSkipped(request) -> R.string.questions_skipped
         request.submitted -> R.string.questions_answered
         else -> R.string.questions_history
     }
-    Surface(onClick = { if (active || request.canReplyFromHistory) open = true else expanded = !expanded }, shape = RoundedCornerShape(14.dp),
-        color = if (active) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (active) Icon(Icons.Outlined.QuestionAnswer, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(stringResource(label), style = MaterialTheme.typography.labelSmall,
-                        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(request.questions.firstOrNull()?.question.orEmpty(), style = MaterialTheme.typography.bodyMedium,
-                        maxLines = if (active) 2 else 1, overflow = TextOverflow.Ellipsis)
-                }
-                Icon(if (expanded && !active) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight, null,
-                    Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        if (active) {
+            val next = request.questions.firstOrNull { it.id !in request.answers }
+            next?.let {
+                Text(it.question.ifBlank { it.header }, modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (expanded && !active) request.questions.forEach { question ->
-                Text(question.question, style = MaterialTheme.typography.bodyMedium)
+        }
+        TextButton(
+            onClick = { if (active || request.canReplyFromHistory) open = true else expanded = !expanded },
+            colors = ButtonDefaults.textButtonColors(
+                contentColor = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+        ) {
+            Text(stringResource(label), style = MaterialTheme.typography.labelMedium)
+            Icon(if (expanded && !active) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight, null,
+                modifier = Modifier.size(16.dp))
+        }
+        if (expanded && !active) request.questions.forEach { question ->
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(question.question.ifBlank { question.header }, style = MaterialTheme.typography.bodyMedium)
                 question.options.forEach { Text(it.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                request.answers[question.id]?.let { Text(if (question.isSecret) "••••" else it.joinToString("\n"),
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary) }
+                request.answers[question.id]?.let { answers ->
+                    Text(if (question.isSecret) "••••" else answers.joinToString("\n"),
+                        modifier = Modifier.align(Alignment.End), style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
     }
@@ -103,18 +110,19 @@ internal fun ConversationQuestionCard(threadId: String, request: CodexStructured
 }
 
 @Composable
-internal fun ConversationQuestionInbox(threadId: String, modifier: Modifier = Modifier) {
+internal fun ConversationQuestionAction(threadId: String?, fallback: @Composable () -> Unit) {
+    if (threadId == null) { fallback(); return }
     val requests = currentConversationQuestions(threadId)
     var open by rememberSaveable(threadId) { mutableStateOf(false) }
-    if (requests.isNotEmpty()) {
-        Surface(onClick = { open = true }, modifier = modifier, shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.secondaryContainer, tonalElevation = 1.dp) {
-            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Outlined.QuestionAnswer, null, Modifier.size(16.dp))
-                Text(stringResource(R.string.questions_action) + if (requests.size > 1) " · ${requests.size}" else "",
-                    style = MaterialTheme.typography.labelMedium)
-                Icon(Icons.Outlined.ChevronRight, null, Modifier.size(16.dp))
+    if (requests.isEmpty()) {
+        fallback()
+    } else {
+        val count = requests.sumOf { request -> request.questions.count { it.id !in request.answers } }
+        val label = stringResource(R.string.questions_action)
+        val description = if (count > 1) "$label · " + stringResource(R.string.questions_count, count) else label
+        IconButton(onClick = { open = true }) {
+            BadgedBox(badge = { if (count > 1) Badge { Text(count.toString()) } else Badge() }) {
+                Icon(Icons.Outlined.QuestionAnswer, description)
             }
         }
     }
@@ -123,7 +131,7 @@ internal fun ConversationQuestionInbox(threadId: String, modifier: Modifier = Mo
 
 @Composable
 internal fun QuestionReplyIndicator(onClick: () -> Unit) {
-    FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(32.dp), shape = RoundedCornerShape(10.dp)) {
+    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
         Icon(Icons.Outlined.QuestionAnswer, stringResource(R.string.questions_action), Modifier.size(16.dp))
     }
 }

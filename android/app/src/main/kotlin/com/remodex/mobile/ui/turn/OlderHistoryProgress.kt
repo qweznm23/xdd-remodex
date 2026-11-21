@@ -4,9 +4,28 @@ import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexMessageKind
 import com.remodex.mobile.core.model.JSONValue
 import com.remodex.mobile.core.model.ThreadHistoryPaginationState
+import com.remodex.mobile.core.model.hasConversationContent
 import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
+
+/** Reuse the committed older cursor, yielding between pages so live messages can stop the search. */
+internal suspend fun loadInitialConversationContent(
+    revision: Long,
+    messages: () -> List<CodexMessage>,
+    pagination: () -> ThreadHistoryPaginationState?,
+    loadPage: suspend () -> Unit,
+) {
+    val visited = mutableSetOf<JSONValue>()
+    while (messages().asReversed().none { it.hasConversationContent() }) {
+        val state = pagination() ?: return
+        if (state.initialLoadRevision != revision) throw CancellationException("Conversation refresh superseded initial history search")
+        if (!state.canLoadOlder) return
+        check(visited.add(requireNotNull(state.olderCursor))) { "Initial history repeated an older cursor after ${visited.size} pages" }
+        loadPage()
+        kotlinx.coroutines.yield()
+    }
+}
 
 /** One gesture can traverse cached/invisible pages, stopping at real older content or server EOF. */
 internal suspend fun loadOlderHistoryUntilVisibleProgress(

@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.dev
 
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,7 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
@@ -106,7 +106,7 @@ fun PairingQrScanner(modifier: Modifier = Modifier, onDecodedPayload: (String) -
             Text(stringResource(R.string.google_scan_details))
         }
     }
-    if (showDetails && diagnostic != null) AlertDialog(
+    if (showDetails && diagnostic != null) RemodexAlertDialog(
         onDismissRequest = { showDetails = false },
         title = { Text(stringResource(R.string.google_scan_details)) },
         text = { SelectionContainer { Text(diagnostic, modifier = Modifier.verticalScroll(rememberScrollState())) } },

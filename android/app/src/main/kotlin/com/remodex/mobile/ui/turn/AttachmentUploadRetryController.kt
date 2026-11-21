@@ -15,15 +15,16 @@ internal class AttachmentUploadRetryController(
 ) {
     private class Transfer(
         val load: suspend (suspend (Long, Long?) -> Unit) -> TurnComposerAttachmentState,
+        val releaseSource: () -> Unit,
         var job: Job? = null,
         var attempt: Int = 0,
         var failed: Boolean = false,
     )
     private val transfers = mutableMapOf<String, Transfer>()
 
-    fun add(id: String, load: suspend (suspend (Long, Long?) -> Unit) -> TurnComposerAttachmentState) {
+    fun add(id: String, releaseSource: () -> Unit = {}, load: suspend (suspend (Long, Long?) -> Unit) -> TurnComposerAttachmentState) {
         remove(id)
-        val transfer = Transfer(load)
+        val transfer = Transfer(load, releaseSource)
         transfers[id] = transfer
         start(id, transfer)
     }
@@ -47,6 +48,7 @@ internal class AttachmentUploadRetryController(
                 if (transfers[id] === transfer && transfer.attempt == attempt) {
                     onState(id, ready)
                     transfers.remove(id)
+                    transfer.releaseSource()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -56,7 +58,10 @@ internal class AttachmentUploadRetryController(
                     transfer.failed = canRetry
                     onFailure(id, attempt, failure)
                     onState(id, TurnComposerAttachmentState.Failed(failure.message ?: failure.javaClass.name, canRetry = canRetry))
-                    if (!canRetry) transfers.remove(id)
+                    if (!canRetry) {
+                        transfers.remove(id)
+                        transfer.releaseSource()
+                    }
                 }
             } finally {
                 if (transfer.attempt == attempt) transfer.job = null
@@ -66,7 +71,15 @@ internal class AttachmentUploadRetryController(
         job.start()
     }
 
-    fun remove(id: String) { transfers.remove(id)?.job?.cancel() }
+    fun remove(id: String) {
+        val transfer = transfers.remove(id) ?: return
+        val job = transfer.job
+        if (job == null) transfer.releaseSource()
+        else {
+            job.invokeOnCompletion { transfer.releaseSource() }
+            job.cancel()
+        }
+    }
     fun retain(ids: Set<String>) { (transfers.keys - ids).forEach(::remove) }
     fun clear() { transfers.keys.toList().forEach(::remove) }
 }

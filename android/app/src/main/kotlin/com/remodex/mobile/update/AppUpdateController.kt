@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
@@ -14,23 +15,38 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import okhttp3.OkHttpClient
 
 internal enum class UpdatePhase { IDLE, CHECKING, AVAILABLE, LATEST, CONNECTING, DOWNLOADING, CANCELLING, VERIFYING, READY, ERROR }
+internal enum class UpdateRetry { CHECK, DOWNLOAD, INSTALL }
 internal data class AppUpdateState(
     val phase: UpdatePhase = UpdatePhase.IDLE,
     val update: AppUpdateManifest? = null,
     val bytes: Long = 0,
     val total: Long = 0,
-    val reason: Int? = null,
+    val retry: UpdateRetry? = null,
     val error: String? = null,
+    val launchInstaller: Boolean = false,
+    val permissionDenied: Boolean = false,
 ) {
     val busy: Boolean get() = phase in setOf(UpdatePhase.CHECKING, UpdatePhase.CONNECTING, UpdatePhase.DOWNLOADING, UpdatePhase.CANCELLING, UpdatePhase.VERIFYING)
 }
 
-/** Downloads survive navigation inside the app. Process restart offers an explicit retry. */
+private val settingsCheckIntervalMillis = TimeUnit.MINUTES.toMillis(5)
+
+internal fun AppUpdateState.shouldCheckOnSettingsEntry(url: String, lastUrl: String?, elapsedSinceCheck: Long): Boolean {
+    if (url.isBlank() || (url == lastUrl && elapsedSinceCheck < settingsCheckIntervalMillis)) return false
+    return when (phase) {
+        UpdatePhase.IDLE, UpdatePhase.LATEST, UpdatePhase.AVAILABLE -> true
+        UpdatePhase.ERROR -> retry == UpdateRetry.CHECK
+        else -> false
+    }
+}
+
+/** Downloads survive navigation inside the app. Completed packages are reverified after process restart. */
 internal class AppUpdateController(context: Context, private val client: OkHttpClient, private val connectionSource: () -> String = { "" }) {
     private val app = context.applicationContext
     private val prefs = app.getSharedPreferences("remodex_app_updates", Context.MODE_PRIVATE)
@@ -39,14 +55,15 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(15, TimeUnit.MINUTES).retryOnConnectionFailure(false).build()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var operation: Job? = null
+    private var lastCheckUrl: String? = null
+    private var lastCheckStartedAt = 0L
     private val mutableState = MutableStateFlow(AppUpdateState())
     val state = mutableState.asStateFlow()
-    val source: String get() {
-        val saved = prefs.getString("source", null)
-        // Earlier versions persisted the build default whenever Check was tapped.
-        return if (saved != null && (prefs.getBoolean("source_custom", false) || saved != BuildConfig.APP_UPDATE_URL)) saved
-        else connectionSource()
+    val customSource: String? get() = prefs.getString("source", null)?.takeIf {
+        prefs.getBoolean("source_custom", false) || it != BuildConfig.APP_UPDATE_URL
     }
+    val source: String get() = customSource ?: connectionSource()
+    val pairedSource: String get() = connectionSource()
     fun followConnectionSource() {
         if (state.value.busy) return
         prefs.edit().remove("source").remove("source_custom").apply()
@@ -60,21 +77,52 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
 
     init {
         if (prefs.contains("download_manifest")) operation = scope.launch {
+            mutableState.value = AppUpdateState(UpdatePhase.CHECKING)
             try {
                 val update = updateJson.decodeFromString<AppUpdateManifest>(prefs.getString("download_manifest", "").orEmpty())
-                if (update.versionCode <= BuildConfig.VERSION_CODE) {
-                    clearDownload()
-                } else {
-                    clearDownload()
-                    mutableState.value = AppUpdateState(UpdatePhase.AVAILABLE, update)
+                when {
+                    update.versionCode <= BuildConfig.VERSION_CODE -> {
+                        withContext(Dispatchers.IO) { clearDownload() }
+                        mutableState.value = AppUpdateState()
+                    }
+                    prefs.contains("download_id") -> {
+                        withContext(Dispatchers.IO) { clearDownload() }
+                        mutableState.value = AppUpdateState(UpdatePhase.AVAILABLE, update)
+                    }
+                    else -> showCandidate(update)
                 }
             } catch (e: CancellationException) { throw e
-            } catch (e: Exception) { fail("restore_download", e) }
+            } catch (e: Exception) { fail("restore_download", e, if (state.value.update == null) UpdateRetry.CHECK else UpdateRetry.DOWNLOAD) }
+        }
+    }
+
+    private suspend fun showCandidate(update: AppUpdateManifest) {
+        val complete = withContext(Dispatchers.IO) {
+            val file = apkFile(update)
+            file.isFile && file.length() == update.sizeBytes
+        }
+        if (!complete) {
+            mutableState.value = AppUpdateState(UpdatePhase.AVAILABLE, update)
+            return
+        }
+        mutableState.value = AppUpdateState(UpdatePhase.VERIFYING, update)
+        withContext(Dispatchers.IO) { verifyPackage(update) }
+        mutableState.value = AppUpdateState(UpdatePhase.READY, update, update.sizeBytes, update.sizeBytes)
+    }
+
+    suspend fun checkOnSettingsEntry() {
+        // A cold start may still be restoring the previously downloaded package.
+        if (state.value.phase == UpdatePhase.CHECKING) operation?.join()
+        val url = source.trim()
+        if (state.value.shouldCheckOnSettingsEntry(url, lastCheckUrl, SystemClock.elapsedRealtime() - lastCheckStartedAt)) {
+            check(url)
         }
     }
 
     fun check(url: String, saveSource: Boolean = false) {
         if (state.value.busy) return
+        lastCheckUrl = url.trim()
+        lastCheckStartedAt = SystemClock.elapsedRealtime()
         val previous = operation
         mutableState.value = AppUpdateState(UpdatePhase.CHECKING)
         operation = scope.launch {
@@ -83,13 +131,14 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
                 updateHttpUrl(url)
                 if (saveSource) prefs.edit().putString("source", url.trim()).putBoolean("source_custom", true).apply()
                 val update = withContext(Dispatchers.IO) { fetchAppUpdate(client, url, app.packageName, Build.VERSION.SDK_INT) }
-                clearDownload()
-                mutableState.value = AppUpdateState(
-                    if (update.versionCode > BuildConfig.VERSION_CODE) UpdatePhase.AVAILABLE else UpdatePhase.LATEST,
-                    update,
-                )
+                if (update.versionCode > BuildConfig.VERSION_CODE) {
+                    showCandidate(update)
+                } else {
+                    withContext(Dispatchers.IO) { clearDownload() }
+                    mutableState.value = AppUpdateState(UpdatePhase.LATEST, update)
+                }
             } catch (e: CancellationException) { throw e
-            } catch (e: Exception) { fail("manifest", e) }
+            } catch (e: Exception) { fail("manifest", e, if (state.value.phase == UpdatePhase.VERIFYING) UpdateRetry.DOWNLOAD else UpdateRetry.CHECK) }
         }
     }
 
@@ -109,8 +158,9 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
                 downloadAppUpdate(downloadClient, update, apkFile(update)) { bytes ->
                     val now = System.nanoTime()
                     if (bytes == 0L || bytes == update.sizeBytes || now - lastProgress >= 100_000_000L) {
-                        if (mutableState.value.phase != UpdatePhase.CANCELLING) {
-                            mutableState.value = AppUpdateState(UpdatePhase.DOWNLOADING, update, bytes, update.sizeBytes)
+                        mutableState.update { current ->
+                            if (current.phase == UpdatePhase.CANCELLING) current
+                            else AppUpdateState(UpdatePhase.DOWNLOADING, update, bytes, update.sizeBytes)
                         }
                         lastProgress = now
                     }
@@ -118,7 +168,7 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
                 currentCoroutineContext().ensureActive()
                 mutableState.value = AppUpdateState(UpdatePhase.VERIFYING, update)
                 withContext(Dispatchers.IO) { verifyPackage(update) }
-                mutableState.value = AppUpdateState(UpdatePhase.READY, update, update.sizeBytes, update.sizeBytes)
+                mutableState.value = AppUpdateState(UpdatePhase.READY, update, update.sizeBytes, update.sizeBytes, launchInstaller = true)
             } catch (e: CancellationException) {
                 if (e.suppressed.isNotEmpty()) recordFailure("cancel_download", e)
                 throw e
@@ -127,7 +177,7 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
     }
 
     fun cancel() {
-        if (state.value.phase == UpdatePhase.CANCELLING) return
+        if (state.value.phase !in setOf(UpdatePhase.CONNECTING, UpdatePhase.DOWNLOADING)) return
         val previous = operation
         mutableState.value = state.value.copy(phase = UpdatePhase.CANCELLING)
         operation = scope.launch {
@@ -137,6 +187,19 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
                 mutableState.value = AppUpdateState(UpdatePhase.AVAILABLE, state.value.update)
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) { fail("cancel_download", e) }
+        }
+    }
+
+    fun requestInstaller() {
+        mutableState.update { current ->
+            if (current.phase == UpdatePhase.READY || current.retry == UpdateRetry.INSTALL)
+                current.copy(launchInstaller = true, permissionDenied = false) else current
+        }
+    }
+
+    fun finishInstallerRequest(expected: AppUpdateManifest, denied: Boolean = false) {
+        mutableState.update { current ->
+            if (current.update == expected) current.copy(launchInstaller = false, permissionDenied = denied) else current
         }
     }
 
@@ -163,19 +226,21 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
     /** Recheck the file immediately before handing it to the system installer. */
     suspend fun installIntent(): Intent? {
         val update = state.value.update ?: return null
-        if (state.value.phase != UpdatePhase.READY) return null
+        if (state.value.phase != UpdatePhase.READY && state.value.retry != UpdateRetry.INSTALL) return null
         return try {
-            val file = withContext(Dispatchers.IO) { verifyPackage(update) }
+            val file = try { withContext(Dispatchers.IO) { verifyPackage(update) } }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { fail("verify", e, UpdateRetry.DOWNLOAD); return null }
             val uri = FileProvider.getUriForFile(app, "${app.packageName}.updates", file)
             // Keep the installer outside the task whose package is about to be replaced.
             // Its completion screen must survive removal of the old Remodex activity.
             Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (e: CancellationException) { throw e
-        } catch (e: Exception) { fail("install", e); null }
+        } catch (e: Exception) { fail("install", e, UpdateRetry.INSTALL); null }
     }
 
-    fun installFailed(error: Exception) = fail("install", error)
+    fun installFailed(error: Exception) = fail("install", error, UpdateRetry.INSTALL)
 
     private fun clearDownload() {
         val id = prefs.getLong("download_id", -1)
@@ -202,10 +267,10 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
         }
     }
 
-    private fun fail(stage: String, error: Exception) {
+    private fun fail(stage: String, error: Exception, retry: UpdateRetry = UpdateRetry.DOWNLOAD) {
         recordFailure(stage, error)
         val code = (error as? AppUpdateFailure)?.code ?: "unknown"
         val actualStage = (error as? AppUpdateFailure)?.stage ?: stage
-        mutableState.value = state.value.copy(phase = UpdatePhase.ERROR, error = "$actualStage / $code: ${error.message ?: error.javaClass.name}")
+        mutableState.value = state.value.copy(phase = UpdatePhase.ERROR, retry = retry, launchInstaller = false, error = "$actualStage / $code: ${error.message ?: error.javaClass.name}")
     }
 }

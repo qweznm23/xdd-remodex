@@ -10,10 +10,11 @@ import com.remodex.mobile.core.model.JSONValue
 import com.remodex.mobile.core.persistence.RuntimeSelectionSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 
 internal suspend fun CodexService.refreshModelsInternal() {
     if (!sessionReady) throw CodexServiceError.Disconnected
-    _isLoadingModels.value = true
+    if (!_isLoadingModels.compareAndSet(false, true)) return
     try {
         val response =
             sendRequestImpl(
@@ -56,25 +57,42 @@ suspend fun CodexService.refreshModelsForRepository() =
         refreshModelsInternal()
     }
 
-suspend fun CodexService.setSelectedModelIdForRepository(modelId: String?) =
-    withContext(Dispatchers.IO) {
-        synchronized(threadRuntimeSelection) {
-            val threadId = _activeThreadId.value
-            val current = runtimeSelectionForThread(threadId)
-            threadRuntimeSelection.select(threadId, current.copy(modelId = modelId?.trim()?.takeIf { it.isNotEmpty() }))
+internal fun CodexService.applyConfirmedSettings(threadId: String, settings: Map<String, JSONValue>) {
+    synchronized(threadRuntimeSelection) {
+        val current = runtimeSelectionForThread(threadId)
+        if (!threadRuntimeSelection.confirm(threadId, current, settings)) return
+        syncActiveThreadRuntimeSelection()
+    }
+}
+
+private suspend fun CodexService.writeSetting(field: String, value: String?) {
+    val id = _activeThreadId.value
+    val connection = webSocket
+    runtimeWriteMutex.withLock {
+        if (connection !== webSocket) throw CodexServiceError.Disconnected
+        if (supportsSettingsSync && id != null) {
+            val params = mapOf("threadId" to JSONValue.Str(id), field to (value?.let(JSONValue::Str) ?: JSONValue.Null))
+            val result = sendRequestImpl("thread/settings/update", JSONValue.Obj(params))
+            val settings = result.result?.objectValue?.get("runtimeSettings")?.objectValue
+                ?: throw CodexServiceError.InvalidResponse("thread/settings/update missing runtimeSettings")
+            if (connection === webSocket) applyConfirmedSettings(id, settings)
+        } else synchronized(threadRuntimeSelection) {
+            val current = runtimeSelectionForThread(id)
+            when (field) {
+                "model" -> threadRuntimeSelection.select(id, current.copy(modelId = value))
+                "effort" -> threadRuntimeSelection.select(id, current.copy(reasoningEffort = value))
+                "serviceTier" -> _selectedServiceTier.value = CodexServiceTier.entries.find { it.name == value }
+            }
             normalizeRuntimeSelectionsAfterModelsUpdate()
         }
     }
+}
+
+suspend fun CodexService.setSelectedModelIdForRepository(modelId: String?) =
+    writeSetting("model", _availableModels.value.firstOrNull { it.id == modelId }?.model ?: modelId)
 
 suspend fun CodexService.setSelectedReasoningEffortForRepository(reasoningEffort: String?) =
-    withContext(Dispatchers.IO) {
-        synchronized(threadRuntimeSelection) {
-            val threadId = _activeThreadId.value
-            val current = runtimeSelectionForThread(threadId)
-            threadRuntimeSelection.select(threadId, current.copy(reasoningEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }))
-            normalizeRuntimeSelectionsAfterModelsUpdate()
-        }
-    }
+    writeSetting("effort", reasoningEffort)
 
 suspend fun CodexService.setSelectedAccessModeForRepository(accessMode: CodexAccessMode) =
     withContext(Dispatchers.IO) {
@@ -83,10 +101,7 @@ suspend fun CodexService.setSelectedAccessModeForRepository(accessMode: CodexAcc
     }
 
 suspend fun CodexService.setSelectedServiceTierForRepository(serviceTier: CodexServiceTier?) =
-    withContext(Dispatchers.IO) {
-        _selectedServiceTier.value = serviceTier
-        persistRuntimeSelection()
-    }
+    writeSetting("serviceTier", serviceTier?.name)
 
 suspend fun CodexService.setThreadCollaborationModeForRepository(
     threadId: String,
@@ -117,6 +132,9 @@ internal fun CodexService.selectedReasoningEffortForThread(threadId: String): St
 
 internal fun CodexService.syncActiveThreadRuntimeSelection() = synchronized(threadRuntimeSelection) {
     val selection = runtimeSelectionForThread(_activeThreadId.value)
+    if (supportsSettingsSync) {
+        _selectedServiceTier.value = if (threadRuntimeSelection.fastTier(_activeThreadId.value)) CodexServiceTier.fast else null
+    }
     _selectedModelId.value = selection.modelId
     _selectedReasoningEffort.value = selection.reasoningEffort
 }

@@ -517,7 +517,14 @@ function isIdentifierStart(character) {
   return typeof character === "string" && /[A-Za-z_$]/.test(character);
 }
 
+// Preserve the call id and question indices used by desktop reply envelopes.
+function asyncQuestionItem(toolName, args, id) {
+  if (!id || toolName.split(".").at(-1) !== "request_user_input_async" || !Array.isArray(args?.questions)) return null;
+  return { id, type: "agentMessage", text: "", phase: "commentary", questions: args.questions };
+}
+
 module.exports = {
+  asyncQuestionItem,
   expandExecWrapperToolCall,
   isOrchestrationWaitCall,
 };

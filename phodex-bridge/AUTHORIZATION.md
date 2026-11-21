@@ -1,28 +1,40 @@
 # Local authorization management
 
 The bridge owns authorization maintenance through `src/auth-profiles.js` and
-`src/auth-profiles.py`. Storage, locking, credential version comparison and delayed
-switch restarts live in `src/auth_store.py`. No separately installed auth manager
-is required. The connected local runtime determines the Codex home; phone RPCs
-cannot select another home.
+`src/auth-profiles.py`. `src/auth_store.py` handles credential storage and version
+comparison. `src/auth_restarts.py` schedules, verifies and records local restarts.
+The connected local runtime determines the Codex home used by phone RPCs.
 
 ## Storage and interfaces
 
-Existing files are retained: `auth.json`, `auth-profiles/{1,2,3}/auth.json`, and
+Existing files are retained: `auth.json`, `auth-profiles/<positive numeric ID>/auth.json`, and
 `auth-profiles/maintenance/`. All mutations take the shared `manager.lock`;
 credentials use private temporary files, atomic rename and file/directory fsync.
 A conflicting operation returns `MANAGER_BUSY`. Revision checks reject stale
 phone selections with `PROFILE_CHANGED`.
 
-Existing `account/profiles/list`, `query`, `refreshToken`, and `switch` calls retain
-their response contracts. Additional calls use the same paired bridge routing:
+`account/profiles/list` also returns `restartHistory` and `supportsManualRestart`.
+`switch` and `restart` return a queued or failed operation record with an operation
+ID. Account RPCs use the same paired bridge routing:
 
 | Method suffix | Parameters | Result |
 | --- | --- | --- |
 | `status` | none | Registered profiles, active identity match, maintenance metadata |
 | `check` | `profile`, `revision` | File structure and token timestamp metadata |
 | `import` | `profile`, `revision`, `sourcePath` | Import/replace a numbered slot from a completed protected workspace upload |
+| `rename` | `profile`, `revision`, `displayName`, `expectedName` | Set or clear the library label with a stale-edit check |
+| `remove` | `profile`, `revision` | Remove an inactive entry from the list and scheduler; retain a private recovery copy |
 | `export` | `profile`, `revision` | Private snapshot path for the existing protected workspace file transfer |
+| `restart` | none | A queued or rejected manual restart with its own operation ID |
+
+The library can start empty. Status returns the available `nextProfileId`; import
+with that ID, revision `missing`, and an optional label (`displayName`, possibly
+empty) creates the file and label together. A concurrent creation requires a
+fresh status read. The host also discovers existing numeric directories, including
+the original 1, 2 and 3. Removed IDs are reserved under `maintenance/removed/`.
+Labels live in `label.json` alongside the credential. File metadata includes
+the account name and email when available in local token claims. An absent claim
+is returned as null; displaying these fields does not perform a token refresh.
 
 Import uses revision `missing` only for an absent slot; replacement saves the
 prior file privately. `check`, `export`, and `refreshToken` also accept `current`.
@@ -36,18 +48,56 @@ commits keep the newly issued file in the private recovery directory.
 Switching synchronizes matching current-account library entries only when the
 current credential version is strictly newer. Equal or unknown order preserves
 the library file. The comparison uses `last_refresh`, falling back to access-token
-`iat`. The same rule applies during daily maintenance. Switch acknowledgements and
-restart results have an operation ID so an older callback cannot replace the
-newer operation's state. Failure to schedule restart rolls back the selection.
-The existing runtime-account verification still determines whether the phone can
-report the switch ready.
+`iat`. The same rule applies during daily maintenance.
+
+## Codex restart and recovery
+
+For a Linux systemd installation, the Android authorization page offers
+**Restart Codex** and **Restart history**.
+Manual restart uses the current authorization. Account switching and manual restart
+both verify the configured local Unix socket and the reported daemon management
+backend before scheduling a worker. The worker checks the same socket and owner
+again under `manager.lock`, then checks that the selected credentials still match
+the queued revisions. Switching writes the target authorization only at this
+point. Restart success requires a passive account check against the connected
+runtime. A running process or a changed file alone is insufficient evidence.
+
+Each operation updates its own private record in `auth-profiles/maintenance/restarts/`.
+It includes the operation ID, action, target profile, timestamps, attempt,
+result, stage, sanitized original diagnostics and recovery outcome. The host
+retains 30 new records and the phone displays up to 10 recent records, including
+the last legacy result when available. A confirmed runtime can show the latest
+legacy operation as recovered while keeping its original failure. A new manual
+restart carries a link to the immediately preceding failed operation when one exists.
+
+The worker can restore the original authorization when the old runtime account
+is confirmed and the exact bytes installed by this operation are still present.
+When the outcome is uncertain, the worker retains the previous authorization in
+the private `auth-profiles/maintenance/restart-recovery/<operationId>/` directory
+for operator recovery. History contains diagnostic evidence and recovery status.
+After a timeout or an interrupted worker, check history before retrying. A manual
+restart uses the authorization then on disk and creates a separate record. For
+a running instance that is unmanaged, have the host operator restore the intended
+Codex service manager before retrying.
+
+When the phone cannot reach the bridge, run these commands on the Codex host
+from the server checkout or release directory. Supply `--home` if the runtime uses
+a different Codex home. `--start-if-stopped` allows the daemon manager to start
+Codex when the local control socket is confirmed offline.
+
+```sh
+/usr/bin/python3 phodex-bridge/src/auth-cli.py restart-history
+/usr/bin/python3 phodex-bridge/src/auth-cli.py restart
+/usr/bin/python3 phodex-bridge/src/auth-cli.py restart --start-if-stopped
+```
 
 ## Daily maintenance
 
 The Android **Settings → Account and authorization** page displays scheduler
 checks, daily maintenance, current-account synchronization/fallback status and
-sanitized failure details. Import/replace selects a numbered slot and a system
-document; active slots cannot be selected there. File menus provide timestamp
+sanitized failure details. Add authorization opens a display-name field and the
+system document picker. Existing entries can be renamed; inactive ones can also
+be replaced or removed through their file menus. File menus provide timestamp
 checks and export through the existing protected file transport to a user-chosen
 document destination. Imported files are limited to 64 KiB before upload.
 Reading this page and refreshing the list never force token rotation. Existing

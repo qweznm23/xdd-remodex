@@ -24,6 +24,18 @@ class WorkspaceFileTransferServiceTest {
     )
     private fun response(row: Map<String, JSONValue>) = RPCMessage.success(JSONValue.NumLong(1), JSONValue.Obj(row))
 
+    @Test fun imagePreviewUsesRpcWithoutBinaryRouteAndKeepsTheOriginalPath() = runTest {
+        val path = "/computer/remodex_uploads/attachment/screen #1.png "
+        val bytes = byteArrayOf(1, 2, 3)
+        val service = WorkspaceFileTransferService(MinimalSendRepository { method, params ->
+            assertEquals("workspace/readImage", method)
+            assertEquals(path, params?.objectValue?.get("path")?.stringValue)
+            response(mapOf("path" to JSONValue.Str(path), "mimeType" to JSONValue.Str("image/png"),
+                "dataBase64" to JSONValue.Str(Base64.getEncoder().encodeToString(bytes))))
+        })
+        assertContentEquals(bytes, service.imagePreview(path, "/computer", 512))
+    }
+
     @Test fun copiesChunksWithoutTextDecodingAndReportsProgress() = runTest {
         val offsets = mutableListOf<Long>()
         val progress = mutableListOf<Long>()

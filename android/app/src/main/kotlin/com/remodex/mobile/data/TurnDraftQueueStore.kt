@@ -70,10 +70,7 @@ internal class TurnDraftQueueStore {
         val tid = threadId.trim()
         if (tid.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
         val trimmed = text.trim()
-        val readyAttachments =
-            attachments.filter { attachment ->
-                !attachment.payloadDataURL.isNullOrBlank()
-            }
+        val readyAttachments = attachments.filter(CodexImageAttachment::isTurnInput)
         if (trimmed.isEmpty() && readyAttachments.isEmpty()) {
             throw CodexServiceError.InvalidInput("Message is empty")
         }

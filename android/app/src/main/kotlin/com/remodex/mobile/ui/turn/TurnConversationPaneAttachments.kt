@@ -1,9 +1,7 @@
 package com.remodex.mobile.ui.turn
 
-import android.graphics.Bitmap
 import com.remodex.mobile.core.model.CodexFileAttachment
 import com.remodex.mobile.core.model.CodexImageAttachment
-import java.io.ByteArrayOutputStream
 
 internal fun List<TurnComposerAttachment>.withLoadingAttachment(attachmentId: String): List<TurnComposerAttachment> =
     this + TurnComposerAttachment(attachmentId, TurnComposerAttachmentState.Loading)
@@ -103,13 +101,4 @@ internal fun formatBytes(bytes: Int): String {
     if (kb < 1024.0) return String.format("%.1fKB", kb)
     val mb = kb / 1024.0
     return String.format("%.1fMB", mb)
-}
-
-internal fun Bitmap.toJpegByteArray(quality: Int = 80): ByteArray? {
-    val out = ByteArrayOutputStream()
-    return if (compress(Bitmap.CompressFormat.JPEG, quality, out)) {
-        out.toByteArray()
-    } else {
-        null
-    }
 }

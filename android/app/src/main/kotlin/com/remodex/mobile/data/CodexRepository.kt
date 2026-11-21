@@ -33,9 +33,14 @@ import kotlinx.coroutines.flow.emptyFlow
  * Facade for bridge WebSocket, secure transport, and JSON-RPC.
  */
 data class ComposerPrediction(val sourceTurnId: String, val text: String, val collapsedByTyping: Boolean = false)
+private val emptyFollowUps = kotlinx.coroutines.flow.MutableStateFlow<Map<String, List<ThreadFollowUp>>>(emptyMap())
 private val emptyPredictions = kotlinx.coroutines.flow.MutableStateFlow<Map<String, ComposerPrediction>>(emptyMap())
 
 interface CodexRepository {
+    val threadFollowUps: StateFlow<Map<String, List<ThreadFollowUp>>> get() = emptyFollowUps
+    suspend fun performFollowUp(threadId: String, row: ThreadFollowUp): Unit = throw UnsupportedOperationException()
+    val conversationEvents: kotlinx.coroutines.flow.Flow<Pair<String, Map<String, JSONValue>>>
+        get() = kotlinx.coroutines.flow.emptyFlow()
     val composerPredictions: StateFlow<Map<String, ComposerPrediction>> get() = emptyPredictions
     fun dismissPredictionForTyping(threadId: String) = Unit
     fun dismissComposerPrediction(threadId: String, turnId: String) = Unit
@@ -184,7 +189,7 @@ interface CodexRepository {
     suspend fun refreshContextWindowUsage(threadId: String)
 
     /** Refreshes the combined usage status for the current thread: context window + account rate limits. */
-    suspend fun refreshUsageStatus(threadId: String?) {
+    suspend fun refreshUsageStatus(threadId: String?, force: Boolean = false) {
         val tid = threadId?.trim().orEmpty()
         if (tid.isNotEmpty()) {
             refreshContextWindowUsage(tid)
@@ -258,6 +263,8 @@ interface CodexRepository {
     /** Removes a chat from Android's local list without mutating the paired desktop runtime. */
     suspend fun deleteThreadLocally(threadId: String): Unit =
         throw UnsupportedOperationException("deleteThreadLocally is not implemented by this repository")
+
+    suspend fun unarchiveThread(threadId: String): Unit = throw UnsupportedOperationException("thread/unarchive")
 
     /** Archives every root thread in a sidebar project group so the folder disappears from the live list. */
     suspend fun archiveThreadGroup(threadIds: List<String>): List<String> =

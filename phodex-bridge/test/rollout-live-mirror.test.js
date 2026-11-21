@@ -16,6 +16,34 @@ const {
   isDesktopRolloutOrigin,
 } = require("../src/rollout-live-mirror");
 
+test("desktop live question reaches the timeline with the same call id and choices as history", async (t) => {
+  const threadId = "thread-live-question";
+  const turnId = "turn-question";
+  const { homeDir, rolloutPath } = createTemporaryRolloutHome({
+    threadId, originator: "Codex Desktop", source: "vscode", lines: [taskStarted(turnId)],
+  });
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = homeDir;
+  const outbound = [];
+  const controller = createRolloutLiveMirrorController({
+    sendApplicationResponse: line => outbound.push(JSON.parse(line)), pollIntervalMs: 5, idleTimeoutMs: 500,
+  });
+  t.after(() => { controller.stopAll(); restoreCodexHome(previous); fs.rmSync(homeDir, { recursive: true, force: true }); });
+  controller.observeInbound(JSON.stringify({ method: "thread/resume", params: { threadId } }));
+  await wait(30);
+  const questions = [{ title: "Which device?", options: ["Phone", "Desktop"] }];
+  appendRolloutLines(rolloutPath, [
+    functionCall("call-question", "functions.request_user_input_async", { questions }),
+    functionCallOutput("call-question", "{\"accepted\":true}"),
+  ]);
+  for (let i = 0; i < 40 && !outbound.some(row => row.method === "item/completed"); i++) await wait(5);
+  const items = outbound.filter(row => row.method === "item/completed");
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].params.item, { id: "call-question", type: "agentMessage", text: "", phase: "commentary", questions });
+  assert.equal(items[0].params.turnId, turnId);
+  assert.equal(items[0].params.threadId, threadId);
+});
+
 test("desktop-origin active runs replay thinking and exec command activity on resume", async (t) => {
   const { homeDir, rolloutPath } = createTemporaryRolloutHome({
     threadId: "thread-desktop",
@@ -1081,18 +1109,23 @@ test("desktop-origin mirror dedupes cumulative reasoning summaries across rollou
       "Analyzing notify hook JSON output format",
       "Planning parser fix",
     ]),
+    JSON.stringify({ type: "response_item", payload: {
+      type: "reasoning", id: "r4",
+      summary: [{ type: "summary_text", text: "Public paragraph." }, { type: "other", text: "excluded" }],
+      content: "excluded", text: "excluded",
+    } }),
+    JSON.stringify({ type: "response_item", payload: { type: "reasoning", text: "excluded" } }),
   ]);
   await wait(30);
 
-  const deltas = outbound
-    .filter((message) => message.method === "item/reasoning/textDelta")
-    .map((message) => message.params.delta);
-  assert.deepEqual(deltas, [
-    "**Testing notify command behavior**\n\n<!-- -->",
-    "\n\n**Analyzing notify hook JSON output format**\n\n<!-- -->",
-    "\n\n**Planning parser fix**\n\n<!-- -->",
+  const parts = outbound.filter((message) => message.method === "item/reasoning/summaryTextDelta");
+  assert.deepEqual(parts.map(({ params }) => [params.summaryIndex, params.delta]), [
+    [0, "**Testing notify command behavior**\n\n<!-- -->"],
+    [1, "**Analyzing notify hook JSON output format**\n\n<!-- -->"],
+    [2, "**Planning parser fix**\n\n<!-- -->"],
+    [3, "Public paragraph."],
   ]);
-  assert.equal(deltas.join("").includes("-->**"), false);
+  assert.equal(JSON.stringify(outbound).includes("excluded"), false);
 });
 
 test("desktop-origin sibling terminal does not hijack a synthetic active turn", async (t) => {
@@ -3034,3 +3067,31 @@ function restoreCodexHome(previousCodexHome) {
   }
   process.env.CODEX_HOME = previousCodexHome;
 }
+
+test("rollout user response owns its explicit turn and a canonical-only user completion is visible", async (t) => {
+  const threadId = "thread-owned-steer";
+  const {homeDir, rolloutPath} = createTemporaryRolloutHome({
+    threadId, originator: "Codex Desktop", source: "desktop", lines: [taskStarted("active")],
+  });
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = homeDir;
+  t.after(() => { restoreCodexHome(previousHome); fs.rmSync(homeDir, {recursive: true, force: true}); });
+  const outbound = [];
+  const controller = createRolloutLiveMirrorController({
+    sendApplicationResponse: value => outbound.push(JSON.parse(value)), pollIntervalMs: 5, idleTimeoutMs: 200,
+  });
+  t.after(() => controller.stopAll());
+  controller.observeInbound(JSON.stringify({method: "thread/resume", params: {threadId}}));
+  await wait(20);
+  const raw = JSON.parse(responseUserMessage("earlier turn", "raw"));
+  raw.payload.internal_chat_message_metadata_passthrough = {turn_id: "sibling"};
+  appendRolloutLines(rolloutPath, [JSON.stringify(raw), JSON.stringify({
+    type: "event_msg", payload: {type: "item_completed", turn_id: "active",
+      item: {type: "UserMessage", id: "canonical", content: [{type: "text", text: "steer"}]}},
+  })]);
+  await wait(30);
+  assert.equal(outbound.find(n => n.method === "codex/event/user_message" && n.params.id === "raw")?.params.turnId, "sibling");
+  const event = outbound.find(n => n.method === "item/completed" && n.params.item.id === "canonical");
+  assert.equal(event?.params.turnId, "active");
+  assert.equal(event.params.item.content[0].text, "steer");
+});

@@ -1,0 +1,9 @@
+<resources>
+    <string name="font_interface">Interface font</string>
+    <string name="font_reply">Assistant reply font</string>
+    <string name="font_builtin">Built-in</string>
+    <string name="font_import">Import font</string>
+    <string name="font_reset">Reset</string>
+    <string name="font_working">Loading…</string>
+    <string name="font_problem">Font: %1$s</string>
+</resources>

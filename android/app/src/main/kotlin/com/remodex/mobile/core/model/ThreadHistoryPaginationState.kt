@@ -11,6 +11,7 @@ data class ThreadHistoryPaginationState(
     val olderPageAnchorTurnId: String? = null,
     val usesItemPagination: Boolean = false,
     val olderPageAnchorMessageId: String? = null,
+    val waitingForFirstMessage: Boolean = false,
     val lastPageItemKeys: Set<Pair<String, String>> = emptySet(),
 ) {
     val canLoadOlder: Boolean

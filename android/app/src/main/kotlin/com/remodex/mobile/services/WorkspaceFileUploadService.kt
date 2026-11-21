@@ -1,8 +1,10 @@
 package com.remodex.mobile.services
 
+import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.JSONValue
 import com.remodex.mobile.core.model.RPCObject
 import com.remodex.mobile.data.CodexRepository
+import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Base64
@@ -40,7 +42,11 @@ internal class WorkspaceFileUploadService(private val repository: CodexRepositor
             var offset = 0L
             while (true) {
                 currentCoroutineContext().ensureActive()
-                val count = input.read(buffer)
+                val count = try {
+                    input.read(buffer)
+                } catch (failure: IOException) {
+                    throw FileTransferFailure("upload_read", "source_read_failed", failure.message ?: "Could not read attachment", failure)
+                }
                 if (count < 0) break
                 if (count == 0) throw FileTransferFailure("upload_read", "read_stalled", "File input made no progress")
                 if (offset + count > limit || (size != null && offset + count > size)) {
@@ -88,9 +94,17 @@ internal class WorkspaceFileUploadService(private val repository: CodexRepositor
     }
 
     private suspend fun request(method: String, params: RPCObject, timeout: Long = 30_000): RPCObject {
-        val outcome = withTimeoutOrNull(timeout) { Result.success(repository.sendRequest(method, JSONValue.Obj(params))) }
-            ?: throw FileTransferFailure(method, "rpc_timeout", "Upload request timed out stage=$method timeoutMs=$timeout")
-        return outcome.getOrThrow().result?.objectValue
+        val response = try {
+            val outcome = withTimeoutOrNull(timeout) { repository.sendRequest(method, JSONValue.Obj(params)) }
+                ?: throw FileTransferFailure(method, "rpc_timeout", "Upload request timed out stage=$method timeoutMs=$timeout")
+            outcome.error?.let { throw CodexServiceError.RpcFailure(it) }
+            outcome
+        } catch (failure: CodexServiceError.RpcFailure) {
+            val rpc = failure.rpcError
+            val code = rpc.data?.objectValue?.get("errorCode")?.stringValue ?: "rpc_${rpc.code}"
+            throw FileTransferFailure(method, code, rpc.message, failure)
+        }
+        return response.result?.objectValue
             ?: throw FileTransferFailure(method, "invalid_response", "Invalid upload response stage=$method")
     }
 

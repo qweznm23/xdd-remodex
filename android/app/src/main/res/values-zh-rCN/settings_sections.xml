@@ -1,0 +1,7 @@
+<resources>
+    <string name="settings_installed_version">已安装版本</string>
+    <string name="settings_display">显示</string>
+    <string name="settings_language_and_fonts">语言与字体</string>
+    <string name="settings_address_default">使用配对地址</string>
+    <string name="settings_checking_relay">正在检查中继状态…</string>
+</resources>

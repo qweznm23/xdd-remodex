@@ -1,18 +1,23 @@
 package com.remodex.mobile.ui.draft
 
+import com.remodex.mobile.ui.theme.RemodexDropdownMenu
+import com.remodex.mobile.ui.theme.RemodexPageHeader
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.remodex.mobile.core.config.FeatureFlags
+import com.remodex.mobile.ui.theme.conversationColors
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -21,7 +26,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,7 +37,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remodex.mobile.R
@@ -48,9 +51,11 @@ import com.remodex.mobile.services.ProjectFolderService
 import com.remodex.mobile.services.SubscriptionService
 import com.remodex.mobile.ui.agent.truncatePathMiddle
 import com.remodex.mobile.ui.sidebar.SidebarProjectPickerSheet
-import com.remodex.mobile.ui.theme.remodexScreenTopAppBarColors
 import com.remodex.mobile.ui.turn.TURN_COMPOSER_RUNTIME_AUTO_ID
 import com.remodex.mobile.ui.turn.TurnComposerAttachment
+import com.remodex.mobile.ui.turn.TurnComposerAttachmentState
+import com.remodex.mobile.ui.turn.appendFileAttachmentsToDraft
+import com.remodex.mobile.ui.turn.rememberComposerAttachmentActions
 import com.remodex.mobile.ui.turn.TurnComposerBar
 import com.remodex.mobile.ui.turn.TurnComposerEvent
 import com.remodex.mobile.ui.turn.TurnComposerModel
@@ -67,9 +72,26 @@ fun NewChatDraftScreen(
     repository: CodexRepository,
     subscriptionService: SubscriptionService,
     onNavigateBack: () -> Unit,
-    onThreadStarted: () -> Unit,
+    onThreadStarted: (String, Boolean) -> Unit,
     onOpenTerminal: (String?) -> Unit = {},
     modifier: Modifier = Modifier,
+) {
+    val device by repository.currentTrustedMacDeviceId.collectAsStateWithLifecycle()
+    androidx.compose.runtime.key(route.id, device) {
+        NewChatDraftContent(route, repository, subscriptionService, onNavigateBack, onThreadStarted, onOpenTerminal, modifier)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewChatDraftContent(
+    route: NewChatDraftRoute,
+    repository: CodexRepository,
+    subscriptionService: SubscriptionService,
+    onNavigateBack: () -> Unit,
+    onThreadStarted: (String, Boolean) -> Unit,
+    onOpenTerminal: (String?) -> Unit,
+    modifier: Modifier,
 ) {
     BackHandler(onBack = onNavigateBack)
     val scope = rememberCoroutineScope()
@@ -82,14 +104,21 @@ fun NewChatDraftScreen(
     var selectedModelId by remember(route.id) { mutableStateOf(repository.selectedModelId.value) }
     var selectedReasoningEffort by remember(route.id) { mutableStateOf(repository.selectedReasoningEffort.value) }
     val selectedAccessMode by repository.selectedAccessMode.collectAsStateWithLifecycle()
-    val selectedServiceTier by repository.selectedServiceTier.collectAsStateWithLifecycle()
+    var selectedServiceTier by remember { mutableStateOf(repository.selectedServiceTier.value) }
+    var choseServiceTier by remember { mutableStateOf(false) }
     val projectFolderService = remember(repository) { ProjectFolderService(repository) }
 
     var draft by remember(route.id) { mutableStateOf("") }
-    var attachments by remember(route.id) { mutableStateOf<List<TurnComposerAttachment>>(emptyList()) }
+    val attachmentState = remember { mutableStateOf<List<TurnComposerAttachment>>(emptyList()) }
+    val attachments by attachmentState
+    val images = remember(attachments) { attachments.mapNotNull { (it.state as? TurnComposerAttachmentState.ReadyImage)?.attachment } }
+    val files = remember(attachments) { attachments.mapNotNull { (it.state as? TurnComposerAttachmentState.ReadyFile)?.attachment } }
+    val binarySummary = stringResource(R.string.turn_attachment_file_binary_summary)
+    var createdThreadId by remember { mutableStateOf<String?>(null) }
     var isPlanModeEnabled by remember(route.id) { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
+    val attachmentActions = rememberComposerAttachmentActions(repository, attachmentState, onError = { sendError = it })
     var gitStatusMessage by remember { mutableStateOf<String?>(null) }
     var isLoadingGitStatus by remember { mutableStateOf(false) }
     var selectedProjectPath by remember(route.id) {
@@ -175,8 +204,8 @@ fun NewChatDraftScreen(
                 TurnComposerEvent.SetEnabled(ready),
                 TurnComposerEvent.SetSending(sending),
                 TurnComposerEvent.SetDraftText(draft),
-                TurnComposerEvent.SetReadyAttachmentCount(0),
-                TurnComposerEvent.SetHasBlockingAttachments(false),
+                TurnComposerEvent.SetReadyAttachmentCount(images.size + files.size),
+                TurnComposerEvent.SetHasBlockingAttachments(images.size + files.size != attachments.size),
                 TurnComposerEvent.SetVoicePhase(TurnVoicePhase.Idle),
                 TurnComposerEvent.SetThreadRunning(false),
                 TurnComposerEvent.SetTranscribing(false),
@@ -185,6 +214,7 @@ fun NewChatDraftScreen(
             }
         }
 
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     fun sendDraft() {
         if (!composerModel.derive().canSend || sending) return
         if (subscriptionService.isConfigured && !subscriptionService.hasFreeSendAccess) {
@@ -192,28 +222,28 @@ fun NewChatDraftScreen(
             return
         }
         val text = draft.trim()
-        if (text.isEmpty()) return
+        val wireText = appendFileAttachmentsToDraft(text, files, binarySummary)
+        if (wireText.isEmpty() && images.isEmpty()) return
         sending = true
         sendError = null
         scope.launch {
             runCatching {
-                val requestedCwd =
-                    selectedProjectPath?.trim()?.takeIf { it.isNotEmpty() }
-                        ?: if (route.source.isFromGeneralChat) {
-                            projectFolderService.createRootlessChatRoot(text)
-                        } else {
-                            null
-                        }
-                val thread =
+                val threadId = createdThreadId ?: run {
+                    val requestedCwd = selectedProjectPath ?: if (route.source.isFromGeneralChat) {
+                        projectFolderService.createRootlessChatRoot(text)
+                    } else null
                     repository.startThread(
                         model = runtimeControls.model.selected.id.takeUnless { it == TURN_COMPOSER_RUNTIME_AUTO_ID },
                         cwd = requestedCwd,
-                    )
-                repository.setActiveThreadId(thread.id)
+                        serviceTier = selectedServiceTier?.name ?: "default".takeIf { choseServiceTier },
+                    ).id.also { createdThreadId = it }
+                }
+                repository.setActiveThreadId(threadId)
                 repository.setSelectedReasoningEffort(selectedReasoningEffort)
                 repository.startTurn(
-                    threadId = thread.id,
-                    text = text,
+                    threadId = threadId,
+                    text = wireText,
+                    attachments = images,
                     collaborationMode =
                         if (isPlanModeEnabled) {
                             CodexCollaborationModeKind.plan
@@ -221,53 +251,33 @@ fun NewChatDraftScreen(
                             null
                         },
                 )
-                repository.setActiveThreadId(thread.id)
                 if (subscriptionService.isConfigured) {
                     subscriptionService.recordFreeSendAttempt()
                 }
-                onThreadStarted()
+                onThreadStarted(threadId, keyboardVisible)
             }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 sendError = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
                 sending = false
             }
         }
     }
 
+    val reading = MaterialTheme.colorScheme.conversationColors().reading
     Scaffold(
         modifier = modifier,
+        containerColor = reading,
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(stringResource(R.string.new_chat_draft_title))
-                        pathSubtitle?.let { subtitle ->
-                            Text(
-                                text = subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                },
-                colors = remodexScreenTopAppBarColors(),
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
-                    }
-                },
+            RemodexPageHeader(
+                title = stringResource(R.string.new_chat_draft_title),
+                onBack = onNavigateBack,
+                subtitle = pathSubtitle,
                 actions = {
-                    if (!route.source.isFromGeneralChat && hasSelectedProject) {
-                        TextButton(onClick = { showProjectPicker = true }) {
-                            Text(stringResource(R.string.new_chat_draft_change_project))
-                        }
-                    }
                     Box {
                         IconButton(onClick = { showThreadMenu = true }) {
-                            Icon(Icons.Outlined.MoreVert, contentDescription = null)
+                            Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.sidebar_more_menu_cd))
                         }
-                        DropdownMenu(
+                        RemodexDropdownMenu(
                             expanded = showThreadMenu,
                             onDismissRequest = { showThreadMenu = false },
                         ) {
@@ -314,8 +324,7 @@ fun NewChatDraftScreen(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .navigationBarsPadding(),
+                    .padding(innerPadding),
         ) {
             Box(
                 modifier =
@@ -323,24 +332,30 @@ fun NewChatDraftScreen(
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.CenterStart,
             ) {
                 Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.Start,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
                         text = stringResource(R.string.new_chat_draft_prompt),
-                        style = MaterialTheme.typography.titleMedium,
-                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.headlineSmall,
+                        textAlign = TextAlign.Start,
                     )
                     if (route.source.isFromGeneralChat && !hasSelectedProject) {
                         Text(
                             text = stringResource(R.string.new_chat_draft_quick_chat_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
+                            textAlign = TextAlign.Start,
                         )
+                    }
+                    if (!route.source.isFromGeneralChat && hasSelectedProject && createdThreadId == null && !sending) {
+                        TextButton(onClick = { showProjectPicker = true }) {
+                            Text(stringResource(R.string.new_chat_draft_change_project))
+                        }
                     }
                     sendError?.let { err ->
                         Text(
@@ -367,10 +382,17 @@ fun NewChatDraftScreen(
                 isPlanModeEnabled = isPlanModeEnabled,
                 runtimeControls = runtimeControls,
                 onDraftChange = { draft = it },
-                onPickImages = {},
-                onPickFiles = {},
-                onTakePhoto = {},
+                onPickImages = attachmentActions.pickImages,
+                onPickFiles = attachmentActions.pickFiles,
+                onTakePhoto = attachmentActions.takePhoto,
                 onSetPlanModeEnabled = { isPlanModeEnabled = it },
+                onOpenModelPicker = {
+                    if (ready && availableModels.isEmpty() && !isLoadingModels) scope.launch {
+                        try { repository.refreshModels() }
+                        catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                        catch (failure: Exception) { sendError = failure.localizedMessage }
+                    }
+                },
                 onSelectModel = { option ->
                     selectedModelId = option.id
                     selectedReasoningEffort = null
@@ -385,13 +407,11 @@ fun NewChatDraftScreen(
                     }
                 },
                 onSelectServiceTier = { option ->
-                    scope.launch {
-                        repository.setSelectedServiceTier(
-                            CodexServiceTier.entries.firstOrNull { it.name == option.id },
-                        )
-                    }
+                    selectedServiceTier = CodexServiceTier.entries.firstOrNull { it.name == option.id }
+                    choseServiceTier = true
                 },
-                onRemoveAttachment = { id -> attachments = attachments.filterNot { it.id == id } },
+                onRemoveAttachment = attachmentActions.remove,
+                onRetryAttachment = attachmentActions.retry,
                 onSend = ::sendDraft,
                 composerEnvironment = {
                     if (hasSelectedProject) {
@@ -403,7 +423,7 @@ fun NewChatDraftScreen(
                         )
                     }
                 },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
             )
         }
     }

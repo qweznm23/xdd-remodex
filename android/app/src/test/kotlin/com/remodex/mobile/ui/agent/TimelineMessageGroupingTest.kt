@@ -420,14 +420,26 @@ class TimelineMessageGroupingTest {
         assertTrue(items.all { it is TimelineListItem.Single })
     }
 
+    @Test fun activityDetailsReuseEachLongCommentaryChunkExactlyOnce() {
+        val note = cmd("step").copy(
+            role = CodexMessageRole.assistant, kind = CodexMessageKind.chat, turnId = "turn",
+            text = (1..100).joinToString("\n\n") { "Step $it " + "word ".repeat(40) },
+        )
+        val final = note.copy(id = "final", text = "Done")
+        val group = (listOf(note, final).toTimelineListItems().first() as TimelineListItem.AssistantWorkGroup)
+        val expected = messageTimelineItems(note).map { it.stableKey }
+        assertTrue(expected.size > 1)
+        val actual = group.detailItems.map { it.stableKey }
+        assertEquals(expected.size, actual.size)
+        assertEquals(expected, actual)
+    }
+
     @Test
     fun activityDetailsPreserveCommandGrouping() {
-        val details =
-            listOf(
-                cmd("a"),
-                cmd("b"),
-                cmd("c"),
-            ).toActivityDetailTimelineListItems()
+        val commands = listOf("a", "b", "c").map { cmd(it).copy(turnId = "turn") }
+        val final = commands.last().copy(id = "done", role = CodexMessageRole.assistant, kind = CodexMessageKind.chat)
+        val work = assertIs<TimelineListItem.AssistantWorkGroup>((commands + final).toTimelineListItems().first())
+        val details = work.detailItems
 
         val group = assertIs<TimelineListItem.CommandExecutionGroup>(details.single())
         assertEquals(listOf("a", "b", "c"), group.messages.map { it.id })
@@ -554,7 +566,7 @@ class TimelineMessageGroupingTest {
     }
 
     @Test
-    fun transientActivityStatus_hidesWhileAssistantTextStreams() {
+    fun transientActivityStatus_reportsStreamingReply() {
         val streaming =
             CodexMessage(
                 id = "as",
@@ -573,7 +585,7 @@ class TimelineMessageGroupingTest {
                 activeTurnId = "turn-1",
             )
 
-        assertEquals(null, status)
+        assertEquals(TimelineActivityLabel(com.remodex.mobile.R.string.activity_replying), status)
     }
 
     @Test
@@ -595,15 +607,15 @@ class TimelineMessageGroupingTest {
             )
 
         assertEquals(
-            "running checks...",
+            TimelineActivityLabel(com.remodex.mobile.R.string.activity_checks),
             listOf(checks).deriveTransientActivityStatus(true, "turn-1"),
         )
         assertEquals(
-            "checking changes...",
+            TimelineActivityLabel(com.remodex.mobile.R.string.activity_changes),
             listOf(diff).deriveTransientActivityStatus(true, "turn-1"),
         )
         assertEquals(
-            "editing MainShell.kt...",
+            TimelineActivityLabel(com.remodex.mobile.R.string.activity_edit_file, "MainShell.kt"),
             listOf(edit).deriveTransientActivityStatus(true, "turn-1"),
         )
     }
@@ -617,7 +629,7 @@ class TimelineMessageGroupingTest {
             )
 
         assertEquals(
-            "searching...",
+            TimelineActivityLabel(com.remodex.mobile.R.string.activity_search),
             listOf(search).deriveTransientActivityStatus(true, "turn-1"),
         )
     }

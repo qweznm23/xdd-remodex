@@ -1,0 +1,16 @@
+<resources>
+    <string name="account_current_heading">当前账号</string>
+    <string name="account_saved_group">其他授权</string>
+    <string name="account_access_until">访问令牌到期 · %1$s</string>
+    <string name="account_access_ended">访问令牌已到期 · %1$s</string>
+    <string name="account_quota_not_read">周额度尚未查询</string>
+    <string name="account_last_query">查询于 %1$s</string>
+    <string name="account_check_quota">查额度</string>
+    <string name="account_set_alias">设置别名</string>
+    <string name="account_edit_alias">修改别名</string>
+    <string name="account_unnamed">未命名账号</string>
+    <string name="account_saved_detail">已保存的授权</string>
+    <string name="account_sign_in_details">登录信息</string>
+    <string name="account_section_expanded">已展开</string>
+    <string name="account_section_collapsed">已收起</string>
+</resources>

@@ -133,6 +133,7 @@ fun SidebarDrawerContent(
         ) {
             SidebarScreen(
                 repository = repository,
+                drawerOpen = drawerState.isOpen,
                 dotAnimationsEnabled = drawerState.isOpen && !drawerState.isAnimationRunning,
                 activeChatMetadata = activeChatMetadata,
                 onOpenArchivedChats = {
@@ -168,7 +169,6 @@ fun SidebarDrawerContent(
                 onOpenNewChatDraft = { source, preferredProjectPath ->
                     drawerScope.launch {
                         closeDrawer()
-                        repository.setActiveThreadId(null)
                         val route = NewChatDraftRoute.create(source, preferredProjectPath)
                         navController.navigate(
                             AppRoutes.newChatDraftRoute(

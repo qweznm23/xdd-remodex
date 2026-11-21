@@ -24,6 +24,7 @@ internal data class DecodedCompletedItem(
     val subagentAction: CodexSubagentAction? = null,
     val assistantPhase: String? = null,
     val structuredUserInputRequest: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null,
+    val reasoningSummary: Map<Int, String> = emptyMap(),
 )
 
 /**
@@ -55,7 +56,7 @@ internal object ThreadHistoryDecoder {
                 val attachments = decodeImageAttachments(itemObject)
                 val norm = normalizedItemType(itemType)
                 when (norm) {
-                    "usermessage" ->
+                    "usermessage", "steeringusermessage" ->
                         append(out, threadId, CodexMessageRole.user, CodexMessageKind.chat, text, turnId, itemId, ts, attachments)
                     "agentmessage", "assistantmessage" ->
                         append(
@@ -104,6 +105,7 @@ internal object ThreadHistoryDecoder {
                             turnId,
                             itemId,
                             ts,
+                            reasoningSummary = publicSummaryParts(itemObject),
                         )
                     "filechange" ->
                         append(
@@ -210,7 +212,7 @@ internal object ThreadHistoryDecoder {
         val itemType = itemObject["type"]?.stringValue ?: return null
         val norm = normalizedItemType(itemType)
         return when (norm) {
-            "usermessage" ->
+            "usermessage", "steeringusermessage" ->
                 DecodedCompletedItem(
                     CodexMessageRole.user,
                     CodexMessageKind.chat,
@@ -249,6 +251,7 @@ internal object ThreadHistoryDecoder {
                     CodexMessageRole.system,
                     CodexMessageKind.thinking,
                     sanitizeTextForKind(CodexMessageKind.thinking, decodeReasoningText(itemObject)),
+                    reasoningSummary = publicSummaryParts(itemObject),
                 )
             "filechange" -> {
                 val body =
@@ -331,6 +334,7 @@ internal object ThreadHistoryDecoder {
         subagentAction: CodexSubagentAction? = null,
         assistantPhase: String? = null,
         structuredUserInputRequest: com.remodex.mobile.core.model.CodexStructuredUserInputRequest? = null,
+        reasoningSummary: Map<Int, String> = emptyMap(),
     ) {
         val t = sanitizeTextForKind(kind, text)
         if (t.isEmpty() && attachments.isEmpty() && kind != CodexMessageKind.plan && subagentAction == null && structuredUserInputRequest == null) return
@@ -341,6 +345,7 @@ internal object ThreadHistoryDecoder {
                 kind = kind,
                 assistantPhase = if (role == CodexMessageRole.assistant) assistantPhase else null,
                 text = t,
+                reasoningSummary = reasoningSummary,
                 createdAt = createdAt,
                 turnId = turnId,
                 itemId = itemId,
@@ -695,8 +700,13 @@ internal object ThreadHistoryDecoder {
                 DateTimeFormatter.ISO_OFFSET_DATE_TIME.parse(s.trim(), Instant::from)
             }.getOrNull()
 
+    private fun userOrMessageContent(item: Map<String, JSONValue>): List<JSONValue> =
+        if (normalizedItemType(item["type"]?.stringValue.orEmpty()) == "steeringusermessage")
+            item["input"]?.arrayValue.orEmpty()
+        else item["content"]?.arrayValue.orEmpty()
+
     private fun decodeItemText(itemObject: Map<String, JSONValue>): String {
-        val contentItems = itemObject["content"]?.arrayValue.orEmpty()
+        val contentItems = userOrMessageContent(itemObject)
         val parts = ArrayList<String>()
         for (value in contentItems) {
             val o = value.objectValue ?: continue
@@ -718,6 +728,17 @@ internal object ThreadHistoryDecoder {
         itemObject["text"]?.stringValue?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         itemObject["message"]?.stringValue?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         return ""
+    }
+
+    internal fun publicSummaryParts(item: Map<String, JSONValue>): Map<Int, String> {
+        val summary = item["summary"] ?: return emptyMap()
+        val parts = summary.arrayValue ?: listOf(summary)
+        return buildMap {
+            parts.forEachIndexed { index, part ->
+                val text = part.stringValue ?: part.objectValue?.get("text")?.stringValue
+                if (!text.isNullOrBlank()) put(index, text)
+            }
+        }
     }
 
     private fun decodeReasoningText(itemObject: Map<String, JSONValue>): String {
@@ -784,18 +805,22 @@ internal object ThreadHistoryDecoder {
     }
 
     private fun decodeImageAttachments(itemObject: Map<String, JSONValue>): List<CodexImageAttachment> {
-        val contentItems = itemObject["content"]?.arrayValue.orEmpty()
+        val contentItems = userOrMessageContent(itemObject)
         val attachments = ArrayList<CodexImageAttachment>()
         for (value in contentItems) {
             val objectValue = value.objectValue ?: continue
             val normalizedType = normalizedItemType(objectValue["type"]?.stringValue ?: "")
-            if (normalizedType !in setOf("image", "localimage", "video", "localvideo")) continue
+            if (normalizedType !in setOf("image", "inputimage", "localimage", "video", "localvideo")) continue
+            val localPath = objectValue["path"]?.stringValue?.takeUnless { it.isBlank() }
             val sourceUrl =
                 objectValue["url"]?.stringValue
                     ?: objectValue["image_url"]?.stringValue
                     ?: objectValue["video_url"]?.stringValue
-                    ?: objectValue["path"]?.stringValue
-            TurnAttachmentCodec.attachmentFromHistorySource(sourceUrl)?.let {
+                    ?: localPath
+            val attachment = if (normalizedType == "localimage" && localPath != null) {
+                CodexImageAttachment(thumbnailBase64JPEG = "", sourceURL = localPath)
+            } else TurnAttachmentCodec.attachmentFromHistorySource(sourceUrl)
+            attachment?.let {
                 val mime = firstString(objectValue,listOf("mimeType","mime_type","media_type"))
                     ?: if (normalizedType in setOf("video","localvideo")) "video/*" else null
                 attachments.add(it.copy(mimeType = mime))

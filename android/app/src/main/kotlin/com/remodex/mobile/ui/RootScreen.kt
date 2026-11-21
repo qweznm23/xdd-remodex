@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui
 
+import com.remodex.mobile.ui.theme.singleOwnerPageEntry
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -21,11 +22,14 @@ fun RootScreen(modifier: Modifier = Modifier) {
     val viewModel: RootViewModel = viewModel(factory = RootViewModel.factory())
     val phase by viewModel.phase.collectAsStateWithLifecycle()
 
+    val pageModifier = modifier.singleOwnerPageEntry(phase) { from, to ->
+        from != RootPhase.Onboarding && (to == RootPhase.Main || to == RootPhase.Onboarding)
+    }
     when (phase) {
         RootPhase.Onboarding ->
             OnboardingFlow(
                 onFinish = viewModel::finishOnboarding,
-                modifier = modifier,
+                modifier = pageModifier,
             )
         RootPhase.PairingScan,
         RootPhase.PairingCode,
@@ -35,7 +39,7 @@ fun RootScreen(modifier: Modifier = Modifier) {
                 onBack = viewModel::closePairingScanner,
                 onPairingComplete = viewModel::notifyPairingSuccess,
                 openManualPairingInitially = phase == RootPhase.PairingCode,
-                modifier = modifier,
+                modifier = pageModifier,
             )
         RootPhase.Main -> androidx.compose.runtime.CompositionLocalProvider(
             LocalReconnectForMedia provides viewModel::onAppForegrounded,
@@ -44,7 +48,7 @@ fun RootScreen(modifier: Modifier = Modifier) {
                 viewModel = viewModel,
                 onOpenPairingScanner = viewModel::openPairingScanner,
                 onOpenPairingCode = viewModel::openPairingCode,
-                modifier = modifier,
+                modifier = pageModifier,
             )
         }
     }

@@ -2,12 +2,10 @@
 """Remodex authorization service. Metadata RPCs never return credentials."""
 import argparse
 import base64
-import contextlib
 import datetime as dt
 import fcntl
 import hashlib
 import uuid
-import io
 import json
 import os
 import re
@@ -17,6 +15,9 @@ import signal
 import tempfile
 import time
 import traceback
+import unicodedata
+
+from auth_restarts import DISPLAY_LIMIT, HISTORY_LIMIT, PENDING, RestartOperations
 
 
 class ProfileError(RuntimeError):
@@ -29,14 +30,14 @@ def iso(seconds):
     return dt.datetime.fromtimestamp(seconds, dt.timezone.utc).isoformat()
 
 
-def bounded_diagnostic(report):
+def bounded_diagnostic(report, max_bytes=256 * 1024):
     encoded = json.dumps(report, ensure_ascii=False).encode()
-    if len(encoded) <= 256 * 1024:
+    if len(encoded) <= max_bytes:
         return report
     return {**{key: report.get(key) for key in ('operation', 'profile', 'at', 'stage', 'type', 'code')},
-            'rpcCode': (report.get('rpc') or {}).get('code'),
-            'message': report.get('message', '')[:8192], 'truncated': True,
-            'diagnosticPrefix': encoded[:96 * 1024].decode(errors='replace')}
+            **{key: report[key] for key in ('errno', 'exitCode', 'timeoutSeconds') if key in report},
+            'rpcCode': (report.get('rpc') or {}).get('code'), 'message': report.get('message', '')[: min(8192, max_bytes // 8)],
+            'truncated': True, 'diagnosticPrefix': encoded[: min(96 * 1024, max_bytes * 3 // 8)].decode(errors='replace')}
 
 
 class Profiles:
@@ -46,13 +47,58 @@ class Profiles:
         self.secrets = set()
         self.stage = 'validate'
 
+    @staticmethod
+    def bound_restart_diagnostic(report):
+        return bounded_diagnostic(report, max_bytes=24 * 1024)
+
     def registered(self):
-        # The host manager owns the slots; the phone must not keep a second registry.
-        discover = getattr(self.m, 'registered_profiles', None)
-        numbers = discover() if callable(discover) else getattr(self.m, 'PROFILE_NUMBERS', ('1', '2'))
-        if any(not isinstance(number, str) or not re.fullmatch(r'[1-9][0-9]*', number) for number in numbers):
-            raise ProfileError('INVALID_PROFILE_REGISTRY', 'Host manager returned invalid profile IDs')
-        return tuple(numbers)
+        return self.m.registered_profiles()
+
+    def next_number(self):
+        reserved = {p.name for p in self.m.PROFILES.iterdir()}
+        removed = self.m.STATE / 'removed'
+        if removed.is_dir():
+            reserved.update(p.name for p in removed.iterdir())
+        number = 1
+        while str(number) in reserved:
+            number += 1
+        return str(number)
+
+    def label(self, number):
+        if number == 'current':
+            return None
+        path = self.m.PROFILES / number / 'label.json'
+        try:
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'r') as stream:
+                return json.load(stream)['name']
+        except FileNotFoundError:
+            return None
+
+    def clean_label(self, name):
+        if not isinstance(name, str) or len(name.strip()) > 80 or any(unicodedata.category(c) in ('Cc', 'Cs') for c in name):
+            raise ProfileError('INVALID_NAME', 'Choose a single-line name of up to 80 characters')
+        return name.strip() or None
+
+    def account_display(self, auth, access):
+        # Local display claims only. Account matching and switching still use identity().
+        sources = []
+        token = auth['tokens'].get('id_token')
+        if isinstance(token, str):
+            try:
+                part = token.split('.')[1]
+                sources.append(json.loads(base64.urlsafe_b64decode(part + '=' * (-len(part) % 4))))
+            except (ValueError, IndexError):
+                pass  # Optional display claims; older files may use opaque tokens.
+        sources.extend([access.get('https://api.openai.com/profile'), access])
+        def field(key):
+            for source in sources:
+                value = source.get(key) if isinstance(source, dict) else None
+                if (isinstance(value, str) and 0 < len(value.strip()) <= 320 and
+                        value not in auth['tokens'].values() and value == self.redact(value)
+                        and all(unicodedata.category(c) not in ('Cc', 'Cs') for c in value)):
+                    return value.strip()
+            return None
+        return {'accountName': field('name'), 'email': field('email')}
 
     def read(self, path):
         if path.stat().st_size > 65536:
@@ -117,6 +163,7 @@ class Profiles:
             return iso(claims[key]) if claims.get(key) is not None else None
         stat = path.stat()
         return {'id': number, 'path': str(path), 'revision': f'{stat.st_mtime_ns}:{stat.st_size}',
+                'displayName': self.label(number), **self.account_display(auth, claims),
                 'modifiedAt': iso(stat.st_mtime), 'lastRefresh': auth.get('last_refresh'),
                 'accessIssuedAt': date('iat'), 'accessExpiresAt': date('exp'),
                 'accessTokenState': 'unknown' if claims.get('exp') is None else (
@@ -136,29 +183,52 @@ class Profiles:
             auth = self.read(path)[1]
             if self.m.identity(auth) != active:
                 rows.append(self.metadata(number, auth))
+        restarts = RestartOperations(self)
+        history = restarts.history()
+        latest = history[0] if history else None
+        restart = self.legacy_restart(active, numbers)
+        if restart:
+            history = [*history[:DISPLAY_LIMIT - 1], restart]
+        if latest:
+            restart = latest
+        restart_status = restart['status'] if restart else None
+        restart_error = restart.get('failure') if restart else None
+        result = {'status': 'available', 'profiles': rows, 'supportsTokenRefresh': True, 'managedBy': 'remodex', 'supportsImportExport': True,
+                'supportsManualRestart': restarts.supported(),
+                'currentProfile': self.metadata('current', active_auth) if self.socket else None,
+                'restartStatus': 'restart_scheduled' if restart_status in PENDING else 'ready' if restart_status == 'recovered' else restart_status,
+                'operationId': restart.get('operationId') if restart else None,
+                'selectedProfile': restart.get('profile') if restart else None,
+                'restartError': json.dumps(restart_error, ensure_ascii=False)[:16000] if restart_error else None,
+                'restartHistory': history}
+        from auth_runtime import reconcile_failed_switch
+        return reconcile_failed_switch(self, result, active_auth, numbers)
+
+    def legacy_restart(self, active, numbers):
         switch = self.m.STATE / 'last-switch.json'
         restart = self.m.STATE / 'last-restart.json'
-        restart_status = None
-        selection = json.loads(switch.read_text()) if switch.exists() else {}
-        restart_error = None
-        if switch.exists():
-            if not restart.exists() or switch.stat().st_mtime_ns > restart.stat().st_mtime_ns:
-                restart_status = 'restart_scheduled'
-            else:
-                report = json.loads(restart.read_text())
-                restart_status = report.get('status')
-                if report.get('operationId') and report['operationId'] != selection.get('unit'):
-                    restart_status = 'restart_scheduled'
-                if restart_status in ('failed', 'verification_failed'):
-                    restart_error = self.redact(json.dumps(report, ensure_ascii=False))[:16000]
+        if not switch.exists():
+            return None
+        selection = json.loads(switch.read_text())
+        if not selection.get('unit'):
+            return None
+        report = json.loads(restart.read_text()) if restart.exists() and restart.stat().st_mtime_ns >= switch.stat().st_mtime_ns else {}
+        if report.get('operationId') and report['operationId'] != selection.get('unit'):
+            report = {}
+        restart_status = report.get('status', 'restart_scheduled')
+        failure = self.bound_restart_diagnostic(json.loads(self.redact(json.dumps(report)))) if restart_status in ('failed', 'verification_failed') else None
+        if not report and time.time() - switch.stat().st_mtime > 180:
+            restart_status = 'failed'
+            failure = {'stage': 'restart_schedule', 'code': 'RESTART_QUEUE_EXPIRED', 'message': 'Legacy restart has no completion record'}
         selected = selection.get('profile')
-        if selected in numbers and self.m.identity(self.read(self.m.PROFILES / selected / 'auth.json')[1]) != active:
+        matches_file = active is not None and selected in numbers and self.m.identity(self.read(self.m.PROFILES / selected / 'auth.json')[1]) == active
+        if active is not None and selected in numbers and not matches_file:
             restart_status = 'superseded_by_newer_switch'
-            restart_error = 'stage=selection-verification: active authorization no longer matches this switch operation'
-        return {'status': 'available', 'profiles': rows, 'supportsTokenRefresh': True, 'managedBy': 'remodex', 'supportsImportExport': True,
-                'currentProfile': self.metadata('current', active_auth) if self.socket else None, 'restartStatus': restart_status,
-                'operationId': selection.get('unit'), 'selectedProfile': selection.get('profile'),
-                'restartError': restart_error}
+            failure = {'stage': 'selection-verification', 'message': 'Active authorization no longer matches this switch operation',
+                       'previousFailure': failure}
+        return dict(operationId=selection.get('unit'), kind='switch', profile=selected, status=restart_status,
+                    stage=report.get('stage') or (failure or {}).get('stage'), requestedAt=selection.get('time_beijing'),
+                    finishedAt=report.get('time_beijing'), failure=failure, legacy=True, selectedOnDisk=matches_file)
 
     def status(self):
         active = self.read(self.m.BASE / 'auth.json')[1]
@@ -170,7 +240,7 @@ class Profiles:
             row['active'] = self.m.identity(auth) == self.m.identity(active)
             row['lastMaintenance'] = state.get('profiles', {}).get(number, {}).get('last_result')
             rows.append(row)
-        return {'managedBy': 'remodex', 'profiles': rows,
+        return {'managedBy': 'remodex', 'profiles': rows, 'nextProfileId': self.next_number(),
                 'schedule': state.get('remodexSchedule'),
                 'activeMaintenance': json.loads((self.m.STATE / 'last-active-maintenance.json').read_text()) if (self.m.STATE / 'last-active-maintenance.json').exists() else None,
                 'scheduler': json.loads((self.m.STATE / 'remodex-scheduler.json').read_text()) if (self.m.STATE / 'remodex-scheduler.json').exists() else None,
@@ -186,10 +256,39 @@ class Profiles:
             raise ProfileError('PROFILE_CHANGED', 'Authorization changed; reload before continuing')
         return metadata
 
-    def import_profile(self, number, revision, source):
+    def rename(self, number, revision, name, expected_name):
+        self.stage = 'rename_profile'
+        self.check(number, revision)
+        if number == 'current' or self.label(number) != (expected_name or None):
+            raise ProfileError('PROFILE_CHANGED', 'Profile name changed; reload before editing')
+        self.m.save_json(self.m.PROFILES / number / 'label.json', {'name': self.clean_label(name)})
+        return {'status': 'renamed', 'profile': number}
+
+    def remove(self, number, revision):
+        self.stage = 'remove_profile'
+        self.target(number, revision)  # Includes active-account protection.
+        archive = self.m.STATE / 'removed'
+        archive.mkdir(mode=0o700, exist_ok=True)
+        destination = archive / number
+        if destination.exists():
+            destination = archive / (number + '-' + str(uuid.uuid4()))
+        os.rename(self.m.PROFILES / number, destination)
+        self.m.sync_directory(archive)
+        self.m.sync_directory(self.m.STATE)
+        self.m.sync_directory(self.m.PROFILES)
+        return {'status': 'removed', 'profile': number}
+
+    def import_profile(self, number, revision, source, name=None):
         self.stage = 'import_validate'
-        if number not in self.m.PROFILE_NUMBERS:
-            raise ProfileError('INVALID_PROFILE', 'Unsupported authorization slot')
+        if not self.m.valid_number(number):
+            raise ProfileError('INVALID_PROFILE', 'Invalid authorization ID')
+        directory = self.m.PROFILES / number
+        if directory.is_symlink() or (directory / 'auth.json').is_symlink():
+            raise ProfileError('INVALID_PROFILE', 'Authorization links are not supported')
+        if name is not None and (revision != 'missing' or directory.exists()):
+            raise ProfileError('PROFILE_CHANGED', 'Authorization already exists; reload before adding')
+        if revision == 'missing' and (self.m.STATE / 'removed' / number).exists():
+            raise ProfileError('PROFILE_CHANGED', 'Authorization was removed; reload before adding')
         upload = Path(source)
         root = (self.m.BASE / 'remodex_uploads').resolve()
         if not upload.is_absolute() or not upload.resolve().is_relative_to(root) or upload.name == '.upload-part':
@@ -204,7 +303,7 @@ class Profiles:
             if revision != 'missing':
                 raise ProfileError('PROFILE_CHANGED', 'Authorization no longer exists')
         else:
-            self.check(number, revision)
+            self.target(number, revision)
         # Preserve the former file for recovery without including it in metadata or logs.
         self.stage = 'import_commit'
         if before is not None:
@@ -212,7 +311,16 @@ class Profiles:
             self.m.atomic(backup, before)
         if (destination.read_bytes() if destination.exists() else None) != before:
             raise ProfileError('PROFILE_CHANGED', 'Authorization changed during import')
-        self.m.atomic(destination, raw)
+        if name is not None:
+            label = self.clean_label(name)
+            with tempfile.TemporaryDirectory(dir=self.m.PROFILES) as tmp:
+                staged = Path(tmp) / 'profile'
+                self.m.atomic(staged / 'auth.json', raw)
+                self.m.save_json(staged / 'label.json', {'name': label})
+                staged.rename(directory)
+                self.m.sync_directory(self.m.PROFILES)
+        else:
+            self.m.atomic(destination, raw)
         return {'status': 'imported', 'profile': number, 'profileInfo': self.metadata(number, auth)}
 
     def export(self, number, revision):
@@ -368,18 +476,9 @@ class Profiles:
         return path, raw, auth
 
     def switch(self, number, revision):
-        self.stage = 'switch_profile'
+        self.stage = 'switch_selection'
         self.check(number, revision)
-        before_active = self.m.identity(self.read(self.m.BASE / 'auth.json')[1])
-        same_account = before_active == self.m.identity(self.read(self.m.PROFILES / number / 'auth.json')[1])
-        # Reuse saving, compare-and-swap, rollback and delayed daemon restart.
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.m.switch(number)
-        if same_account:
-            return {'status': 'already_selected', 'profile': number}
-        selection = json.loads((self.m.STATE / 'last-switch.json').read_text())
-        return {'status': 'restart_scheduled', 'profile': number, 'restartAfterSeconds': 10,
-                'operationId': selection['unit']}
+        return RestartOperations(self).schedule(number, revision)
 
     def verify_refresh(self, before, after):
         if self.m.identity(before) != self.m.identity(after):
@@ -565,11 +664,20 @@ def main():
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--home', required=True)
-    parser.add_argument('action', choices=('list', 'status', 'check', 'import', 'export', 'maintenance', 'query', 'refreshToken', 'switch'))
+    parser.add_argument('action', choices=('list', 'status', 'check', 'import', 'rename', 'remove', 'export', 'maintenance', 'query', 'refreshToken',
+                                           'switch', 'restart', 'restart-history', 'run-restart'))
+    parser.add_argument('--name')
+    parser.add_argument('--expected-name')
     parser.add_argument('--socket')
     parser.add_argument('--profile')
     parser.add_argument('--revision')
+    parser.add_argument('--operation-id')
+    parser.add_argument('--start-if-stopped', action='store_true')
     args = parser.parse_args()
+    if args.action == 'run-restart' and not args.operation_id:
+        parser.error('run-restart requires --operation-id')
+    if args.start_if_stopped and args.action != 'restart':
+        parser.error('--start-if-stopped requires restart')
     import auth_store as manager
     manager.configure(args.home)
     api = Profiles(manager, args.socket)
@@ -579,26 +687,39 @@ def main():
         manager.STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
         with (manager.STATE / 'manager.lock').open('a') as lock:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_EX if args.action == 'run-restart' else fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise ProfileError('MANAGER_BUSY', 'Account maintenance is running; try again later') from error
             if args.action in ('list', 'status'):
                 result = getattr(api, args.action)()
+            elif args.action == 'restart':
+                result = RestartOperations(api).schedule(allow_stopped=args.start_if_stopped)
+            elif args.action == 'restart-history':
+                history = RestartOperations(api).history(HISTORY_LIMIT)
+                legacy = api.legacy_restart(None, ())
+                result = {'restartHistory': [*history[:HISTORY_LIMIT - 1], legacy] if legacy else history}
+            elif args.action == 'run-restart':
+                result = RestartOperations(api).run(args.operation_id)
             elif args.action == 'maintenance':
                 result = api.maintenance(args.dry_run, args.force)
             elif args.action == 'import':
-                result = api.import_profile(args.profile, args.revision, args.source)
+                result = api.import_profile(args.profile, args.revision, args.source, args.name)
+            elif args.action == 'rename':
+                result = api.rename(args.profile, args.revision, args.name, args.expected_name)
             else:
                 result = getattr(api, args.action)(args.profile, args.revision)
         print(json.dumps({'ok': True, 'result': result}))
+        if args.action == 'run-restart' and result and result['status'] == 'failed':
+            raise SystemExit(1)
     except Exception as error:
         report = api.error(error)
         report.update(operation=args.action, profile=args.profile, at=iso(time.time()))
         report = bounded_diagnostic(report)
-        try:
-            manager.save_json(manager.STATE / 'last-phone-error.json', report)
-        except Exception as secondary:
-            report.setdefault('suppressed', []).append(api.error(secondary))
+        if report.get('code') != 'MANAGER_BUSY':
+            try:
+                manager.save_json(manager.STATE / 'last-phone-error.json', report)
+            except Exception as secondary:
+                report.setdefault('suppressed', []).append(api.error(secondary))
         print(json.dumps({'ok': False, 'error': bounded_diagnostic(report)}))
 
 

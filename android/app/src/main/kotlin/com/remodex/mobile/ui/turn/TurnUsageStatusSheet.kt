@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.ui.theme.LocalSheetClose
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -24,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import com.remodex.mobile.ui.shared.RemainingQuotaBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -92,7 +94,7 @@ internal fun ThreadUsageStatusBottomSheet(
         ThreadUsageStatusSheetContent(
             threadId = threadId,
             repository = repository,
-            onDismiss = onDismiss,
+            onDismiss = LocalSheetClose.current,
         )
     }
 }
@@ -143,25 +145,18 @@ private fun ThreadUsageStatusSheetContent(
         remember(threadId, queuedPreviewByThread) {
             queuedPreviewByThread[threadId].orEmpty()
         }
-    var recentChangeSets by remember(threadId, currentTrustedMacDeviceId) {
-        mutableStateOf(
-            TurnUsageSheetLogic.recentChangeSetsForThread(
-                threadId,
-                aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-            ),
-        )
-    }
+    val recentChangeSets by threadChangeLedger(aiChangeSetPersistence, currentTrustedMacDeviceId, threadId)
     val threadCwd =
         remember(threadId, threads) {
             threads.firstOrNull { it.id == threadId }?.cwd
         }
 
-    suspend fun refresh() {
+    suspend fun refresh(force: Boolean = false) {
         if (refreshing) return
         refreshing = true
         refreshFailure = null
         try {
-            repository.refreshUsageStatus(threadId)
+            repository.refreshUsageStatus(threadId, force)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -172,8 +167,6 @@ private fun ThreadUsageStatusSheetContent(
         }
     }
     LaunchedEffect(threadId, currentTrustedMacDeviceId) {
-        recentChangeSets = TurnUsageSheetLogic.recentChangeSetsForThread(
-            threadId, aiChangeSetPersistence.load(currentTrustedMacDeviceId))
         if (ready && connected) refresh()
     }
     val errors = listOfNotNull(ctxErr, rlErr, refreshFailure?.let { it.message ?: it.javaClass.name }).distinct()
@@ -195,7 +188,7 @@ private fun ThreadUsageStatusSheetContent(
         Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.turn_usage_sheet_title), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
             val refreshLabel = stringResource(R.string.cd_turn_usage_sheet_refresh_all)
-            IconButton(onClick = { scope.launch { refresh() } }, enabled = ready && connected && !anyLoading,
+            IconButton(onClick = { scope.launch { refresh(force = true) } }, enabled = ready && connected && !anyLoading,
                 modifier = Modifier.semantics { contentDescription = refreshLabel }) {
                 if (anyLoading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 else Icon(Icons.Outlined.Refresh, null)
@@ -257,36 +250,7 @@ private fun ThreadUsageStatusSheetContent(
                     changeSets = recentChangeSets,
                     repository = repository,
                     threadCwd = threadCwd,
-                    onChangeSetsUpdated = {
-                        recentChangeSets =
-                            TurnUsageSheetLogic.recentChangeSetsForThread(
-                                threadId,
-                                aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                            )
-                    },
-                    markChangeSetReverted = { changeSetId ->
-                        val now = Instant.now()
-                        aiChangeSetPersistence.save(
-                            TurnUsageSheetLogic.markChangeSetReverted(
-                                changeSets = aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                                changeSetId = changeSetId,
-                                now = now,
-                            ),
-                            currentTrustedMacDeviceId,
-                        )
-                    },
-                    recordChangeSetRevertError = { changeSetId, errorMessage ->
-                        val now = Instant.now()
-                        aiChangeSetPersistence.save(
-                            TurnUsageSheetLogic.recordChangeSetRevertError(
-                                changeSets = aiChangeSetPersistence.load(currentTrustedMacDeviceId),
-                                changeSetId = changeSetId,
-                                message = errorMessage,
-                                now = now,
-                            ),
-                            currentTrustedMacDeviceId,
-                        )
-                    },
+                    device = currentTrustedMacDeviceId,
                 )
             }
         }
@@ -391,9 +355,7 @@ private fun AssistantRevertStatusBlock(
     changeSets: List<AIChangeSet>,
     repository: CodexRepository,
     threadCwd: String?,
-    onChangeSetsUpdated: () -> Unit,
-    markChangeSetReverted: (changeSetId: String) -> Unit,
-    recordChangeSetRevertError: (changeSetId: String, errorMessage: String) -> Unit,
+    device: String?,
 ) {
     Text(
         text = stringResource(R.string.turn_usage_revert_title),
@@ -409,6 +371,8 @@ private fun AssistantRevertStatusBlock(
     }
 
     val runtimeRevertRpcAvailable = true
+    val ledger = LocalAIChangeSetPersistence.current
+    val previewUndo = rememberRevertPreview(repository, device, changeSets.firstOrNull()?.threadId)
     val revertService = remember(repository) { AiChangeSetRevertService(repository) }
     val scope = rememberCoroutineScope()
     var expandedIds by remember(changeSets) { mutableStateOf(emptySet<String>()) }
@@ -511,33 +475,22 @@ private fun AssistantRevertStatusBlock(
                     TextButton(
                         onClick = {
                             if (workingDirectory.isNullOrBlank() || isApplying) return@TextButton
+                            previewUndo(changeSet, workingDirectory) {
                             scope.launch {
                                 applyingIds = applyingIds + changeSet.id
                                 actionErrors = actionErrors - changeSet.id
-                                val result =
-                                    runCatching {
-                                        revertService.apply(changeSet = changeSet, workingDirectory = workingDirectory)
-                                    }
-                                result
-                                    .onSuccess { applyResult ->
-                                        if (applyResult.success) {
-                                            markChangeSetReverted(changeSet.id)
-                                        } else {
-                                            val message =
-                                                applyResult.unsupportedReasons.firstOrNull()
-                                                    ?: applyResult.conflicts.firstOrNull()?.message
-                                                    ?: "Patch revert failed."
-                                            recordChangeSetRevertError(changeSet.id, message)
-                                            actionErrors = actionErrors + (changeSet.id to message)
-                                        }
-                                        onChangeSetsUpdated()
-                                    }.onFailure { error ->
-                                        val message = error.message ?: "Patch revert failed."
-                                        recordChangeSetRevertError(changeSet.id, message)
-                                        actionErrors = actionErrors + (changeSet.id to message)
-                                        onChangeSetsUpdated()
-                                    }
-                                applyingIds = applyingIds - changeSet.id
+                                try {
+                                    val result = revertService.applyTracked(changeSet, workingDirectory, ledger, device)
+                                    if (!result.success) actionErrors = actionErrors + (changeSet.id to
+                                        (result.unsupportedReasons.firstOrNull() ?: result.conflicts.firstOrNull()?.message ?: "Revert rejected"))
+                                } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                                catch (failure: Exception) {
+                                    android.util.Log.e("RemodexLedger", "apply change set", failure)
+                                    actionErrors = actionErrors + (changeSet.id to formatTurnSendError(failure))
+                                } finally {
+                                    applyingIds = applyingIds - changeSet.id
+                                }
+                            }
                             }
                         },
                         enabled =
@@ -629,16 +582,10 @@ internal fun UsageRateLimitRowDetail(row: CodexRateLimitDisplayRow?, now: Instan
             Text(row?.let { stringResource(R.string.usage_quota_remaining, it.window.remainingPercent) } ?: "—",
                 style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
-        LinearProgressIndicator(progress = { row?.window?.remainingPercent?.div(100f) ?: 0f }, modifier = Modifier.fillMaxWidth().height(6.dp))
+        RemainingQuotaBar(row?.window?.remainingPercent)
         val reset = row?.window?.resetsAt
         val minutes = reset?.let { remainingQuotaResetMinutes(it, now) }
-        val countdown = when {
-            minutes == null -> "—"
-            minutes == 0L -> stringResource(R.string.usage_reset_due)
-            minutes >= 1440 -> stringResource(R.string.usage_reset_in_days, minutes / 1440, minutes % 1440 / 60)
-            minutes >= 60 -> stringResource(R.string.usage_reset_in_hours, minutes / 60, minutes % 60)
-            else -> stringResource(R.string.usage_reset_in_minutes, minutes)
-        }
+        val countdown = quotaCountdownText(minutes)
         val calendar = reset?.let { formatUsageCalendarTime(it, now, locale = LocalConfiguration.current.locales[0]) } ?: "—"
         Text(countdown + "\n" + calendar,
             modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp * LocalDensity.current.fontScale),

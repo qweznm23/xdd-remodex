@@ -1,5 +1,7 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.ui.theme.LocalSheetClose
+import com.remodex.mobile.ui.theme.CodeFontFamily
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -153,10 +155,10 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f).padding(horizontal = 18.dp).padding(bottom = 26.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(info?.fileName ?: request.path.substringAfterLast('/'), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.turn_preview_close)) }
+                TextButton(onClick = LocalSheetClose.current) { Text(stringResource(R.string.turn_preview_close)) }
             }
             info?.let { file ->
-                Text(file.path, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace))
+                Text(file.path, style = MaterialTheme.typography.labelSmall.copy(fontFamily = CodeFontFamily))
                 Text(stringResource(R.string.file_download_size, file.byteLength / 1048576.0), style = MaterialTheme.typography.labelSmall)
                 if (downloading) {
                     LinearProgressIndicator(progress = { (downloadedBytes.toFloat() / file.byteLength.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
@@ -204,7 +206,7 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
                 }
                 Surface(Modifier.fillMaxWidth().weight(1f), shape = MaterialTheme.shapes.medium) {
                     key(pageIndex) { SelectionContainer {
-                        Text(content, modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                        Text(content, modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily))
                     } }
                 }
             }

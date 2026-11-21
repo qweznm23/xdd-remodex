@@ -12,10 +12,11 @@ async function manageAuthProfiles(action, params, authFile, {
   if (authFile?.status !== 'present' || authFile.storage !== 'file') {
     throw Object.assign(new Error('The connected Codex does not expose a managed local auth file'), { errorCode: 'AUTH_PROFILES_UNAVAILABLE' });
   }
-  if (!['list', 'status', 'check', 'import', 'export', 'maintenance', 'query', 'refreshToken', 'switch'].includes(action)) throw new Error('Invalid auth profile action');
+  const withoutProfile = ['list', 'status', 'maintenance', 'restart'].includes(action);
+  if (!withoutProfile && !['check', 'import', 'rename', 'remove', 'export', 'query', 'refreshToken', 'switch'].includes(action)) throw new Error('Invalid auth profile action');
   // Validate the wire format here; the host manager authoritatively checks registration.
   const validProfile = typeof params.profile === 'string' && /^[1-9][0-9]*$/.test(params.profile) && params.profile.trim() === params.profile;
-  if (!['list', 'status', 'maintenance'].includes(action) && (!(validProfile || (['refreshToken', 'check', 'export'].includes(action) && params.profile === "current")) || !(action === 'import' && params.revision === 'missing') && !/^\d+:\d+$/.test(params.revision || ''))) {
+  if (!withoutProfile && (!(validProfile || (['refreshToken', 'check', 'export'].includes(action) && params.profile === "current")) || !(action === 'import' && params.revision === 'missing') && !/^\d+:\d+$/.test(params.revision || ''))) {
     throw Object.assign(new Error('Refresh the authorization list before selecting a profile'), { errorCode: 'INVALID_PROFILE_SELECTION' });
   }
   try { await fs.access(manager); }
@@ -24,14 +25,21 @@ async function manageAuthProfiles(action, params, authFile, {
     throw cause;
   }
   const args = [path.join(__dirname, 'auth-profiles.py'), '--home', path.dirname(authFile.path), action];
-  if (!['list', 'status', 'maintenance'].includes(action)) args.push('--profile', params.profile, '--revision', params.revision);
+  if (!withoutProfile) args.push('--profile', params.profile, '--revision', params.revision);
   if (action === 'import') {
     if (typeof params.sourcePath !== 'string' || !path.isAbsolute(params.sourcePath)) throw new Error('Import requires a completed workspace upload path');
     args.push('--source', params.sourcePath);
   }
+  if (action === 'rename' || (action === 'import' && params.displayName !== undefined)) {
+    if (typeof params.displayName !== 'string' || params.displayName.length > 160 || /[\u0000-\u001f\u007f]/u.test(params.displayName)) {
+      throw Object.assign(new Error('Invalid authorization display name'), {errorCode: 'INVALID_NAME'});
+    }
+    args.push('--name=' + params.displayName);
+    if (action === 'rename' && typeof params.expectedName === 'string') args.push('--expected-name=' + params.expectedName);
+  }
   if (action === 'maintenance' && params.dryRun === true) args.push('--dry-run');
   const socket = /^ws\+unix:\/\/(\/[^:]+):\/$/.exec(endpoint)?.[1];
-  if (socket && (['list', 'status', 'maintenance'].includes(action) || params.profile === 'current')) args.push('--socket', socket);
+  if (socket && (withoutProfile || action === 'switch' || params.profile === 'current')) args.push('--socket', socket);
   let response;
   try {
     const { stdout } = await execute('/usr/bin/python3', args, { timeout: action === "maintenance" ? 930_000 : 240_000, maxBuffer: 1024 * 1024 });
@@ -47,7 +55,7 @@ async function manageAuthProfiles(action, params, authFile, {
     const error = new Error(diagnostic.message);
     error.errorCode = diagnostic.code || 'AUTH_PROFILE_FAILED';
     error.profileDiagnostic = diagnostic;
-    console.error('[auth-profiles] %s', JSON.stringify(diagnostic));
+    if (error.errorCode !== 'MANAGER_BUSY') console.error('[auth-profiles] %s', JSON.stringify(diagnostic));
     throw error;
   }
   return response.result;
@@ -56,7 +64,9 @@ async function manageAuthProfiles(action, params, authFile, {
 // Verify the actual connected daemon, not an isolated quota process or a past PID check.
 // Credentials stay on the host and normal polling never forces token rotation.
 async function verifySwitchedRuntimeImpl(result, authFile, sendRequest, readFile) {
-  if (result.restartStatus !== 'restarted') return result;
+  const legacy = result.restartHistory?.find(record => record.legacy && record.operationId === result.operationId);
+  const checkRecovery = !result.runtimeVerification && legacy?.selectedOnDisk && ['failed', 'verification_failed'].includes(result.restartStatus);
+  if (result.restartStatus !== 'restarted' && !checkRecovery) return result;
   const expectedRaw = await readFile(authFile.path, 'utf8');
   let expected;
   try { expected = JSON.parse(expectedRaw); }
@@ -79,9 +89,17 @@ async function verifySwitchedRuntimeImpl(result, authFile, sendRequest, readFile
   if (await readFile(authFile.path, 'utf8') !== expectedRaw) {
     throw Object.assign(new Error('Selected authorization changed during runtime verification'), { errorCode: 'AUTH_VERIFY_SUPERSEDED' });
   }
-  return { ...result, restartStatus: matches ? 'ready' : 'verification_failed',
-    restartError: matches ? null : 'stage=runtime-account-verification: connected Codex does not confirm the selected authorization',
-  };
+  if (checkRecovery && !matches) return result;
+  const status = matches ? (checkRecovery ? 'recovered' : 'ready') : 'verification_failed';
+  const restartError = matches ? null : 'stage=runtime-account-verification: connected Codex does not confirm the selected authorization';
+  if (legacy) {
+    result = { ...result, restartHistory: result.restartHistory.map(record => record === legacy ? {
+      ...record, status,
+      ...(checkRecovery ? { recovery: { status: 'runtime_confirmed' } } : {}),
+      ...(restartError ? { failure: { stage: 'runtime_account_verification', message: restartError } } : {}),
+    } : record) };
+  }
+  return { ...result, restartStatus: checkRecovery ? 'ready' : status, restartError };
 }
 
 async function verifySwitchedRuntime(result, authFile, sendRequest, readFile = fs.readFile) {
@@ -113,6 +131,13 @@ async function verifySwitchedRuntime(result, authFile, sendRequest, readFile = f
       };
     }
     error.profileDiagnostic = diagnostic(error);
+    const legacy = result.restartHistory?.find(record => record.legacy && record.operationId === result.operationId);
+    if (legacy) {
+      const restartStatus = result.restartStatus === 'restarted' ? 'verification_failed' : result.restartStatus;
+      return { ...result, restartStatus, restartHistory: result.restartHistory.map(record => record === legacy ? {
+        ...record, status: restartStatus, recovery: { status: 'verification_required', failure: error.profileDiagnostic },
+      } : record) };
+    }
     console.error('[auth-profiles] %s', JSON.stringify(error.profileDiagnostic));
     throw error;
   }

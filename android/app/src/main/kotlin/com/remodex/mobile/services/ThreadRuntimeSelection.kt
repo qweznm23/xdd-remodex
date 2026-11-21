@@ -2,12 +2,32 @@ package com.remodex.mobile.services
 
 import com.remodex.mobile.core.model.CodexModelOption
 import com.remodex.mobile.core.model.CodexThread
+import com.remodex.mobile.core.model.JSONValue
 
 internal data class ThreadModelSelection(val modelId: String?, val reasoningEffort: String?)
 
 /** Explicit mobile choices belong to their conversation; desktop metadata is otherwise authoritative. */
 internal class ThreadRuntimeSelection(var defaults: ThreadModelSelection) {
     private val overrides = mutableMapOf<String, ThreadModelSelection>()
+
+    private data class Revision(val epoch: String, val revision: Long, val timestamp: Long)
+    private val revisions = mutableMapOf<String, Revision>()
+    private val fastThreads = mutableSetOf<String>()
+    @Synchronized fun fastTier(id: String?): Boolean = id in fastThreads
+
+    @Synchronized fun confirm(id: String, current: ThreadModelSelection, row: Map<String, JSONValue>): Boolean {
+        val next = Revision(row["epoch"]?.stringValue ?: return false, row["revision"]?.longValue ?: return false,
+            row["updatedAt"]?.longValue ?: return false)
+        val prev = revisions[id]
+        if (prev != null && (if (prev.epoch == next.epoch) next.revision <= prev.revision else next.timestamp <= prev.timestamp)) return false
+        revisions[id] = next
+        overrides[id] = ThreadModelSelection(if ("model" in row) row["model"]?.stringValue else current.modelId,
+            if ("reasoningEffort" in row) row["reasoningEffort"]?.stringValue else current.reasoningEffort)
+        if ("serviceTier" in row) {
+            if (row["serviceTier"]?.stringValue in setOf("priority", "fast")) fastThreads.add(id) else fastThreads.remove(id)
+        }
+        return true
+    }
 
     @Synchronized
     fun resolve(threadId: String?, threads: List<CodexThread>, models: List<CodexModelOption>): ThreadModelSelection {
@@ -42,6 +62,8 @@ internal class ThreadRuntimeSelection(var defaults: ThreadModelSelection) {
     @Synchronized
     fun reset(selection: ThreadModelSelection) {
         overrides.clear()
+        revisions.clear()
+        fastThreads.clear()
         defaults = selection
     }
 }

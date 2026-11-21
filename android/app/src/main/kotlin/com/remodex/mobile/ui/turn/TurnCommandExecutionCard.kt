@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.ui.theme.CodeFontFamily
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -9,14 +10,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,7 +32,6 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.R
@@ -41,10 +40,8 @@ import com.remodex.mobile.core.model.CommandExecutionDetails
 import com.remodex.mobile.data.TurnCommandExecutionPresentation
 import com.remodex.mobile.data.TurnCommandExecutionPreviewMerge
 import com.remodex.mobile.data.TurnTimelineRichContentCache
-import com.remodex.mobile.ui.theme.RemodexModalBottomSheet
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TurnCommandExecutionCard(
     message: CodexMessage,
@@ -103,17 +100,18 @@ private fun CommandOutputBlock(output: String) {
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
-        Text(
-            text = output,
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurface,
-            fontFamily = FontFamily.Monospace,
-            softWrap = false,
-        )
+        SelectionContainer {
+            Text(
+                text = output,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.onSurface,
+                fontFamily = CodeFontFamily,
+                softWrap = false,
+            )
+        }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CommandExecutionDetailSheet(
     preview: TurnCommandExecutionPresentation,
@@ -122,7 +120,6 @@ private fun CommandExecutionDetailSheet(
     accent: Color,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val fullCommand = preview.command.trim()
@@ -137,10 +134,7 @@ private fun CommandExecutionDetailSheet(
         }
     }
 
-    RemodexModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-    ) {
+    ChatDetailSheet(stringResource(R.string.turn_command_sheet_title), onDismiss) {
         Column(
             modifier =
                 Modifier
@@ -151,10 +145,6 @@ private fun CommandExecutionDetailSheet(
                     .padding(bottom = 26.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(
-                text = stringResource(R.string.turn_command_sheet_title),
-                style = MaterialTheme.typography.titleLarge,
-            )
             if (showPreviewSection) {
                 DetailSection(
                     title = stringResource(R.string.turn_command_sheet_section_command_preview),
@@ -264,7 +254,7 @@ private fun MetadataRow(
             text = value,
             style = MaterialTheme.typography.bodySmall,
             color = valueColor,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = CodeFontFamily,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(0.55f),

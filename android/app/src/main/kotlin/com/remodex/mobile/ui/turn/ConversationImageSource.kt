@@ -11,7 +11,11 @@ internal sealed interface ConversationImageSource {
     }
 }
 
+private val uploadedImagePath = Regex("""^(?:/|[A-Za-z]:[/\\]).*[/\\]remodex_uploads[/\\][0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}[/\\][^/\\]+$""")
+
 internal fun conversationImageSource(raw: String): ConversationImageSource {
+    // Uploaded paths are filesystem references and may contain literal URL delimiters.
+    if (uploadedImagePath.matches(raw)) return ConversationImageSource.Workspace(raw)
     val source = raw.trim()
     require(source.isNotEmpty()) { "Image source is empty stage=image_source" }
     if (source.startsWith("https://", true) || source.startsWith("http://", true)) {

@@ -1,5 +1,16 @@
 package com.remodex.mobile.ui.theme
 
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.staticCompositionLocalOf
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.ColumnScope
@@ -13,7 +24,6 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -25,28 +35,14 @@ object RemodexPopupChrome {
 
     @Composable
     fun surfaceColor(): Color =
-        if (isAgentLightChrome()) {
-            Color(0xFFFAF8F2).copy(alpha = 0.97f).compositeOver(MaterialTheme.colorScheme.background)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f)
-                .compositeOver(MaterialTheme.colorScheme.background)
-        }
+        if (isAgentLightChrome()) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceContainerHigh
 
     @Composable
-    fun borderWidth(): Dp =
-        if (isAgentLightChrome()) {
-            1.dp
-        } else {
-            0.5.dp
-        }
+    fun borderWidth(): Dp = 1.dp
 
     @Composable
     fun borderColor(accent: Boolean = false): Color =
-        when {
-            accent -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f)
-            isAgentLightChrome() -> AgentLightColors.Border
-            else -> Color.White.copy(alpha = 0.12f)
-        }
+        if (accent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
 
     @Composable
     fun borderStroke(accent: Boolean = false): BorderStroke =
@@ -61,20 +57,7 @@ object RemodexPopupChrome {
         }
 
     @Composable
-    fun tonalElevation() = if (isAgentLightChrome()) 0.dp else 2.dp
-
-    /** Subtle drop shadow for composer, env pills, and header icon buttons. */
-    @Composable
-    fun elevatedControlShadowElevation(): Dp =
-        if (isAgentLightChrome()) {
-            4.dp
-        } else {
-            2.dp
-        }
-
-    @Composable
-    fun elevatedControlShadowColor(): Color =
-        Color.Black.copy(alpha = if (isAgentLightChrome()) 0.055f else 0.085f)
+    fun tonalElevation() = 0.dp
 }
 
 @Composable
@@ -89,12 +72,14 @@ fun RemodexPopupSurface(
         modifier = modifier.border(RemodexPopupChrome.borderStroke(accentBorder), shape),
         shape = shape,
         color = RemodexPopupChrome.surfaceColor(),
+        contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = RemodexPopupChrome.tonalElevation(),
         shadowElevation = RemodexPopupChrome.shadowElevation(panel),
         content = content,
     )
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RemodexDropdownMenu(
     expanded: Boolean,
@@ -104,22 +89,21 @@ fun RemodexDropdownMenu(
     properties: PopupProperties = PopupProperties(focusable = true),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismissRequest,
-        modifier = modifier,
-        offset = offset,
-        properties = properties,
-        shape = RemodexPopupChrome.PopupShape,
-        containerColor = RemodexPopupChrome.surfaceColor(),
-        tonalElevation = RemodexPopupChrome.tonalElevation(),
-        shadowElevation = RemodexPopupChrome.shadowElevation(),
-        border = RemodexPopupChrome.borderStroke(),
-        content = content,
-    )
+    MaterialTheme(motionScheme = RemodexPopupMotion) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismissRequest,
+            modifier = modifier,
+            offset = offset,
+            properties = properties,
+            content = content,
+        )
+    }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+internal val LocalSheetClose = staticCompositionLocalOf<() -> Unit> { error("Close action requires a modal sheet") }
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RemodexModalBottomSheet(
     onDismissRequest: () -> Unit,
@@ -128,17 +112,31 @@ fun RemodexModalBottomSheet(
     sheetGesturesEnabled: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val panelShape = RemodexPopupChrome.PanelShape
-    // Border must not live on the sheet modifier: M3 sizes that node to the expanded slot,
-    // so a shaped border draws a taller outline than the visible sheet (especially in dark mode).
-    ModalBottomSheet(
-        modifier = modifier,
-        onDismissRequest = onDismissRequest,
-        sheetState = sheetState,
-        sheetGesturesEnabled = sheetGesturesEnabled,
-        shape = panelShape,
-        containerColor = RemodexPopupChrome.surfaceColor(),
-        tonalElevation = RemodexPopupChrome.tonalElevation(),
-        content = content,
-    )
+    val scope = rememberCoroutineScope()
+    val dismiss by rememberUpdatedState(onDismissRequest)
+    var hideJob by remember(sheetState) { mutableStateOf<Job?>(null) }
+    val close = {
+        if (hideJob?.isActive != true) {
+            hideJob = scope.launch {
+                sheetState.hide()
+                if (!sheetState.isVisible) dismiss()
+            }
+        }
+    }
+    MaterialTheme(motionScheme = RemodexPopupMotion) {
+        ModalBottomSheet(
+            modifier = modifier,
+            onDismissRequest = {
+                // Native Back and scrim dismissal own their own hide operation.
+                hideJob?.cancel()
+                dismiss()
+            },
+            sheetState = sheetState,
+            sheetGesturesEnabled = sheetGesturesEnabled,
+            containerColor = MaterialTheme.colorScheme.conversationColors().dialog,
+            scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = if (isAgentLightChrome()) 0.32f else 0.48f),
+        ) {
+            CompositionLocalProvider(LocalSheetClose provides close) { content() }
+        }
+    }
 }

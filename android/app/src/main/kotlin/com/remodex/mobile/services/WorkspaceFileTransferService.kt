@@ -101,16 +101,14 @@ internal class WorkspaceFileTransferService(private val repository: CodexReposit
     }
 
     suspend fun imagePreview(path: String, cwd: String?, dimension: Long): ByteArray {
-        val baseUrl = route()
+        val baseUrl = repository.fileTransferBaseUrl ?: return imagePreviewOverRpc(path, cwd, dimension)
         val row = try { prepare(path,cwd,"image",mapOf("maxPixelDimension" to JSONValue.NumLong(dimension))) }
         catch (failure: com.remodex.mobile.core.error.CodexServiceError.RpcFailure) {
             val code = failure.rpcError.data?.objectValue?.get("errorCode")?.stringValue
             if (failure.rpcError.code != -32601 && code !in setOf("stream_unavailable","unknown_method")) throw failure
             java.util.logging.Logger.getLogger("RemodexFile").log(java.util.logging.Level.INFO,"Bridge lacks binary previews; using legacy preview RPC",failure)
             try {
-                val preview = WorkspaceImageService(repository).readPreviewDataUrl(path,dimension,cwd)
-                    ?: throw FileTransferFailure("preview","missing_image","Image preview is empty")
-                return Base64.getDecoder().decode(preview.dataUrl.substringAfter(','))
+                return imagePreviewOverRpc(path, cwd, dimension)
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (error: Exception) { error.addSuppressed(failure); throw error }
         }
@@ -119,6 +117,12 @@ internal class WorkspaceFileTransferService(private val repository: CodexReposit
         val output = java.io.ByteArrayOutputStream()
         EncryptedFileStream().copy(baseUrl,ticket,output) {}
         return output.toByteArray()
+    }
+
+    private suspend fun imagePreviewOverRpc(path: String, cwd: String?, dimension: Long): ByteArray {
+        val preview = WorkspaceImageService(repository).readPreviewDataUrl(path, dimension, cwd)
+            ?: throw FileTransferFailure("preview", "missing_image", "Image preview is empty")
+        return Base64.getDecoder().decode(preview.dataUrl.substringAfter(','))
     }
 
     data class TextPage(val text: String, val nextOffset: Long)

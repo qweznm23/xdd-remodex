@@ -59,5 +59,23 @@ data class CodexMessage(
     val planState: CodexPlanState? = null,
     val subagentAction: CodexSubagentAction? = null,
     val structuredUserInputRequest: CodexStructuredUserInputRequest? = null,
+    /** Rollout user events and canonical history items have independent identifiers. */
+    val userMirrorId: String? = null,
     val orderIndex: Int = CodexMessageOrderCounter.next(),
+    /** Only explicitly public summary parts, indexed independently of raw reasoning and tool status. */
+    val reasoningSummary: Map<Int, String> = emptyMap(),
+    val reasoningSummaryFinal: Boolean = false,
+    /** In-process presentation time, never part of history or the wire format. */
+    @kotlinx.serialization.Transient val localSendNanos: Long? = null,
 )
+
+internal fun CodexMessage.hasConversationContent(): Boolean =
+    structuredUserInputRequest?.questions?.isNotEmpty() == true || role != CodexMessageRole.system && kind == CodexMessageKind.chat &&
+        (text.isNotBlank() || attachments.isNotEmpty())
+
+internal fun CodexMessage.visibleSummaryParts(): List<String> =
+    reasoningSummary.toSortedMap().values.flatMap { part ->
+        part.split("<!-- -->").mapNotNull { section ->
+            section.trim().removeSurrounding("**").trim().takeIf { it.isNotEmpty() }
+        }
+    }

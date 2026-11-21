@@ -22,7 +22,7 @@ private fun reasoningEffortMenuLabel(
     val knownTitle =
         when (key) {
             "low" -> titles.low
-            "medium" -> titles.medium
+            "medium", "mid" -> titles.medium
             "high" -> titles.high
             "xhigh", "extra_high" -> titles.xhigh
             else -> null
@@ -168,3 +168,11 @@ internal fun formatVoiceTranscriptionError(
         else ->
             e.message?.trim()?.takeIf { it.isNotEmpty() } ?: fallbackMessage
     }
+
+internal suspend fun reportSettingFailure(onError: (String) -> Unit, action: suspend () -> Unit) {
+    try { action() } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+    catch (failure: Exception) {
+        android.util.Log.e("RemodexRuntime", "thread/settings/update", failure)
+        onError(formatTurnSendError(failure))
+    }
+}

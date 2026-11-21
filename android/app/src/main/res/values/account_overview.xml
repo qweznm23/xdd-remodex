@@ -1,0 +1,16 @@
+<resources>
+    <string name="account_current_heading">Current account</string>
+    <string name="account_saved_group">Other authorizations</string>
+    <string name="account_access_until">Access token expires %1$s</string>
+    <string name="account_access_ended">Access token expired %1$s</string>
+    <string name="account_quota_not_read">Weekly balance not checked</string>
+    <string name="account_last_query">Checked %1$s</string>
+    <string name="account_check_quota">Check quota</string>
+    <string name="account_set_alias">Set alias</string>
+    <string name="account_edit_alias">Edit alias</string>
+    <string name="account_unnamed">Unnamed account</string>
+    <string name="account_saved_detail">Saved account</string>
+    <string name="account_sign_in_details">Sign-in details</string>
+    <string name="account_section_expanded">Expanded</string>
+    <string name="account_section_collapsed">Collapsed</string>
+</resources>

@@ -1,6 +1,7 @@
 package com.remodex.mobile.ui.turn
 
 import android.content.ClipData
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -37,7 +38,7 @@ import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.remodex.mobile.ui.theme.RemodexPreviewDialog
 import androidx.compose.ui.window.DialogProperties
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.TurnTimelineCacheKey
@@ -52,42 +53,49 @@ internal fun TurnRichMarkdownBody(
     modifier: Modifier = Modifier,
     keyPrefix: String = TurnTimelineCacheKey.textKey("rich-markdown", markdown),
     linkColor: Color = contentColor,
+    fitProse: Boolean = false,
+    assistantProse: Boolean = false,
 ) {
-    val segments = TurnTimelineRichContentCache.parseMermaidMarkdown(markdown)
-    if (segments == null) {
-        TurnMarkdownBody(
-            markdown = markdown,
-            contentColor = contentColor,
-            modifier = modifier,
-            keyPrefix = keyPrefix,
-            linkColor = linkColor,
-        )
-        return
-    }
+    SelectionContainer(modifier) {
+        val segments = TurnTimelineRichContentCache.parseMermaidMarkdown(markdown)
+        if (segments == null) {
+            TurnMarkdownBody(
+                markdown = markdown,
+                contentColor = contentColor,
+                modifier = Modifier,
+                keyPrefix = keyPrefix,
+                linkColor = linkColor,
+                fitProse = fitProse,
+                assistantProse = assistantProse,
+            )
+            return@SelectionContainer
+        }
 
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        segments.forEachIndexed { index, segment ->
-            when (segment.kind) {
-                TurnMarkdownSegmentKind.markdown -> {
-                    if (segment.text.isNotBlank()) {
-                        TurnMarkdownBody(
-                            markdown = segment.text,
-                            contentColor = contentColor,
-                            modifier = Modifier.fillMaxWidth(),
-                            keyPrefix = "$keyPrefix-md-$index",
-                            linkColor = linkColor,
-                        )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            segments.forEachIndexed { index, segment ->
+                when (segment.kind) {
+                    TurnMarkdownSegmentKind.markdown -> {
+                        if (segment.text.isNotBlank()) {
+                            TurnMarkdownBody(
+                                markdown = segment.text,
+                                contentColor = contentColor,
+                                modifier = Modifier.fillMaxWidth(),
+                                keyPrefix = "$keyPrefix-md-$index",
+                                assistantProse = assistantProse,
+                                linkColor = linkColor,
+                            )
+                        }
                     }
-                }
-                TurnMarkdownSegmentKind.mermaid -> {
-                    if (segment.text.isNotBlank()) {
-                        TurnMermaidFallbackCard(
-                            code = segment.text,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                    TurnMarkdownSegmentKind.mermaid -> {
+                        if (segment.text.isNotBlank()) {
+                            TurnMermaidFallbackCard(
+                                code = segment.text,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
             }
@@ -185,7 +193,7 @@ private fun TurnMermaidPreviewDialog(
         onDispose { previewState.dispose() }
     }
 
-    Dialog(
+    RemodexPreviewDialog(
         onDismissRequest = onDismiss,
         properties =
             DialogProperties(

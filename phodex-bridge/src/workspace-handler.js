@@ -45,7 +45,7 @@ const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
 /** Match git-handler.js: Node default maxBuffer is 1 MiB. */
 const GIT_EXEC_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const repoMutationLocks = new Map();
-const { createWorkspaceUploadHandler, uploadMethods } = require('./workspace-upload');
+const { createWorkspaceUploadHandler, workspaceUploadRoot, isCompletedUploadPath, uploadMethods } = require('./workspace-upload');
 const workspaceUpload = createWorkspaceUploadHandler();
 const fileStreams = process.env.REMODEX_FILE_STREAM_PORT ? require('./file-stream').createFileStreams() : null;
 if (fileStreams) fileStreams.server.listen(Number(process.env.REMODEX_FILE_STREAM_PORT), '127.0.0.1').unref();
@@ -155,13 +155,9 @@ function downloadRevision(stat) {
 
 // Every request is scoped to the paired workspace; only a bounded chunk crosses the relay.
 async function workspaceDownloadFile(method, params) {
-  const requested = firstNonEmptyString([params.path, params.filePath]);
+  const requested = workspaceAttachmentPath(params);
   if (!requested) throw workspaceError("missing_file_path", "The request must include a file path.");
-  const cwd = await resolveWorkspaceCwd(params);
-  const root = await resolveReadableWorkspaceRoot(cwd);
-  const resolved = await resolveWorkspaceTextFilePath(cwd, requested, root);
-  if (!resolved) throw workspaceError("file_not_found", "The file no longer exists on this computer.");
-  if (!root || !isPathInside(resolved, root)) throw workspaceError("file_path_not_allowed", "Only files in the current workspace can be downloaded.");
+  const resolved = await resolveReadableAttachmentPath(params, requested);
   const file = await fs.promises.open(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
   let primaryError;
   try {
@@ -247,20 +243,12 @@ async function prepareFileTransfer(params) {
 
 // Reads a UTF-8 text file from the active workspace for the phone-side read-only viewer.
 async function workspaceReadFile(params) {
-  const requestedPath = firstNonEmptyString([params.path, params.filePath, params.localPath]);
+  const requestedPath = workspaceAttachmentPath(params);
   if (!requestedPath) {
     throw workspaceError("missing_file_path", "The request must include a file path.");
   }
 
-  const cwd = await resolveWorkspaceCwd(params);
-  const realWorkspaceRoot = await resolveReadableWorkspaceRoot(cwd);
-  const realFilePath = await resolveWorkspaceTextFilePath(cwd, requestedPath, realWorkspaceRoot);
-  if (!realFilePath) {
-    throw workspaceError("file_not_found", "The file no longer exists on this Mac.");
-  }
-  if (!realWorkspaceRoot || !isPathInside(realFilePath, realWorkspaceRoot)) {
-    throw workspaceError("file_path_not_allowed", "Only files in the current workspace can be viewed.");
-  }
+  const realFilePath = await resolveReadableAttachmentPath(params, requestedPath);
 
   const stat = await fs.promises.stat(realFilePath);
   if (!stat.isFile()) {
@@ -299,9 +287,39 @@ async function workspaceReadFile(params) {
   };
 }
 
+async function resolveReadableAttachmentPath(params, requested) {
+  const uploadRoot = workspaceUploadRoot();
+  if (isCompletedUploadPath(uploadRoot, requested)) {
+    try {
+      return await resolveCompletedUpload(uploadRoot, requested, 'file_path_not_allowed');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      throw Object.assign(workspaceError('file_not_found', 'The uploaded file no longer exists on this computer.'), { cause: error });
+    }
+  }
+  const cwd = await resolveWorkspaceCwd(params);
+  const root = await resolveReadableWorkspaceRoot(cwd);
+  const resolved = await resolveWorkspaceTextFilePath(cwd, requested, root);
+  if (!resolved) throw workspaceError('file_not_found', 'The file no longer exists on this computer.');
+  if (!root || !isPathInside(resolved, root)) throw workspaceError('file_path_not_allowed', 'Only files in the current workspace or completed uploads can be read.');
+  return resolved;
+}
+
+function workspaceAttachmentPath(params) {
+  const candidates = [params.path, params.filePath, params.localPath];
+  const root = workspaceUploadRoot();
+  return candidates.find(candidate => isCompletedUploadPath(root, candidate)) || firstNonEmptyString(candidates);
+}
+
+async function resolveCompletedUpload(root, candidate, errorCode) {
+  const [realRoot, resolved] = await Promise.all([fs.promises.realpath(root), fs.promises.realpath(candidate)]);
+  if (!isCompletedUploadPath(realRoot, resolved)) throw workspaceError(errorCode, 'The path must refer to a completed upload.');
+  return resolved;
+}
+
 // Reads recognized local image files from the bound repo, Codex image cache, or host temp screenshot folders.
 async function workspaceReadImage(params) {
-  const requestedPath = firstNonEmptyString([params.path, params.filePath, params.localPath]);
+  const requestedPath = workspaceAttachmentPath(params);
   if (!requestedPath) {
     throw workspaceError("missing_image_path", "The request must include an image path.");
   }
@@ -323,16 +341,18 @@ async function workspaceReadImage(params) {
     throw workspaceError("image_not_found", "The image file no longer exists on this Mac.");
   }
 
-  const [realWorkspaceRoot, realTempRoots] = await Promise.all([
+  const [realWorkspaceRoot, realTempRoots, realUploadRoot] = await Promise.all([
     cwd ? resolveImageWorkspaceRoot(cwd) : null,
     realTemporaryImageRoots(),
+    realpathOrNull(workspaceUploadRoot()),
   ]);
   const isAllowed =
     (realWorkspaceRoot && isPathInside(realImagePath, realWorkspaceRoot))
     || (realGeneratedImagesRoot && isPathInside(realImagePath, realGeneratedImagesRoot))
+    || (realUploadRoot && isCompletedUploadPath(realUploadRoot, realImagePath))
     || realTempRoots.some((tempRoot) => isPathInside(realImagePath, tempRoot));
   if (!isAllowed) {
-    throw workspaceError("image_path_not_allowed", "Only images in this workspace, Codex generated images, or temporary screenshot files can be previewed.");
+    throw workspaceError("image_path_not_allowed", "Only images in this workspace, completed uploads, Codex generated images, or temporary screenshots can be previewed.");
   }
 
   const stat = await fs.promises.stat(realImagePath);
@@ -423,6 +443,10 @@ async function sniffImageMimeType(filePath) {
     return null;
   }
 
+  return imageMimeTypeFromHeader(header);
+}
+
+function imageMimeTypeFromHeader(header) {
   if (header.length >= 8 && header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
     return "image/png";
   }
@@ -440,6 +464,70 @@ async function sniffImageMimeType(filePath) {
   }
 
   return null;
+}
+
+// A runtime on another filesystem needs the original bytes inline. The normal
+// local Codex path uses localImage and avoids reading the upload into the bridge.
+async function inlineUploadedTurnImages(message, root = workspaceUploadRoot()) {
+  if (!['turn/start', 'turn/steer'].includes(message?.method) || !Array.isArray(message?.params?.input)) return message;
+  const items = message.params.input;
+  const isUpload = (item) => item?.type === 'localImage' && isCompletedUploadPath(root, item.path);
+  if (!items.some(isUpload)) return message;
+  try {
+    return await encodeUploadedTurnImages(message, isUpload, root);
+  } catch (error) {
+    error.attachmentStage = 'uploaded_image_input';
+    if (!error.errorCode) error.errorCode = 'image_upload_read_failed';
+    throw error;
+  }
+}
+
+async function encodeUploadedTurnImages(message, isUpload, root) {
+  const input = [];
+  let remaining = MAX_IMAGE_READ_BYTES;
+  for (const item of message.params.input) {
+    if (!isUpload(item)) {
+      input.push(item);
+      continue;
+    }
+    const realPath = await resolveCompletedUpload(root, item.path, 'image_path_not_allowed');
+    const { bytes, mimeType } = await readUploadedTurnImage(realPath, remaining);
+    remaining -= bytes.length;
+    const image = { type: 'image', url: `data:${mimeType};base64,${bytes.toString('base64')}` };
+    if (item.detail != null) image.detail = item.detail;
+    input.push(image);
+  }
+  return { ...message, params: { ...message.params, input } };
+}
+
+async function readUploadedTurnImage(filePath, remaining) {
+  const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  let failure;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size === 0) throw workspaceError('invalid_uploaded_image', 'Uploaded image is empty or is not a regular file.');
+    if (stat.size > remaining) throw workspaceError('inline_upload_images_too_large', 'This runtime needs inline images. Uploaded images in one message must total at most 8 MiB.');
+    const bytes = Buffer.alloc(stat.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length !== stat.size) throw workspaceError('uploaded_image_changed', 'The uploaded image changed while reading it.');
+    const mimeType = imageMimeTypeFromHeader(bytes.subarray(0, Math.min(length, 512)));
+    if (!mimeType || mimeType === 'image/svg+xml') throw workspaceError('unsupported_uploaded_image_type', 'This runtime requires a PNG, JPEG, WebP, or GIF image.');
+    return { bytes: bytes.subarray(0, length), mimeType };
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try { await handle.close(); }
+    catch (error) {
+      if (!failure) throw error;
+      failure.suppressed = [...(failure.suppressed || []), error];
+    }
+  }
 }
 
 function looksLikeSVGHeader(header) {
@@ -1552,4 +1640,4 @@ function git(cwd, ...args) {
     });
 }
 
-module.exports = { handleWorkspaceMethod, handleWorkspaceRequest, workspaceImageResponseFits };
+module.exports = { handleWorkspaceMethod, handleWorkspaceRequest, workspaceImageResponseFits, inlineUploadedTurnImages, downloadErrorDiagnostic };

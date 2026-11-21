@@ -19,7 +19,9 @@ internal object HistoryMessageMerge {
         fun same(a: CodexMessage, b: CodexMessage) = a.turnId == b.turnId &&
             a.role == b.role && a.kind == b.kind && !a.itemId.isNullOrBlank() && a.itemId == b.itemId
         incoming.forEachIndexed { position, row ->
-            val index = out.indexOfFirst { same(it, row) }
+            val exact = out.indexOfFirst { same(it, row) }
+            val index = if (exact >= 0 || row.role != CodexMessageRole.user) exact
+                else out.indexOfFirst { isCompatibleUserChatDuplicate(it, row) }
             if (index >= 0) {
                 val current = out[index]
                 // Reuse existing snapshot reconciliation, scoped to this single stable item.
@@ -124,7 +126,9 @@ internal object HistoryMessageMerge {
                     merged.indexOfLast { existingMessage ->
                         existingMessage.role == CodexMessageRole.system &&
                             existingMessage.kind == CodexMessageKind.thinking &&
-                            existingMessage.turnId == m.turnId
+                            existingMessage.turnId == m.turnId &&
+                            (existingMessage.itemId == m.itemId ||
+                                (existingMessage.reasoningSummary.isEmpty() && m.reasoningSummary.isEmpty()))
                     }
                 if (thinkingIndex >= 0) {
                     val current = merged[thinkingIndex]
@@ -222,9 +226,11 @@ internal object HistoryMessageMerge {
                 continue
             }
 
-            val duplicateUserIndex = merged.indexOfLast { existingMessage ->
-                isCompatibleUserChatDuplicate(existingMessage, m)
-            }
+            val duplicateUserIndex = if (m.role == CodexMessageRole.user) {
+                val exact = merged.indexOfFirst { it.turnId == m.turnId && it.role == m.role &&
+                    m.itemId != null && it.itemId == m.itemId }
+                if (exact >= 0) exact else merged.indexOfFirst { isCompatibleUserChatDuplicate(it, m) }
+            } else -1
             if (duplicateUserIndex >= 0) {
                 val current = merged[duplicateUserIndex]
                 keys.remove(historyKey(current))
@@ -265,7 +271,6 @@ internal object HistoryMessageMerge {
         for ((turnId, turnHistory) in incomingByTurn) {
             val indexed = out.withIndex().filter { it.value.turnId == turnId }
             if (indexed.size < 2) continue
-            val firstIndex = indexed.first().index
             val ranked =
                 indexed.map { entry ->
                     RankedTurnMessage(
@@ -291,9 +296,8 @@ internal object HistoryMessageMerge {
                         orderedMatches.next()
                     }
                 }
-            val rebuilt = out.filterNot { it.turnId == turnId }.toMutableList()
-            val insertionIndex = firstIndex.coerceAtMost(rebuilt.size)
-            rebuilt.addAll(insertionIndex, orderedTurn)
+            val rebuilt = out.toMutableList()
+            indexed.forEachIndexed { position, entry -> rebuilt[entry.index] = orderedTurn[position] }
             out = rebuilt
         }
         return out
@@ -354,7 +358,8 @@ internal object HistoryMessageMerge {
                 messages.indexOfFirst { message ->
                     message.turnId == turnId && message.role != CodexMessageRole.user
                 }
-            if (firstSameTurnNonUser >= 0) return firstSameTurnNonUser
+            if (firstSameTurnNonUser >= 0 && messages.none { it.turnId == turnId && it.role == CodexMessageRole.user })
+                return firstSameTurnNonUser
         }
         val lastSameTurn =
             messages.indexOfLast { message -> message.turnId == turnId }
@@ -364,17 +369,18 @@ internal object HistoryMessageMerge {
     private fun historyKey(m: CodexMessage): String {
         val item = m.itemId?.trim()?.takeIf { it.isNotEmpty() }
         if (item != null) {
-            return "item:${m.role}:${m.kind}:$item"
+            return "item:${m.turnId}:${m.role}:${m.kind}:$item"
         }
         val normalizedText = normalizedMessageText(m.text)
         return "${m.role}|${m.kind}|${m.turnId}|${m.createdAt}|${normalizedText.length}:${normalizedText.hashCode()}"
     }
 
-    private fun isCompatibleUserChatDuplicate(
+    internal fun isCompatibleUserChatDuplicate(
         existing: CodexMessage,
         incoming: CodexMessage,
     ): Boolean {
         if (existing.role != CodexMessageRole.user || incoming.role != CodexMessageRole.user) return false
+        if (existing.isRpcAnswerReceipt || incoming.isRpcAnswerReceipt) return existing.id == incoming.id
         if (existing.kind != CodexMessageKind.chat || incoming.kind != CodexMessageKind.chat) return false
         if (normalizedMessageText(existing.text) != normalizedMessageText(incoming.text)) return false
         if (!isUserChatMergeEligible(existing, incoming)) return false
@@ -389,10 +395,15 @@ internal object HistoryMessageMerge {
         val incomingItem = incoming.itemId?.trim()?.takeIf { it.isNotEmpty() }
         val existingTurn = existing.turnId?.trim()?.takeIf { it.isNotEmpty() }
         val incomingTurn = incoming.turnId?.trim()?.takeIf { it.isNotEmpty() }
-        if (existingItem != null && incomingItem != null && existingItem != incomingItem) {
-            return existingTurn != null && existingTurn == incomingTurn
+        if (!compatibleTurnIds(existingTurn, incomingTurn)) return false
+        if (existing.userMirrorId != null && incoming.userMirrorId != null &&
+            existing.userMirrorId != incoming.userMirrorId) return false
+        if (existingItem != null && incomingItem != null) {
+            if (existingItem == incomingItem) return true
+            // Desktop IPC may synthesize the opening item before the canonical snapshot arrives.
+            return existingTurn != null && existingTurn == incomingTurn &&
+                (existingItem == "$existingTurn:input" || incomingItem == "$existingTurn:input")
         }
-        if (existingItem != null && incomingItem != null) return true
 
         if (existingTurn != null && incomingTurn != null) return existingTurn == incomingTurn
 
@@ -409,7 +420,9 @@ internal object HistoryMessageMerge {
         existing.copy(
             text = incoming.text.ifBlank { existing.text },
             turnId = incoming.turnId ?: existing.turnId,
-            itemId = incoming.itemId ?: existing.itemId,
+            itemId = if (incoming.itemId == "${incoming.turnId}:input") existing.itemId ?: incoming.itemId
+                else incoming.itemId ?: existing.itemId,
+            userMirrorId = incoming.userMirrorId ?: existing.userMirrorId,
             isStreaming = false,
             deliveryState = CodexMessageDeliveryState.confirmed,
             attachments =
@@ -462,6 +475,9 @@ internal object HistoryMessageMerge {
         incoming: CodexMessage,
     ): CodexMessage =
         existing.copy(
+            reasoningSummary = existing.reasoningSummary + incoming.reasoningSummary.mapValues { (index, value) ->
+                existing.reasoningSummary[index]?.takeIf { it.startsWith(value) } ?: value
+            },
             text = mergeSnapshot(existing.text, incoming.text),
             turnId = incoming.turnId ?: existing.turnId,
             itemId = incoming.itemId ?: existing.itemId,
@@ -519,7 +535,7 @@ internal object HistoryMessageMerge {
         val result = mutableListOf<CodexMessage>()
         for (message in this) {
             val duplicateIndex =
-                result.indexOfLast { candidate ->
+                result.indexOfFirst { candidate ->
                     isCompatibleUserChatDuplicate(candidate, message)
                 }
             if (duplicateIndex >= 0) {
@@ -609,5 +625,27 @@ internal object HistoryMessageMerge {
         if (incoming.length > existing.length && incoming.startsWith(existing)) return incoming
         if (existing.length > incoming.length && existing.startsWith(incoming)) return existing
         return incoming
+    }
+}
+
+/** Rebind a synthetic turn only when stable item identities agree one-to-one on its canonical turn. */
+internal fun reconcileDesktopTurnAliases(cached: List<CodexMessage>, page: List<CodexMessage>): List<CodexMessage> {
+    if (cached.none { it.turnId?.startsWith("ipc-turn-") == true }) return cached
+    fun identity(row: CodexMessage) = Triple(row.itemId, row.role, row.kind)
+    val canonical = page.filter { !it.turnId.isNullOrBlank() && !it.turnId.startsWith("ipc-turn-") && !it.itemId.isNullOrBlank() }
+        .groupBy(::identity)
+    val aliases = cached.filter { it.turnId?.startsWith("ipc-turn-") == true }.groupBy { it.turnId }
+        .mapValues { (_, rows) -> rows.flatMap { row -> canonical[identity(row)].orEmpty().mapNotNull { it.turnId } }.distinct().singleOrNull() }
+    val owners = aliases.values.filterNotNull().groupingBy { it }.eachCount()
+    val existing = cached.filter { !it.turnId.isNullOrBlank() && !it.turnId.startsWith("ipc-turn-") && !it.itemId.isNullOrBlank() }
+        .mapTo(hashSetOf()) { it.turnId to identity(it) }
+    return cached.mapNotNull { row ->
+        val target = aliases[row.turnId]
+        when {
+            target == null || owners[target] != 1 -> row
+            row.deliveryState == com.remodex.mobile.core.model.CodexMessageDeliveryState.confirmed &&
+                (target to identity(row)) in existing -> null
+            else -> row.copy(turnId = target)
+        }
     }
 }

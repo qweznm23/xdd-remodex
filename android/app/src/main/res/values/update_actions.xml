@@ -1,0 +1,17 @@
+<resources>
+    <string name="update_available">New version available</string>
+    <string name="update_setup">Set update source</string>
+    <string name="update_downloading">Downloading update</string>
+    <string name="update_ready">Ready to install</string>
+    <string name="update_download_failed">Download or verification failed</string>
+    <string name="update_install_failed">Could not open installer</string>
+    <string name="update_check_failed">Could not check for updates</string>
+    <string name="update_opening_installer">Opening installer…</string>
+    <string name="update_retry_download">Retry download</string>
+    <string name="update_retry_check">Retry check</string>
+    <string name="update_authorize_install">Allow installation</string>
+    <string name="update_release_notes">Release notes</string>
+    <string name="update_custom_source">Custom address</string>
+    <string name="update_no_connection">Pair a device to use its update source.</string>
+    <string name="update_invalid_source">Enter an HTTP or HTTPS address without credentials or a fragment.</string>
+</resources>

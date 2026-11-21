@@ -1,15 +1,20 @@
 package com.remodex.mobile.ui.theme
 
+import androidx.compose.foundation.layout.fillMaxSize
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.os.Build
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.text.font.FontFamily
+import com.remodex.mobile.data.CustomFonts
+import com.remodex.mobile.data.FontSlot
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,10 +80,10 @@ private val DarkColorScheme =
         onError = RemodexDarkOnError,
     )
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RemodexTheme(
     darkTheme: Boolean = false,
-    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
@@ -100,25 +105,39 @@ fun RemodexTheme(
             prefs.unregisterOnSharedPreferenceChangeListener(listener)
         }
     }
-    val colorScheme =
-        when {
-            dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-                if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            }
-            darkTheme -> DarkColorScheme
-            else -> LightColorScheme
-        }
+    AppPaletteProvider {
+        RemodexThemeContent(darkTheme, appFontStyle, content)
+    }
+}
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun RemodexThemeContent(darkTheme: Boolean, appFontStyle: AppFontStyle, content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    val colorScheme = appColorScheme(if (darkTheme) DarkColorScheme else LightColorScheme, darkTheme)
     RemodexSystemBars(
         background = colorScheme.background,
         darkTheme = darkTheme,
     )
 
-    MaterialTheme(
+    val fonts by CustomFonts.slots.collectAsState()
+    LaunchedEffect(context) { CustomFonts.load(context.applicationContext) }
+    val interfaceFace = fonts[FontSlot.Interface]?.font?.face
+    val replyFace = fonts[FontSlot.Reply]?.font?.face
+    val typography = remember(appFontStyle, interfaceFace) {
+        remodexTypography(appFontStyle, interfaceFace?.let { FontFamily(it) })
+    }
+    val replyFont = remember(replyFace) { replyFace?.let { FontFamily(it) } }
+    MaterialExpressiveTheme(
         colorScheme = colorScheme,
-        typography = remodexTypography(appFontStyle),
+        typography = typography,
         shapes = RemodexShapes,
-        content = content,
+        content = {
+            CompositionLocalProvider(LocalReplyFont provides replyFont) {
+                androidx.compose.material3.Surface(modifier = androidx.compose.ui.Modifier.fillMaxSize(),
+                    color = colorScheme.background, contentColor = colorScheme.onBackground, content = content)
+            }
+        },
     )
 }
 

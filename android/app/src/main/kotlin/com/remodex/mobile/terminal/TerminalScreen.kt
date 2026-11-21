@@ -1,15 +1,18 @@
 package com.remodex.mobile.terminal
 
+import com.remodex.mobile.ui.theme.singleOwnerPageEntry
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material3.DropdownMenuItem
+import com.remodex.mobile.ui.theme.RemodexDropdownMenu
+import com.remodex.mobile.ui.theme.RemodexPageHeader
+import com.remodex.mobile.ui.theme.conversationColors
 import android.content.ClipboardManager
 import android.content.Context
-import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,25 +20,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import com.remodex.mobile.ui.theme.RemodexAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,24 +47,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import com.remodex.mobile.R
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.remodex.mobile.AppContainer
-import com.remodex.mobile.ui.sidebar.RemodexCircleIconButton
+import com.remodex.mobile.R
 import com.remodex.mobile.ui.sidebar.rememberSidebarColorPalette
-import com.remodex.mobile.ui.sidebar.remodexFlatControlChrome
-import com.remodex.mobile.ui.theme.RemodexPopupSurface
 import kotlinx.coroutines.launch
 
 @Composable
@@ -171,13 +169,14 @@ fun TerminalScreen(
     val selectedProfile = state.selectedProfile
     val selectedSession = state.selectedSession
     val connected = selectedSession?.status == TerminalStatus.Connected
+    var showActions by remember(state.surface) { mutableStateOf(false) }
     var showSessions by remember { mutableStateOf(false) }
     var showWindowsHelp by remember { mutableStateOf(false) }
     val colors = rememberSidebarColorPalette()
     val title =
         when (state.surface) {
-            TerminalSurface.Profiles -> "Terminal"
-            TerminalSurface.Editor -> if (state.editor?.id == null) "New profile" else "Edit profile"
+            TerminalSurface.Profiles -> stringResource(R.string.sidebar_terminal)
+            TerminalSurface.Editor -> stringResource(if (state.editor?.id == null) R.string.terminal_profile_create else R.string.terminal_profile_edit)
             TerminalSurface.Session -> selectedProfile?.displayLabel ?: "Terminal"
         }
     val onBack =
@@ -189,80 +188,43 @@ fun TerminalScreen(
 
     Scaffold(
         modifier = modifier,
-        containerColor = colors.background,
+        containerColor = MaterialTheme.colorScheme.conversationColors().reading,
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = title,
-                            style =
-                                MaterialTheme.typography.titleLarge.copy(
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold,
-                                ),
-                            color = colors.primaryText,
-                        )
-                        if (state.surface == TerminalSurface.Session && selectedProfile != null) {
-                            Text(
-                                text = "${selectedSession?.status?.name ?: TerminalStatus.Idle.name} - ${selectedProfile.username}@${selectedProfile.host}:${selectedProfile.port}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = colors.secondaryText,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    RemodexCircleIconButton(
-                        onClick = onBack,
-                        contentDescription = "Back",
-                        colors = colors,
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                            tint = colors.primaryText,
-                        )
-                    }
-                },
+            RemodexPageHeader(
+                title = title,
+                onBack = onBack,
+                subtitle = if (state.surface == TerminalSurface.Session && selectedProfile != null)
+                    "${selectedSession?.status?.name ?: TerminalStatus.Idle.name} · ${selectedProfile.username}@${selectedProfile.host}:${selectedProfile.port}" else null,
                 actions = {
-                    if (state.surface == TerminalSurface.Profiles) {
+                    if (state.surface == TerminalSurface.Session) {
+                        val canDisconnect = connected || selectedSession?.status == TerminalStatus.Connecting
                         TerminalTopBarAction(
-                            text = "Help",
-                            onClick = { showWindowsHelp = true },
+                            text = stringResource(if (canDisconnect) R.string.terminal_action_disconnect else R.string.terminal_action_connect),
+                            onClick = if (canDisconnect) onDisconnect else onConnect,
+                            destructive = canDisconnect,
+                            emphasis = !canDisconnect,
                         )
                     }
-                    if (state.surface == TerminalSurface.Session) {
-                        TerminalTopBarAction(
-                            text = "Help",
-                            onClick = { showWindowsHelp = true },
-                        )
-                        TerminalTopBarAction(
-                            text = "Sessions",
-                            onClick = { showSessions = !showSessions },
-                            emphasis = showSessions,
-                        )
-                        if (connected || selectedSession?.status == TerminalStatus.Connecting) {
-                            TerminalTopBarAction(
-                                text = "Disconnect",
-                                onClick = onDisconnect,
-                                destructive = true,
-                            )
-                        } else {
-                            TerminalTopBarAction(
-                                text = "Connect",
-                                onClick = onConnect,
-                                emphasis = true,
-                            )
+                    if (state.surface != TerminalSurface.Editor) {
+                        Box {
+                            IconButton(onClick = { showActions = true }) {
+                                Icon(Icons.Outlined.MoreVert, stringResource(R.string.sidebar_more_menu_cd))
+                            }
+                            RemodexDropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+                                if (state.surface == TerminalSurface.Session) {
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.terminal_action_sessions)) }, onClick = {
+                                        showActions = false
+                                        showSessions = !showSessions
+                                    })
+                                }
+                                DropdownMenuItem(text = { Text(stringResource(R.string.terminal_action_help)) }, onClick = {
+                                    showActions = false
+                                    showWindowsHelp = true
+                                })
+                            }
                         }
                     }
                 },
-                colors =
-                    TopAppBarDefaults.topAppBarColors(
-                        containerColor = colors.background,
-                        scrolledContainerColor = colors.background,
-                    ),
             )
         },
     ) { innerPadding ->
@@ -270,7 +232,8 @@ fun TerminalScreen(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .singleOwnerPageEntry(state.surface) { _, to -> to == TerminalSurface.Profiles },
         ) {
             cdHint?.trim()?.takeIf { it.isNotEmpty() }?.let { path ->
                 Text(
@@ -341,32 +304,13 @@ fun TerminalScreen(
     }
 
     if (showWindowsHelp) {
-        Dialog(
+        RemodexAlertDialog(
             onDismissRequest = { showWindowsHelp = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-        ) {
-            RemodexPopupSurface(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                panel = true,
-            ) {
-                Column(
-                    modifier =
-                        Modifier
-                            .padding(18.dp)
-                            .heightIn(max = 560.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    TerminalWindowsSetupGuide(scrollable = true)
-                    TerminalPrimaryButton(
-                        text = "Close",
-                        onClick = { showWindowsHelp = false },
-                    )
-                }
-            }
-        }
+            text = { TerminalWindowsSetupGuide(scrollable = true) },
+            confirmButton = { TextButton(onClick = { showWindowsHelp = false }) {
+                Text(stringResource(android.R.string.ok))
+            } },
+        )
     }
 }
 
@@ -394,42 +338,17 @@ private fun TerminalSessionSidebar(
         sessions.forEach { session ->
             val profile = profiles.firstOrNull { it.id == session.profileId }
             val selected = session.id == selectedSessionId
-            Column(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .remodexFlatControlChrome(TerminalFieldShape)
-                        .then(
-                            if (selected) {
-                                Modifier.border(1.5.dp, colors.accent, TerminalFieldShape)
-                            } else {
-                                Modifier
-                            },
-                        )
-                        .clickable { onSelectSession(session.id) }
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+            Surface(
+                selected = selected,
+                onClick = { onSelectSession(session.id) },
+                shape = MaterialTheme.shapes.medium,
+                color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
             ) {
-                Text(
-                    text = profile?.displayLabel ?: "Terminal",
-                    style =
-                        MaterialTheme.typography.labelMedium.copy(
-                            fontSize = 12.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        ),
-                    color = colors.primaryText,
-                    maxLines = 2,
-                )
-                Text(
-                    text = session.status.name,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                    color = if (selected) colors.accent else colors.mutedText,
-                )
-                TerminalTextAction(
-                    text = "Close",
-                    onClick = { onCloseSession(session.id) },
-                    destructive = true,
-                )
+                Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(profile?.displayLabel ?: "Terminal", style = MaterialTheme.typography.labelLarge, maxLines = 2)
+                    Text(session.status.name, style = MaterialTheme.typography.bodySmall)
+                    TerminalTextAction(text = "Close", onClick = { onCloseSession(session.id) }, destructive = true)
+                }
             }
         }
         TerminalSecondaryButton(
@@ -458,13 +377,13 @@ private fun TerminalProfilesContent(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         TerminalPrimaryButton(
-            text = "Create profile",
+            text = stringResource(R.string.terminal_profile_create),
             onClick = onCreateProfile,
         )
         if (profiles.isEmpty()) {
-            TerminalEmptyState(text = "No terminal profiles yet.")
+            TerminalEmptyState(text = stringResource(R.string.terminal_profile_empty))
         } else {
-            TerminalSectionTitle(text = "Saved profiles")
+            TerminalSectionTitle(text = stringResource(R.string.terminal_profile_saved))
         }
         profiles.forEach { profile ->
             TerminalSavedProfileRow(
@@ -485,58 +404,25 @@ private fun TerminalSavedProfileRow(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val colors = rememberSidebarColorPalette()
-    Row(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .remodexFlatControlChrome(TerminalFieldShape)
-                .padding(start = 18.dp, end = 10.dp, top = 16.dp, bottom = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = profile.displayLabel,
-                style =
-                    MaterialTheme.typography.titleMedium.copy(
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                color = colors.primaryText,
-                maxLines = 1,
-            )
-            Text(
-                text = "${profile.username}@${profile.host}:${profile.port}",
-                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                color = colors.secondaryText,
-                maxLines = 1,
-            )
-        }
-        IconButton(onClick = onEdit) {
-            Icon(
-                imageVector = Icons.Outlined.Edit,
-                contentDescription = "Edit profile",
-                tint = colors.secondaryText,
-            )
-        }
-        TerminalPrimaryButton(
-            text = "Open",
-            onClick = onOpen,
-            modifier = Modifier.width(74.dp),
-            fullWidth = false,
-        )
-        IconButton(onClick = onDelete) {
-            Icon(
-                imageVector = Icons.Outlined.Delete,
-                contentDescription = "Delete profile",
-                tint = colors.secondaryText,
-            )
-        }
-    }
+    var menuOpen by remember(profile.id) { mutableStateOf(false) }
+    ListItem(
+        modifier = modifier.clickable(onClick = onOpen),
+        headlineContent = { Text(profile.displayLabel) },
+        supportingContent = { Text("${profile.username}@${profile.host}:${profile.port}") },
+        trailingContent = {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Outlined.MoreVert, stringResource(R.string.sidebar_more_menu_cd))
+                }
+                RemodexDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.terminal_profile_edit)) },
+                        onClick = { menuOpen = false; onEdit() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.terminal_profile_delete)) },
+                        onClick = { menuOpen = false; onDelete() })
+                }
+            }
+        },
+    )
 }
 
 @Composable

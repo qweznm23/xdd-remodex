@@ -25,7 +25,7 @@ internal object ThreadListSync {
             "unknown",
         )
 
-    data class Snapshot(val threads: List<CodexThread>, val sidebar: CodexSidebarState)
+    data class Snapshot(val threads: List<CodexThread>, val sidebar: CodexSidebarState, val deletionScope: String? = null)
     // Codex's built-in section has a stable identity even when its visible name changes.
     const val PINNED_SECTION_ID = "01984de2-8f74-7c91-a3b2-5c5e937cf318"
 
@@ -36,8 +36,9 @@ internal object ThreadListSync {
 
     suspend fun fetchSnapshot(repository: CodexRepository): Snapshot {
         val receipts = mutableMapOf<String, CodexThreadReadState>()
-        val active = fetchPages(repository, false, receipts)
-        val archived = fetchPages(repository, true, receipts)
+        val scopes = mutableSetOf<String?>()
+        val active = fetchPages(repository, false, receipts, catalogScopes = scopes)
+        val archived = fetchPages(repository, true, receipts, catalogScopes = scopes)
         var sectionCursor: JSONValue? = null
         val seen = mutableSetOf<JSONValue>()
         var pinnedSection: String? = null
@@ -56,11 +57,11 @@ internal object ThreadListSync {
             initialized = true, threads = receipts,
             recentThreadIds = active.filter { it.recencyAt != null }.sortedByDescending { it.recencyAt }.map { it.id }.take(30),
             pinnedThreadIds = pinned.map { it.id }, pinnedSectionId = pinnedSection,
-        ))
+        ), scopes.singleOrNull())
     }
 
     private suspend fun fetchPages(repository: CodexRepository, archived: Boolean,
-        receipts: MutableMap<String, CodexThreadReadState>, section: String? = null,
+        receipts: MutableMap<String, CodexThreadReadState>, section: String? = null, catalogScopes: MutableSet<String?>? = null,
     ): List<CodexThread> {
         val out = ArrayList<CodexThread>()
         var cursor: JSONValue? = null
@@ -76,6 +77,7 @@ internal object ThreadListSync {
             if (archived) fields["archived"] = JSONValue.Bool(true)
             if (section != null) fields["sectionId"] = JSONValue.Str(section)
             val result = repository.sendRequest("thread/list", JSONValue.Obj(fields)).result ?: error("thread/list missing result")
+            catalogScopes?.add(result.objectValue?.get("remodexCatalogDeletionScope")?.stringValue?.takeIf { it.isNotBlank() })
             val (threads, next) = parseThreadListPage(result)
             result.objectValue?.get("readStates")?.objectValue?.forEach { (id, value) ->
                 CodexThreadReadState.decode(value)?.let { receipts[id] = it }

@@ -15,6 +15,7 @@ const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
 const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
 const {
   expandExecWrapperToolCall,
+  asyncQuestionItem,
   isOrchestrationWaitCall,
 } = require("./codex-tool-wrapper");
 const {
@@ -25,6 +26,7 @@ const {
   hasVisiblePlanUpdate,
   buildRemodexSourceItemKey,
   visibleUserPromptFromInputEntries,
+  sanitizeUserInputEntries,
   visibleUserPromptText,
   responseItemMessageText,
 } = require("./desktop-ipc-shared");
@@ -984,7 +986,6 @@ function synthesizeNotificationsFromRolloutEntry(entry, state, { nowMs = Date.no
       state.activeTurnIdIsSynthetic = !explicitTurnId;
       state.reasoningItemId = buildSyntheticItemId("thinking", state.threadId, turnId);
       state.hasThinking = false;
-      state.hasReasoningContent = false;
       state.emittedReasoningSummaryKeys.clear();
       state.commandCalls.clear();
       state.applyPatchCalls.clear();
@@ -1116,7 +1117,11 @@ function synthesizeNotificationsFromRolloutEntry(entry, state, { nowMs = Date.no
   }
 
   if (itemType === "reasoning") {
-    notifications.push(...reasoningNotifications(state, extractReasoningText(payload)));
+    // Only structured public summary parts can populate the mobile summary row.
+    const parts = (Array.isArray(payload.summary) ? payload.summary : [])
+      .filter((part) => part?.type === "summary_text" && readString(part.text));
+    if (parts.length === 0) return ensureThinkingNotifications(state);
+    for (const part of parts) notifications.push(...reasoningNotifications(state, part.text));
     return notifications;
   }
 
@@ -1153,35 +1158,25 @@ function reasoningNotifications(state, text) {
     return ensureThinkingNotifications(state);
   }
 
-  const summaryEntries = summaryOnlyReasoningEntries(rawText);
-  let visibleText = rawText;
-  if (summaryEntries) {
-    const unseenEntries = summaryEntries.filter((entry) => {
-      if (state.emittedReasoningSummaryKeys.has(entry.key)) {
-        return false;
-      }
-      state.emittedReasoningSummaryKeys.add(entry.key);
-      return true;
-    });
-    if (unseenEntries.length === 0) {
-      return [];
-    }
-    visibleText = unseenEntries
-      .map((entry) => `**${entry.title}**\n\n<!-- -->`)
-      .join("\n\n");
-  }
-
-  state.hasThinking = true;
-  const delta = `${state.hasReasoningContent ? "\n\n" : ""}${visibleText}`;
-  state.hasReasoningContent = true;
-  return [
-    createNotification("item/reasoning/textDelta", {
+  const entries = summaryOnlyReasoningEntries(rawText)?.map(({ title, key }) => ({
+    key: `heading:${key}`,
+    text: `**${title}**\n\n<!-- -->`,
+  })) ?? [{ key: `summary:${rawText}`, text: rawText }];
+  const notifications = [];
+  for (const entry of entries) {
+    if (state.emittedReasoningSummaryKeys.has(entry.key)) continue;
+    const index = state.emittedReasoningSummaryKeys.size;
+    state.emittedReasoningSummaryKeys.add(entry.key);
+    state.hasThinking = true;
+    notifications.push(createNotification("item/reasoning/summaryTextDelta", {
       threadId: state.threadId,
       turnId: state.activeTurnId,
       itemId: state.reasoningItemId || buildSyntheticItemId("thinking", state.threadId, state.activeTurnId),
-      delta,
-    }),
-  ];
+      summaryIndex: index,
+      delta: entry.text,
+    }));
+  }
+  return notifications;
 }
 
 // Newer Codex rollouts write the same cumulative reasoning summaries through
@@ -1213,7 +1208,12 @@ function summaryOnlyReasoningEntries(text) {
 function responseItemMessageNotifications(state, entry, payload) {
   const role = readString(payload?.role).toLowerCase();
   if (role === "user") {
-    return userMessageNotifications(state, entry, payload, {
+    return userMessageNotifications(state, entry, {
+      ...payload,
+      turn_id: readString(payload.turn_id) || readString(payload.turnId)
+        || readString(payload.internal_chat_message_metadata_passthrough?.turn_id)
+        || readString(payload.internal_chat_message_metadata_passthrough?.turnId),
+    }, {
       rawMessage: extractResponseItemMessageText(payload),
       isResponseItem: true,
     });
@@ -1269,7 +1269,7 @@ function userMessageNotifications(state, entry, payload, {
     threadId: state.threadId,
     turnId,
     message,
-    ...(itemId ? { id: itemId } : {}),
+    id: itemId || dedupeKey,
     ...timestampParams(timestamp),
   })];
 }
@@ -1401,6 +1401,12 @@ function toolStartNotifications(state, payload) {
   }
 
   const argumentsObject = parseToolArguments(payload.arguments);
+  const question = asyncQuestionItem(toolName, argumentsObject, callId);
+  if (question) {
+    return [createNotification("item/completed", {
+      threadId: state.threadId, turnId: state.activeTurnId, item: question,
+    })];
+  }
   if (isInternalProgressPlanToolName(toolName)) {
     return [
       ...ensureThinkingNotifications(state),
@@ -1765,7 +1771,16 @@ function itemCompletedNotifications(state, payload) {
   const item = payload && typeof payload.item === "object" && !Array.isArray(payload.item)
     ? payload.item
     : null;
-  if (!item || normalizeRolloutItemType(item.type) !== "plan") {
+  const type = normalizeRolloutItemType(item?.type);
+  if (type === "usermessage") {
+    const content = sanitizeUserInputEntries(item.content);
+    const turnId = resolveRolloutEventTurnId(state, payload);
+    if (!content.length || !turnId || !readString(item.id)) return [];
+    return [createNotification("item/completed", {
+      threadId: state.threadId, turnId, item: { ...item, content },
+    })];
+  }
+  if (type !== "plan" && !(type === "agentmessage" && readString(item?.id) && Array.isArray(item?.questions))) {
     return [];
   }
 
@@ -1880,7 +1895,6 @@ function createMirrorState(threadId) {
     activeTurnId: null,
     reasoningItemId: null,
     hasThinking: false,
-    hasReasoningContent: false,
     emittedReasoningSummaryKeys: new Set(),
     commandCalls: new Map(),
     applyPatchCalls: new Map(),
@@ -1934,20 +1948,6 @@ function isDesktopRolloutOrigin(sessionMeta) {
     || originator.includes("vscode")
     || source.includes("vscode")
     || source.includes("desktop");
-}
-
-function extractReasoningText(payload) {
-  const summary = Array.isArray(payload?.summary)
-    ? payload.summary
-        .map((part) => readString(part?.text) || readString(part?.summary))
-        .filter(Boolean)
-        .join("\n")
-    : "";
-  return firstNonEmptyString([
-    summary,
-    readString(payload?.text),
-    readString(payload?.content),
-  ]);
 }
 
 function parseToolArguments(rawArguments) {
@@ -2091,15 +2091,15 @@ function flushPendingUserMessageNotifications(state, turnId) {
   return messages
     .map((pending) => ({ ...pending, message: visibleUserPromptFromInputEntries(pending.message) }))
     .filter((pending) => pending.message)
-    .filter((pending) => {
+    .flatMap((pending) => {
       const dedupeKey = userMessageOccurrenceKey(state, resolvedTurnId, pending.message, {
         isResponseItem: pending.isResponseItem === true,
       });
       if (state.emittedUserMessageKeys.has(dedupeKey)) {
-        return false;
+        return [];
       }
       state.emittedUserMessageKeys.add(dedupeKey);
-      return true;
+      return [{ ...pending, id: pending.id || dedupeKey }];
     })
     .map((pending) => createNotification("codex/event/user_message", {
       threadId: state.threadId,
@@ -2213,7 +2213,6 @@ function resetRunState(state) {
   state.activeTurnId = null;
   state.reasoningItemId = null;
   state.hasThinking = false;
-  state.hasReasoningContent = false;
   state.emittedReasoningSummaryKeys.clear();
   state.commandCalls.clear();
   state.applyPatchCalls.clear();

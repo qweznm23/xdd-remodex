@@ -9,7 +9,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.remodex.mobile.ui.theme.RemodexPreviewDialog
 import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.elements.MarkdownParagraph
@@ -129,7 +129,7 @@ internal fun ConversationImageGalleryDialog(
     val pager = rememberPagerState(initialPage = images.indexOfFirst { attachmentImageSource(it, true) == selectedSource }.coerceAtLeast(0),
         pageCount = { images.size })
     var zoomedPage by remember { mutableStateOf<Int?>(null) }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    RemodexPreviewDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 HorizontalPager(state = pager, userScrollEnabled = zoomedPage != pager.currentPage,

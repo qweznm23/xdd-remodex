@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.agent
 
+import com.remodex.mobile.R
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexMessageKind
 import com.remodex.mobile.core.model.CodexMessageRole
@@ -33,11 +34,13 @@ internal sealed interface TimelineListItem {
 
     data class AssistantWorkGroup(
         val groupKey: String,
-        val messages: List<CodexMessage>,
+        val detailItems: List<TimelineListItem>,
     ) : TimelineListItem {
         init {
-            require(messages.isNotEmpty())
+            require(detailItems.isNotEmpty())
         }
+
+        val messages = detailItems.flatMap { it.timelineMessages() }.distinctBy { it.id }
 
         override val stableKey: String get() = groupKey
     }
@@ -73,7 +76,8 @@ internal fun List<CodexMessage>.toTimelineListItems(
     val visibleMessages =
         filterNot { message ->
             message.role == CodexMessageRole.system &&
-                message.kind == CodexMessageKind.thinking
+                message.kind == CodexMessageKind.thinking &&
+                (message.reasoningSummary.isEmpty() || (!collapseLatestTurn && message.turnId == activeTurnId))
         }
     if (visibleMessages.isEmpty()) return emptyList()
     val out = ArrayList<TimelineListItem>(visibleMessages.size)
@@ -119,47 +123,29 @@ internal fun List<CodexMessage>.toTimelineListItems(
     )
 }
 
-internal fun List<CodexMessage>.toActivityDetailTimelineListItems(): List<TimelineListItem> =
-    toTimelineListItems(collapseAssistantWork = false)
+internal data class TimelineActivityLabel(@androidx.annotation.StringRes val resource: Int, val filename: String? = null)
 
 internal fun List<CodexMessage>.deriveTransientActivityStatus(
     isThreadRunning: Boolean,
     activeTurnId: String? = null,
-): String? {
+): TimelineActivityLabel? {
     if (!isThreadRunning) return null
-    val activeMessages = activeTurnMessages(activeTurnId)
-    if (activeMessages.any { it.role == CodexMessageRole.assistant && it.kind == CodexMessageKind.chat && it.isStreaming }) {
-        return null
-    }
-    val latest = activeMessages.lastOrNull() ?: return "thinking..."
+    val latest = if (activeTurnId.isNullOrBlank()) lastOrNull() else lastOrNull { it.turnId == activeTurnId }
     return when {
-        latest.role == CodexMessageRole.user -> "thinking..."
-        latest.role == CodexMessageRole.assistant -> null
-        latest.kind == CodexMessageKind.fileChange -> fileChangeStatus(latest.text)
+        latest == null -> TimelineActivityLabel(R.string.activity_working)
         latest.kind == CodexMessageKind.commandExecution -> commandExecutionStatus(latest.text)
-        latest.kind == CodexMessageKind.thinking -> "thinking..."
-        latest.role == CodexMessageRole.system -> "working..."
-        else -> null
+        latest.kind == CodexMessageKind.fileChange -> fileChangeStatus(latest.text)
+        latest.role == CodexMessageRole.assistant && latest.isStreaming && latest.text.isNotBlank() ->
+            TimelineActivityLabel(R.string.activity_replying)
+        latest.role == CodexMessageRole.user || latest.kind == CodexMessageKind.thinking ->
+            TimelineActivityLabel(R.string.turn_top_bar_thinking)
+        else -> TimelineActivityLabel(R.string.activity_working)
     }
 }
 
-private fun List<CodexMessage>.activeTurnMessages(activeTurnId: String?): List<CodexMessage> {
-    val turnId = activeTurnId?.trim()?.takeIf { it.isNotEmpty() }
-    if (turnId != null) {
-        val byTurn = filter { it.turnId == turnId }
-        if (byTurn.isNotEmpty()) return byTurn
-    }
-    val latestUserIndex = indexOfLast { it.role == CodexMessageRole.user }
-    return if (latestUserIndex >= 0) {
-        drop(latestUserIndex)
-    } else {
-        this
-    }
-}
-
-private fun fileChangeStatus(text: String): String {
+private fun fileChangeStatus(text: String): TimelineActivityLabel {
     val normalized = text.lowercase()
-    if ("patch" in normalized || "apply_patch" in normalized) return "applying patch..."
+    if ("patch" in normalized || "apply_patch" in normalized) return TimelineActivityLabel(R.string.activity_patch)
     val filename =
         text.lineSequence()
             .map { it.trim().trim('-', '*').trim() }
@@ -167,27 +153,30 @@ private fun fileChangeStatus(text: String): String {
             ?.let(::compactTimelinePath)
             ?.takeIf { it.isNotBlank() }
     return if (filename != null) {
-        "editing $filename..."
+        TimelineActivityLabel(R.string.activity_edit_file, filename)
     } else {
-        "editing files..."
+        TimelineActivityLabel(R.string.activity_files)
     }
 }
 
-private fun commandExecutionStatus(text: String): String {
+private fun commandExecutionStatus(text: String): TimelineActivityLabel {
+    if (text.substringBefore('>').trim().lowercase() in setOf("completed", "complete", "ran", "failed", "stopped", "error")) {
+        return TimelineActivityLabel(R.string.activity_working)
+    }
     val command = normalizedCommandText(text)
     return when {
         Regex("""\b(apply_patch|patch|edit|write_file|workspace_?edit)\b""").containsMatchIn(command) ->
-            "applying patch..."
+            TimelineActivityLabel(R.string.activity_patch)
         Regex("""\b(test|check|compile|build|gradlew|xcodebuild|pytest|jest|vitest|kotlinc|tsc)\b""").containsMatchIn(command) ->
-            "running checks..."
+            TimelineActivityLabel(R.string.activity_checks)
         Regex("""\b(git\s+status|git\s+diff|diff|status)\b""").containsMatchIn(command) ->
-            "checking changes..."
+            TimelineActivityLabel(R.string.activity_changes)
         Regex("""\b(rg|grep|ag|ack|find|fd|search|workspace_?search|semantic_?search|code_?search|web_?search)\b""")
             .containsMatchIn(command) ->
-            "searching..."
+            TimelineActivityLabel(R.string.activity_search)
         Regex("""\b(cat|nl|head|tail|sed|less|more|ls|read_file|view_file)\b""").containsMatchIn(command) ->
-            "thinking..."
-        else -> "working..."
+            TimelineActivityLabel(R.string.activity_reading)
+        else -> TimelineActivityLabel(R.string.activity_working)
     }
 }
 
@@ -206,8 +195,20 @@ private fun compactTimelinePath(path: String): String {
 internal fun messageTimelineItems(message: CodexMessage): List<TimelineListItem> =
     message.toAssistantTimelineChunks() ?: listOf(TimelineListItem.Single(message))
 
+/** Only elide a structured prompt's plain-text copy. Preserve accompanying prose and media. */
+internal fun CodexMessage.containsOnlyQuestionPrompt(): Boolean {
+    val request = structuredUserInputRequest ?: return false
+    if (attachments.isNotEmpty()) return false
+    if (kind == CodexMessageKind.userInputPrompt || text.isBlank()) return true
+    val lines = text.lineSequence().map { it.trim().removePrefix("- ").removePrefix("* ").removePrefix("• ") }
+        .filter { it.isNotBlank() }.toList()
+    return lines == request.questions.map { it.question.trim() } ||
+        lines == request.questions.flatMap { q -> listOf(q.question.trim()) + q.options.map { it.label.trim() } }
+}
+
 private fun CodexMessage.toAssistantTimelineChunks(): List<TimelineListItem.MessageChunk>? {
     if (role != CodexMessageRole.assistant || kind != CodexMessageKind.chat) return null
+    if (containsOnlyQuestionPrompt()) return null
     val chunks = splitAssistantMarkdownForTimeline(text)
     if (chunks.size <= 1) return null
     return chunks.mapIndexed { index, chunk ->
@@ -295,15 +296,10 @@ private fun List<TimelineListItem>.collapseAssistantWorkGroups(
                 }
             if (hiddenItems.isEmpty()) return@forEach
             hiddenIndexes += hiddenItems.map { it.index }
-            val workMessages =
-                hiddenItems
-                    .flatMap { it.messages }
-                    .filter { it.kind != CodexMessageKind.plan }
-            if (workMessages.isEmpty()) return@forEach
             workGroupsByInsertIndex[hiddenItems.first().index] =
                 TimelineListItem.AssistantWorkGroup(
                     groupKey = "assistant-work-${itemsForTurn.first().groupKey}",
-                    messages = workMessages,
+                    detailItems = hiddenItems.map { it.item },
                 )
         }
     if (hiddenIndexes.isEmpty()) return this
@@ -389,7 +385,7 @@ private fun TimelineListItem.timelineMessages(): List<CodexMessage> =
 private fun CodexMessage.isCollapsibleAssistantWork(): Boolean =
     when (kind) {
         CodexMessageKind.plan -> false
-        CodexMessageKind.thinking -> false
+        CodexMessageKind.thinking -> reasoningSummary.isNotEmpty()
         else ->
             role == CodexMessageRole.assistant ||
                 role == CodexMessageRole.system

@@ -1,0 +1,14 @@
+<resources>
+    <string name="drawer_working">运行中</string>
+    <string name="drawer_expand">展开所有分组</string>
+    <string name="drawer_collapse">收起所有分组</string>
+    <string name="drawer_matches">匹配会话 · %1$d</string>
+    <string name="drawer_all_count">全部会话 · %1$d</string>
+    <string name="drawer_no_matches">没有匹配的会话</string>
+    <string name="drawer_working_count">正在执行的会话 · %1$d</string>
+    <string name="drawer_none_working">当前没有正在执行的会话</string>
+    <string name="drawer_refresh_failed">刷新会话失败 · %1$s</string>
+    <string name="drawer_back_projects">返回项目目录</string>
+    <string name="drawer_empty">还没有会话</string>
+    <string name="drawer_updated">最近更新</string>
+</resources>

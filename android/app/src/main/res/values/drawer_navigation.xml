@@ -1,0 +1,14 @@
+<resources>
+    <string name="drawer_working">Active</string>
+    <string name="drawer_expand">Expand all sections</string>
+    <string name="drawer_collapse">Collapse all sections</string>
+    <string name="drawer_matches">Matching conversations · %1$d</string>
+    <string name="drawer_all_count">All conversations · %1$d</string>
+    <string name="drawer_no_matches">No matching conversations</string>
+    <string name="drawer_working_count">Active conversations · %1$d</string>
+    <string name="drawer_none_working">All conversations have finished</string>
+    <string name="drawer_refresh_failed">Could not refresh conversations · %1$s</string>
+    <string name="drawer_back_projects">Back to projects</string>
+    <string name="drawer_empty">No conversations yet</string>
+    <string name="drawer_updated">Recently updated</string>
+</resources>

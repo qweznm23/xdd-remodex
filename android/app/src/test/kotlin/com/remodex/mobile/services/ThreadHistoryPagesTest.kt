@@ -18,6 +18,49 @@ class ThreadHistoryPagesTest {
     private fun obj(raw: String) = JSONValue.fromJsonElement(Json.parseToJsonElement(raw)) as JSONValue.Obj
     private fun response(raw: String) = RPCMessage(result = obj(raw))
 
+    @Test fun unmaterializedFirstReadRetainsOriginalFailureAndNextReadFindsTurn() = runTest {
+        val rpc = CodexServiceError.RpcFailure(RPCError(-32600,
+            "thread thread is not materialized yet; thread/turns/list is unavailable before first user message"))
+        var ready = false
+        suspend fun request(method: String, params: JSONValue.Obj) =
+            readInitialThreadRpc("thread", method, params) { name, _ ->
+                when {
+                    name == "thread/read" -> response("""{"thread":{"id":"thread"}}""")
+                    name == "thread/items/list" -> throw CodexServiceError.RpcFailure(RPCError(-32601, "unknown method"))
+                    !ready -> throw rpc
+                    else -> response("""{"data":[{"id":"first","status":"inProgress","items":[]}],"nextCursor":null}""")
+                }
+            }
+        for (read in listOf<suspend () -> Any>({ fetchRecentThreadHistory("thread", ::request) },
+            { fetchLatestTurnSnapshot("thread", ::request) })) {
+            val pending = assertFailsWith<ThreadAwaitingFirstMessage> { read() }
+            assertEquals("thread/turns/list", pending.method)
+            assertSame(rpc, pending.cause)
+        }
+        ready = true
+        assertEquals("first", fetchLatestTurnSnapshot("thread", ::request).interruptibleTurnId)
+        assertEquals(1, fetchRecentThreadHistory("thread", ::request).turns.size)
+    }
+
+    @Test fun deferredFirstMessageIsScopedToItsThreadFirstPageAndExactRpcError() = runTest {
+        val reported = "thread t is not materialized yet; thread/items/list is unavailable before first user message"
+        for ((id, cursor, rpc) in listOf(
+            Triple("other", null, RPCError(-32600, reported)),
+            Triple("t", "older", RPCError(-32600, reported)),
+            Triple("t", null, RPCError(-32603, reported)),
+            Triple("t", null, RPCError(-32600, "thread not found")),
+            Triple("t", null, RPCError(-32600, "invalid cursor")),
+        )) {
+            val failure = CodexServiceError.RpcFailure(rpc)
+            val thrown = assertFailsWith<CodexServiceError.RpcFailure> {
+                fetchThreadItemPage(id, cursor?.let(JSONValue::Str)) { method, params ->
+                    readInitialThreadRpc(id, method, params) { _, _ -> throw failure }
+                }
+            }
+            assertSame(failure, thrown)
+        }
+    }
+
     @Test fun initialReasoningOnlyPageContinuesToVisibleHistoryWithoutManualRefresh() = runTest {
         val cursors = mutableListOf<String?>()
         val page = fetchRecentThreadHistory("thread") { _, params ->

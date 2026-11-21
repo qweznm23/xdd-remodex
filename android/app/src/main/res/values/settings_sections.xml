@@ -1,0 +1,7 @@
+<resources>
+    <string name="settings_installed_version">Installed version</string>
+    <string name="settings_display">Display</string>
+    <string name="settings_language_and_fonts">Language and fonts</string>
+    <string name="settings_address_default">Use the paired connection</string>
+    <string name="settings_checking_relay">Checking relay health…</string>
+</resources>

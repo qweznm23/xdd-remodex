@@ -1,0 +1,11 @@
+<resources>
+    <string name="terminal_action_connect">Connect</string>
+    <string name="terminal_action_disconnect">Disconnect</string>
+    <string name="terminal_action_sessions">Sessions</string>
+    <string name="terminal_action_help">Help</string>
+    <string name="terminal_profile_edit">Edit profile</string>
+    <string name="terminal_profile_delete">Delete profile</string>
+    <string name="terminal_profile_create">Create profile</string>
+    <string name="terminal_profile_empty">No saved connections yet.</string>
+    <string name="terminal_profile_saved">Saved connections</string>
+</resources>

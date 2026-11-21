@@ -14,36 +14,16 @@ import kotlinx.coroutines.withContext
  * Account rate limits (`account/rateLimits/read`, `account/rateLimits/updated`).
  * Parity with [CodexService+Status.swift](../../../../../../../../CodexMobile/CodexMobile/Services/CodexService+Status.swift).
  */
-internal fun CodexService.applyRateLimitsPayload(
-    payloadObject: Map<String, JSONValue>,
-    mergeWithExisting: Boolean,
-) {
-    val decoded = RateLimitPayloadCodec.decodeRateLimitBuckets(payloadObject)
-    val resolved =
-        if (mergeWithExisting) {
-            RateLimitPayloadCodec.mergeRateLimitBuckets(
-                _rateLimitBuckets.value,
-                decoded,
-            )
-        } else {
-            decoded
-        }
-    _rateLimitBuckets.value =
-        resolved.sortedWith { lhs, rhs ->
-            if (lhs.sortDurationMins == rhs.sortDurationMins) {
-                lhs.displayLabel.compareTo(rhs.displayLabel, ignoreCase = true)
-            } else {
-                lhs.sortDurationMins.compareTo(rhs.sortDurationMins)
-            }
-        }
-}
-
 internal fun CodexService.handleRateLimitsUpdatedParams(params: Map<String, JSONValue>?) {
     if (params == null) return
     synchronized(rateLimitRefreshGuard) {
         try {
-            applyRateLimitsPayload(params, mergeWithExisting = true)
-            rateLimitRefreshGuard.pushed()
+            if (!sessionReady || rateLimitRefreshGuard.awaitingReconnect) return
+            val incoming = RateLimitPayloadCodec.decodeRateLimitBuckets(params)
+            if (incoming.isEmpty()) return
+            _rateLimitBuckets.value = RateLimitPayloadCodec.mergeRateLimitBuckets(_rateLimitBuckets.value, incoming)
+                .sortedBy { it.sortDurationMins }
+            rateLimitRefreshGuard.pushed(incoming)
             _hasResolvedRateLimitsSnapshot.value = true
             // Rolling quota updates do not prove that the last full read (including cards) succeeded.
         } catch (failure: Exception) {
@@ -54,12 +34,12 @@ internal fun CodexService.handleRateLimitsUpdatedParams(params: Map<String, JSON
 
 internal suspend fun CodexService.refreshRateLimitsForRepository() =
     withContext(Dispatchers.IO) {
-        refreshRateLimitsInternal()
+        refreshRateLimitsInternal(force = true)
     }
 
-internal suspend fun CodexService.refreshUsageStatusForRepository(threadId: String?) =
+internal suspend fun CodexService.refreshUsageStatusForRepository(threadId: String?, force: Boolean) =
     withContext(Dispatchers.IO) {
-        refreshRateLimitsInternal()
+        refreshRateLimitsInternal(force)
         val tid = threadId?.trim().orEmpty()
         if (tid.isNotEmpty()) {
             refreshContextWindowUsageInternal(tid)
@@ -75,10 +55,10 @@ internal fun CodexService.shouldAutoRefreshUsageStatusForRepository(threadId: St
         hasResolvedRateLimitsSnapshot = _hasResolvedRateLimitsSnapshot.value,
     )
 
-internal suspend fun CodexService.refreshRateLimitsInternal() {
+internal suspend fun CodexService.refreshRateLimitsInternal(force: Boolean = false) {
     val ticket = synchronized(rateLimitRefreshGuard) {
         if (!sessionReady) return
-        val request = rateLimitRefreshGuard.begin(connectionGeneration) ?: return
+        val request = rateLimitRefreshGuard.begin(connectionGeneration, force) ?: return
         _isLoadingRateLimits.value = true
         request
     }
@@ -98,12 +78,14 @@ internal suspend fun CodexService.refreshRateLimitsInternal() {
         val buckets = RateLimitPayloadCodec.decodeRateLimitBuckets(resultObject)
         synchronized(rateLimitRefreshGuard) {
             if (!sessionReady || !rateLimitRefreshGuard.isCurrent(ticket, connectionGeneration)) return
-            if (!rateLimitRefreshGuard.hasNewerPush(ticket)) _rateLimitBuckets.value = buckets.sortedBy { it.sortDurationMins }
+            _rateLimitBuckets.value = RateLimitPayloadCodec.mergeRateLimitBuckets(buckets, ticket.pushedBuckets)
+                .sortedBy { it.sortDurationMins }
             _accountUsageDetails.value = details.copy(lastSuccessfulReadAt = java.time.Instant.now())
             _hasResolvedRateLimitsSnapshot.value = true
             _rateLimitsErrorMessage.value = null
         }
     } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        synchronized(rateLimitRefreshGuard) { rateLimitRefreshGuard.cancel(ticket) }
         throw cancelled
     } catch (failure: Exception) {
         val code = (failure as? CodexServiceError.RpcFailure)?.rpcError?.code
@@ -147,4 +129,15 @@ private fun shouldRetryRateLimitsWithEmptyParams(e: Throwable): Boolean {
         lowered.contains("expected") ||
         lowered.contains("missing field `params`") ||
         lowered.contains("missing field params")
+}
+
+internal fun CodexService.clearAccountQuota(waitForReconnect: Boolean = false) {
+    synchronized(rateLimitRefreshGuard) {
+        rateLimitRefreshGuard.reset(waitForReconnect)
+        _accountUsageDetails.value = com.remodex.mobile.core.model.AccountUsageDetails()
+        _rateLimitBuckets.value = emptyList()
+        _isLoadingRateLimits.value = false
+        _rateLimitsErrorMessage.value = null
+        _hasResolvedRateLimitsSnapshot.value = false
+    }
 }

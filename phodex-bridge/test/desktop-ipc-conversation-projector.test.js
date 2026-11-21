@@ -849,3 +849,19 @@ test("desktop conversation projector keeps in-progress review metadata updates o
     ["item/autoApprovalReview/started"]
   );
 });
+
+test("desktop steering input remains in order in both history and live notifications", () => {
+  const content = [{type: "text", text: "continue"}];
+  const state = {turns: [{turnId: "t", status: "inProgress", params: {input: content}, items: [
+    {id: "opener", type: "userMessage", content},
+    {id: "reply", type: "agentMessage", text: "working"},
+    {id: "steer", type: "steeringUserMessage", input: content},
+    {id: "repeat", type: "userMessage", content},
+  ]}]};
+  const items = projectDesktopConversationStateToThread("desktop", state).turns[0].items;
+  assert.deepEqual(items.map(item => item.id), ["t:input", "reply", "steer", "repeat"]);
+  assert.deepEqual(items[2], {id: "steer", type: "userMessage", content});
+  const live = createDesktopConversationProjector().project("desktop", state).notifications;
+  assert.deepEqual(live.filter(n => n.method === "item/completed").map(n => n.params.item.id),
+    items.map(item => item.id));
+});

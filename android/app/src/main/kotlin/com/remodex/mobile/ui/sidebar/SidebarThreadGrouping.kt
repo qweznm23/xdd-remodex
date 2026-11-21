@@ -10,6 +10,8 @@ import java.time.Instant
 enum class SidebarThreadGroupKind {
     Pinned,
     Recent,
+    Working,
+    Updated,
     Project,
     Chats,
     Archived;
@@ -37,6 +39,7 @@ object SidebarThreadGrouping {
         pinnedThreadIds: List<String> = emptyList(),
         recentThreadIds: List<String> = emptyList(),
         includeEmptyShortcuts: Boolean = false,
+        projectlessRoots: List<String> = emptyList(),
     ): List<SidebarThreadGroup> {
         val byId = threads.filter { it.syncState == CodexThreadSyncState.live }.associateBy { it.id }
         val pinned = pinnedThreadIds.distinct().mapNotNull { byId[it] }
@@ -53,8 +56,9 @@ object SidebarThreadGrouping {
                 sortDate = Instant.EPOCH, projectPath = null, threads = it)
         }
         val archivedThreads = threads.filter { it.syncState == CodexThreadSyncState.archivedLocal }
-        val projectGroups = makeProjectGroups(threads = remaining)
-        val chatsGroup = makeChatsGroup(threads = remaining)
+        val (chats, projects) = remaining.partition { isProjectless(it, projectlessRoots) }
+        val projectGroups = makeProjectGroups(threads = projects)
+        val chatsGroup = makeChatsGroup(threads = chats)
         val sortedArchived = sortThreadsByRecentActivity(archivedThreads)
         val archivedGroup =
             sortedArchived.firstOrNull()?.let { first ->
@@ -120,6 +124,19 @@ object SidebarThreadGrouping {
         ).map { it.id }
     }
 
+    internal fun isProjectless(thread: CodexThread, roots: List<String>): Boolean {
+        fun normalize(path: String) = path.replace('\\', '/').trimEnd('/')
+        val path = thread.normalizedProjectPath?.let(::normalize) ?: return true
+        if (thread.metadata?.get("remodexLegacyProjectlessCwd")?.stringValue?.let(::normalize) == path) return true
+        if (roots.any { root ->
+            val base = normalize(root)
+            base.isNotEmpty() && (path == base || path.startsWith("$base/"))
+        }) return true
+        return "/.codex/threads/" in path || generatedChatPath.containsMatchIn(path)
+    }
+
+    private val generatedChatPath = Regex("/Documents/Codex/[0-9]{4}-[0-9]{2}-[0-9]{2}/[^/]+")
+
     private fun makeProjectGroup(
         projectKey: String,
         threads: List<CodexThread>,
@@ -157,8 +174,7 @@ object SidebarThreadGrouping {
         val chatThreads =
             sortThreadsByRecentActivity(
                 threads.filter { thread ->
-                    thread.syncState != CodexThreadSyncState.archivedLocal &&
-                        thread.normalizedProjectPath == null
+                    thread.syncState != CodexThreadSyncState.archivedLocal
                 },
             )
         val first = chatThreads.firstOrNull() ?: return null
@@ -172,7 +188,7 @@ object SidebarThreadGrouping {
         )
     }
 
-    private fun sortThreadsByRecentActivity(threads: List<CodexThread>): List<CodexThread> =
+    internal fun sortThreadsByRecentActivity(threads: List<CodexThread>): List<CodexThread> =
         threads.sortedWith { lhs, rhs ->
             val l = lhs.updatedAt ?: lhs.createdAt ?: Instant.EPOCH
             val r = rhs.updatedAt ?: rhs.createdAt ?: Instant.EPOCH
@@ -183,4 +199,29 @@ object SidebarThreadGrouping {
         }
 
     private fun projectGroupId(thread: CodexThread): String = "project:${thread.projectKey}"
+}
+
+/** Server shortcuts keep their order. Show local activity as a separately labelled fallback. */
+internal fun sidebarHomeGroups(
+    live: List<CodexThread>,
+    pinnedIds: List<String>,
+    recentIds: List<String>,
+    workingIds: Set<String>,
+): List<SidebarThreadGroup> {
+    val byId = live.associateBy { it.id }
+    val running = SidebarThreadGrouping.sortThreadsByRecentActivity(workingIds.mapNotNull(byId::get))
+    val pinned = pinnedIds.distinct().mapNotNull(byId::get)
+    val displayed = workingIds + pinnedIds
+    val recent = recentIds.distinct().mapNotNull(byId::get)
+    val useActivity = recent.isEmpty()
+    val history = if (useActivity) SidebarThreadGrouping.sortThreadsByRecentActivity(live) else recent
+    return buildList {
+        fun section(kind: SidebarThreadGroupKind, rows: List<CodexThread>) {
+            if (rows.isNotEmpty()) add(SidebarThreadGroup("home/${kind.name}", "", kind, Instant.EPOCH, null, rows))
+        }
+        section(SidebarThreadGroupKind.Working, running)
+        section(SidebarThreadGroupKind.Pinned, pinned)
+        section(if (useActivity) SidebarThreadGroupKind.Updated else SidebarThreadGroupKind.Recent,
+            history.filterNot { it.id in displayed })
+    }
 }

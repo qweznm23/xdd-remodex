@@ -12,8 +12,11 @@ internal fun CodexService.enqueuePendingApprovalRequest(
     request: PendingApprovalRequest,
     responder: (PendingApprovalDecision) -> Unit,
 ) {
-    pendingApprovalResponders[request.id] = responder
-    _pendingApprovalRequest.value = request
+    synchronized(pendingApprovalResponders) {
+        pendingApprovalResponders[request.id] = responder
+        pendingApprovalQueue[request.id] = request
+        _pendingApprovalRequest.value = pendingApprovalQueue.values.firstOrNull()
+    }
     notifyPendingApprovalAttention(request)
 }
 
@@ -34,12 +37,14 @@ suspend fun CodexService.resolvePendingApprovalForRepository(
     decision: PendingApprovalDecision,
 ) = withContext(Dispatchers.IO) {
     val id = requestId.trim()
-    val responder = pendingApprovalResponders.remove(id) ?: throw CodexServiceError.NoPendingApproval
-    if (_pendingApprovalRequest.value?.id == id) {
-        _pendingApprovalRequest.value = null
+    synchronized(pendingApprovalResponders) {
+        val responder = pendingApprovalResponders[id] ?: throw CodexServiceError.NoPendingApproval
+        responder(decision)
+        pendingApprovalResponders.remove(id)
+        pendingApprovalQueue.remove(id)
+        _pendingApprovalRequest.value = pendingApprovalQueue.values.firstOrNull()
     }
     messageTimelineStore.removeEphemeralPendingServerMarker(id)
-    responder(decision)
 }
 
 suspend fun CodexService.resolvePendingStructuredInputForRepository(
@@ -85,11 +90,14 @@ suspend fun CodexService.resolvePendingStructuredInputForRepository(
 }
 
 internal fun CodexService.clearPendingServerRequests() {
-    pendingApprovalResponders.clear()
+    synchronized(pendingApprovalResponders) {
+        pendingApprovalResponders.clear()
+        pendingApprovalQueue.clear()
+        _pendingApprovalRequest.value = null
+    }
     synchronized(pendingStructuredInputResponders) {
         pendingStructuredInputResponders.clear()
         _pendingStructuredInputRequests.value = emptyMap()
         _pendingStructuredInputRequest.value = null
     }
-    _pendingApprovalRequest.value = null
 }

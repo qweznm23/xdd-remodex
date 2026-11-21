@@ -1,12 +1,37 @@
 package com.remodex.mobile.data
 
 import com.remodex.mobile.core.model.*
+import com.remodex.mobile.ui.agent.containsOnlyQuestionPrompt
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlin.test.*
 import java.time.Instant
 
 class ConversationQuestionTest {
+    @Test fun answerAppearsAtEndWhilePendingAndSurvivesLateFailureAfterEcho()=runTest {
+        val store = MessageTimelineStore()
+        val req = request().copy(isLive=true)
+        store.completeAssistantMessage("t","turn","call-1","",structuredUserInputRequest=req)
+        val text = ConversationQuestionCodec.replyText(req,answers())
+        val pending = store.appendPendingUserMessage("t",text)
+        assertEquals(pending,store.messagesByThread.value.getValue("t").last().id)
+        store.discardUnconfirmedQuestionReply("t",pending)
+        assertTrue(store.messagesByThread.value.getValue("t").none { it.role == CodexMessageRole.user })
+        val retry = store.appendPendingUserMessage("t",text)
+        store.appendMirroredUser("t","reply-turn",text)
+        store.discardUnconfirmedQuestionReply("t",retry)
+        val receipt = store.messagesByThread.value.getValue("t").single { it.role == CodexMessageRole.user }
+        assertEquals(retry,receipt.id)
+        assertEquals(CodexMessageDeliveryState.confirmed,receipt.deliveryState)
+        assertTrue(row().hasConversationContent())
+    }
+    @Test fun compactPromptKeepsIndependentAssistantText() {
+        val duplicate = row().copy(text = "Choose a route\n- Local\n- Remote\nEnter a name")
+        assertTrue(duplicate.containsOnlyQuestionPrompt())
+        assertTrue(row().containsOnlyQuestionPrompt())
+        assertFalse(duplicate.copy(text = "Use Local on the same network.\n" + duplicate.text).containsOnlyQuestionPrompt())
+        assertFalse(duplicate.copy(structuredUserInputRequest = null).containsOnlyQuestionPrompt())
+    }
     @Test fun manualHistoryReplyDoesNotMakeOldQuestionsAutomaticallyPending() {
         val historical = request()
         assertFalse(historical.isAnswerableAsync)
@@ -67,8 +92,10 @@ class ConversationQuestionTest {
     @Test fun desktopReplyRoundTripsAndDisplayDoesNotExposeEnvelope() {
         val text=ConversationQuestionCodec.replyText(request(),answers())
         assertEquals(2,ConversationQuestionCodec.replies(text).size)
-        assertFalse(ConversationQuestionCodec.displayReply(text).contains("questionItemId"))
-        assertTrue(ConversationQuestionCodec.displayReply(text).contains("My answer"))
+        assertEquals("1. My answer\n2. My answer", ConversationQuestionCodec.displayReply(text))
+        val single = request().copy(questions = request().questions.take(1))
+        val reply = ConversationQuestionCodec.replyText(single, mapOf(single.questions.single().id to listOf("Local")))
+        assertEquals("before\nLocal\nafter", ConversationQuestionCodec.displayReply("before\n$reply\nafter"))
         val malformed = "<send_user_message_question_reply>{bad}</send_user_message_question_reply>"
         assertEquals(malformed, ConversationQuestionCodec.displayReply(malformed))
     }
@@ -156,7 +183,13 @@ class ConversationQuestionTest {
         for(pending in listOf(old,new))store.appendStructuredInputPromptMarker("t",pending.turnId,
             ConversationQuestionCodec.markerId(pending),"Choose",ConversationQuestionCodec.fromPending(pending))
         store.recordStructuredInputAnswer("t",new.id,mapOf("q" to listOf("Answer")),newRequest)
-        val requests=store.messagesByThread.value.getValue("t").map{it.structuredUserInputRequest!!}
+        store.recordStructuredInputAnswer("t",new.id,mapOf("q" to listOf("Answer")),newRequest)
+        val rows = store.messagesByThread.value.getValue("t")
+        assertEquals(1, rows.count { it.isRpcAnswerReceipt })
+        assertEquals("Answer", rows.last().text)
+        assertEquals(CodexMessageRole.user, rows.last().role)
+        assertFalse(HistoryMessageMerge.isCompatibleUserChatDuplicate(rows.last(), user("Answer").copy(turnId="new-turn")))
+        val requests=rows.mapNotNull { it.structuredUserInputRequest }
         assertEquals(2,requests.size)
         assertFalse(requests.first().submitted);assertTrue(requests.last().submitted)
     }

@@ -279,6 +279,7 @@ function projectTurn(threadId, rawTurn, index, { itemCache = null } = {}) {
     });
   }
 
+  let openingEchoSeen = false;
   for (const item of Array.isArray(rawTurn.items) ? rawTurn.items : []) {
     if (!item || typeof item !== "object") {
       continue;
@@ -292,10 +293,11 @@ function projectTurn(threadId, rawTurn, index, { itemCache = null } = {}) {
     // wrapper text). Matching on the sanitized visible text instead of raw
     // JSON equality keeps one user row; the strict shape check alone let the
     // same prompt through twice and duplicated it on the phone via history.
-    if (itemType === "usermessage"
+    if (!openingEchoSeen && items.length === 1 && itemType === "usermessage"
       && visibleInput.length > 0
       && (sameUserInput(item.content, paramsInput)
         || sameVisibleUserText(item.content, visibleInput))) {
+      openingEchoSeen = true;
       continue;
     }
     // Projected items are treated as immutable by every consumer, so raw items
@@ -1063,14 +1065,17 @@ function projectItemForMobile(item, itemType = normalizeToken(item?.type)) {
   if (itemType === "automaticapprovalreview") {
     return projectAutoApprovalReviewItem(item);
   }
-  if (itemType === "usermessage") {
-    const visibleContent = sanitizeUserInputEntries(
-      Array.isArray(item?.content) ? item.content : []
-    );
+  if (itemType === "usermessage" || itemType === "steeringusermessage") {
+    const content = itemType === "steeringusermessage" ? item.input : item.content;
+    const visibleContent = sanitizeUserInputEntries(content);
     if (visibleContent.length === 0) {
       return null;
     }
     const projected = cloneJSON(item);
+    if (itemType === "steeringusermessage") {
+      projected.type = "userMessage";
+      delete projected.input;
+    }
     projected.content = cloneJSON(visibleContent);
     return projected;
   }
@@ -1139,6 +1144,7 @@ function projectAutoApprovalReviewItem(item) {
 
 function isSupportedItemType(type) {
   return type === "usermessage"
+    || type === "steeringusermessage"
     || type === "automaticapprovalreview"
     || type === "hookprompt"
     || type === "agentmessage"

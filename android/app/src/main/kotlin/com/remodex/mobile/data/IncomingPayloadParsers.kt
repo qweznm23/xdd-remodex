@@ -52,3 +52,15 @@ internal fun parseStructuredInputQuestions(
                 }.orEmpty(),
         )
     }.orEmpty()
+
+/** Permission requests use a turn-scoped grant, including an empty grant on denial. */
+internal fun approvalResponse(method: String, params: JSONValue?, decision: String): JSONValue.Obj {
+    if (method != "item/permissions/requestApproval") {
+        return JSONValue.Obj(mapOf("decision" to JSONValue.Str(decision)))
+    }
+    val requested = params?.objectValue?.get("permissions") as? JSONValue.Obj
+    return JSONValue.Obj(mapOf(
+        "permissions" to (requested?.takeIf { decision == "accept" } ?: JSONValue.Obj(emptyMap())),
+        "scope" to JSONValue.Str("turn"),
+    ))
+}

@@ -4,6 +4,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { createHash } = require('node:crypto');
+const { execFileSync, spawn } = require('node:child_process');
+const { once } = require('node:events');
 const { manageAuthProfiles } = require('../src/auth-profiles');
 const { createAuthMaintenance } = require('../src/auth-maintenance');
 const { createWorkspaceUploadHandler } = require('../src/workspace-upload');
@@ -50,7 +52,8 @@ subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, sta
   await save(one,credential('standby'));
   await save(two,credential('active'));
   const file = {status:'present',storage:'file',path:current};
-  const call = (action,params={}) => manageAuthProfiles(action,params,file);
+  const endpoint = 'ws+unix://' + path.join(home, 'app-server-control/app-server-control.sock') + ':/';
+  const call = (action,params={}) => manageAuthProfiles(action,params,file,{ endpoint });
   const get = async id => (await call('status')).profiles.find(p=>p.id===id);
   const selection = row => ({profile:row.id,revision:row.revision});
   assert.deepEqual((await call('list')).profiles.map(p=>p.id),['1']);
@@ -68,6 +71,31 @@ subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, sta
   const uploaded = await upload('workspace/uploadFinish',{uploadId:session.uploadId,sha256,byteLength:payload.length});
   const imported = await call('import',{profile:'3',revision:'missing',sourcePath:uploaded.path});
   assert.equal(imported.profileInfo.id,'3');
+  const fourth = (await call('status')).nextProfileId;
+  assert.equal(fourth, '4');
+  const named = JSON.parse(credential('fourth'));
+  named.tokens.id_token = 'h.' + Buffer.from(JSON.stringify({name:'Fixture User',email:'four@example.test'})).toString('base64url') + '.s';
+  await save(uploaded.path, JSON.stringify(named));
+  const add = {profile:fourth, revision:'missing', sourcePath:uploaded.path, displayName:'工作'};
+  const added = (await call('import', add)).profileInfo;
+  assert.equal(added.displayName,'工作');
+  assert.equal(added.accountName,'Fixture User');
+  assert.equal(added.email,'four@example.test');
+  assert.ok(!JSON.stringify(added).includes(named.tokens.id_token));
+  await assert.rejects(call('import', add), e=>e.errorCode==='PROFILE_CHANGED');
+  await call('rename',{...selection(added),displayName:'备用',expectedName:'工作'});
+  await assert.rejects(call('rename',{...selection(added),displayName:'stale',expectedName:'工作'}),
+    e=>e.errorCode==='PROFILE_CHANGED' && e.profileDiagnostic.stage==='rename_profile');
+  assert.equal((await get(fourth)).displayName,'备用');
+  const unchanged = await fs.readFile(path.join(home,'auth-profiles',fourth,'auth.json'),'utf8');
+  assert.equal(unchanged, JSON.stringify(named));
+  await assert.rejects(call('remove',selection(await get('2'))),e=>e.errorCode==='PROFILE_ACTIVE');
+  await call('remove',selection(added));
+  assert.equal(await get(fourth),undefined);
+  assert.equal((await call('status')).nextProfileId,'5');
+  await assert.rejects(call('import',add),e=>e.errorCode==='PROFILE_CHANGED');
+  assert.equal(await fs.readFile(path.join(home,'auth-profiles/maintenance/removed',fourth,'auth.json'),'utf8'),unchanged);
+  await save(uploaded.path,payload);
   await assert.rejects(call('import',{profile:'3',revision:'missing',sourcePath:uploaded.path}),e=>e.errorCode==='PROFILE_CHANGED');
   await assert.rejects(call('import',{profile:'3',revision:imported.profileInfo.revision,sourcePath:current}),e=>e.errorCode==='IMPORT_SOURCE_NOT_ALLOWED');
   const replacement = credential('third-replaced');
@@ -116,26 +144,69 @@ subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, sta
   // Current-account synchronization also runs before the daily inactive job.
   assert.equal(await fs.readFile(two,'utf8'),activeBefore);
 
+  await save(path.join(home, 'runtime-auth.json'), activeBefore);
+  const child = spawn('/usr/bin/python3', [path.join(__dirname, 'fixtures/auth-runtime.py'), home]);
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill(); await once(child, 'exit');
+    }
+  });
+  await Promise.race([once(child.stdout, 'data'), once(child, 'exit').then(() => { throw new Error('Restart fixture exited'); })]);
   await save(path.join(home,'reject-schedule'),'1');
-  await assert.rejects(call('switch',selection(await get('1'))),e=>e.message.includes('42'));
+  const rejected = await call('switch',selection(await get('1')));
+  assert.equal(rejected.status, 'failed');
+  assert.equal(rejected.failure.exitCode, 42);
+  assert.equal(rejected.failure.stage, 'restart_schedule');
+  assert.match(rejected.failure.stderr, /fixture scheduler rejected/);
   assert.equal(await fs.readFile(current,'utf8'),activeBefore);
   await fs.unlink(path.join(home,'reject-schedule'));
-  const switched = await call('switch',selection(await get('1')));
-  assert.equal(switched.status,'restart_scheduled');
-  for(let i=0;i<40;i++) {
-    try {
-      const result=await call('list');
-      if(result.restartStatus==='restarted') break;
-    } catch(error) {
-      if(error.errorCode !== 'MANAGER_BUSY') throw error;
+  const next = (await call('status')).nextProfileId;
+  assert.equal(next, '5');
+  await call('import',{profile:next,revision:'missing',sourcePath:uploaded.path,displayName:'第五个'});
+  async function completed(operationId) {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      try {
+        const record = (await call('list')).restartHistory.find(row => row.operationId === operationId);
+        if (record && !['restart_scheduled', 'running'].includes(record.status)) return record;
+      } catch(error) {
+        if(error.errorCode !== 'MANAGER_BUSY') throw error;
+      }
+      await new Promise(r=>setTimeout(r,50));
     }
-    await new Promise(r=>setTimeout(r,50));
+    assert.fail('Restart did not complete: ' + operationId);
   }
-  assert.equal((await call('list')).restartStatus,'restarted');
+  await save(path.join(home, 'unmanaged'), '1');
+  const unmanaged = await call('switch',selection(await get(next)));
+  assert.equal(unmanaged.failure.code, 'RESTART_RUNTIME_UNMANAGED');
+  assert.equal(await fs.readFile(current,'utf8'),activeBefore);
+  await fs.unlink(path.join(home, 'unmanaged'));
+  await save(path.join(home,'reject-restart'),'1');
+  const failed = await call('switch',selection(await get(next)));
+  const rolledBack = await completed(failed.operationId);
+  assert.equal(rolledBack.failure.exitCode, 18);
+  assert.equal(rolledBack.failure.stage, 'daemon_restart');
+  assert.equal(rolledBack.recovery.status, 'rolled_back');
+  assert.equal(await fs.readFile(current,'utf8'),activeBefore);
+  await fs.unlink(path.join(home,'reject-restart'));
+  const switched = await call('switch',selection(await get(next)));
+  assert.equal(switched.status,'restart_scheduled');
+  assert.equal((await completed(switched.operationId)).status, 'ready');
   const scheduled = JSON.parse(await fs.readFile(path.join(home,'scheduled.json'),'utf8'));
-  assert.ok(scheduled.some(s=>s.endsWith('/auth_store.py')));
+  assert.ok(scheduled.some(s=>s.endsWith('/auth-profiles.py')));
   assert.ok(!scheduled.some(s=>s.includes('.local/lib/codex-auth-manager')));
-  assert.equal(JSON.parse(await fs.readFile(current,'utf8')).tokens.account_id,'standby');
+  assert.equal(JSON.parse(await fs.readFile(current,'utf8')).tokens.account_id,'third-replaced');
+  assert.equal((await get(next)).active,true);
+  const authBeforeManual = await fs.readFile(current, 'utf8');
+  const manual = await call('restart');
+  assert.equal((await completed(manual.operationId)).status, 'ready');
+  assert.equal(await fs.readFile(current, 'utf8'), authBeforeManual);
+  const history = (await call('list')).restartHistory;
+  assert.deepEqual(history.map(row => row.operationId), [manual, switched, failed, unmanaged, rejected].map(row => row.operationId));
+  assert.ok(!JSON.stringify(history).includes('synthetic-'));
+  await fs.rename(current, path.join(home, 'offline-auth.json'));
+  const offline = execFileSync('/usr/bin/python3', [path.join(__dirname, '../src/auth-cli.py'), '--home', home, 'restart-history']);
+  assert.deepEqual(JSON.parse(offline).restartHistory, history);
 });
 
 test('active fallback uses the connected control socket and persists matching files without repeat rotation', async t => {

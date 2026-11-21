@@ -35,7 +35,8 @@ const { handleDesktopRequest } = require("./desktop-handler");
 const { readDaemonConfig, writeDaemonConfig, resolveRemodexStateDir } = require("./daemon-state");
 const { handleGitRequest } = require("./git-handler");
 const { handleThreadContextRequest } = require("./thread-context-handler");
-const { handleWorkspaceRequest, workspaceImageResponseFits } = require("./workspace-handler");
+const { handleWorkspaceRequest, workspaceImageResponseFits, inlineUploadedTurnImages, downloadErrorDiagnostic } = require("./workspace-handler");
+const { workspaceUploadRoot, isCompletedUploadPath } = require("./workspace-upload");
 const { handleProjectRequest, isBridgeProjectMethod } = require("./project-handler");
 const { handlePetRequest } = require("./pet-handler");
 const { createNotificationsHandler } = require("./notifications-handler");
@@ -110,7 +111,8 @@ const BRIDGE_MANAGED_REQUEST_ID_PREFIX = "bridge-managed-";
 const phoneProfileMethods = new Set([
   "account/profiles/list", "account/profiles/status", "account/profiles/check",
   "account/profiles/import", "account/profiles/export", "account/profiles/query",
-  "account/profiles/refreshToken", "account/profiles/switch",
+  "account/profiles/rename", "account/profiles/remove",
+  "account/profiles/refreshToken", "account/profiles/switch", "account/profiles/restart",
 ]);
 const RELAY_THREAD_PAYLOAD_SOFT_LIMIT_BYTES = 4 * 1024 * 1024;
 const OPEN_CODE_THREAD_LIST_CURSOR_PREFIX = "remodex-opencode-list-v1:";
@@ -144,8 +146,7 @@ const RELAY_JSONL_FULL_ARTIFACT_FALLBACK_MAX_BYTES = Math.max(
   0,
   bufferConstants.MAX_STRING_LENGTH - (8 * 1024 * 1024)
 );
-const BRIDGE_PACKAGE_UPDATE_COMMAND = "npm install -g remodex@latest";
-const BRIDGE_PACKAGE_UPDATE_TIMEOUT_MS = 180_000;
+const xddUpdate = require("./xdd-bridge-update");
 const BRIDGE_RESTART_AFTER_UPDATE_DELAY_MS = 750;
 const MODELS_WITHOUT_REASONING_SUMMARY = new Set([
   "gpt-5.3-codex-spark",
@@ -731,6 +732,9 @@ function startBridge({
   onPairingSession = null,
   onBridgeStatus = null,
 } = {}) {
+  const installRoot = path.resolve(__dirname, "../..");
+  const managedMacUpdate = process.platform === "darwin" && process.argv.includes("run-service") && Boolean(xddUpdate.installedVersion(installRoot));
+  let updateInProgress = false;
   const config = explicitConfig || readBridgeConfig();
   const catalogDeletionScope = config.codexEndpoint ? null : randomBytes(16).toString("hex");
   config.keepMacAwakeEnabled = config.keepMacAwakeEnabled === true;
@@ -1448,7 +1452,7 @@ function startBridge({
       return;
     }
     if (isOpenCodeRequest(parsedMessage, openCodeRuntime)) {
-      Promise.resolve().then(() => openCodeRuntime.handleRequest(parsedMessage)).then((result) => {
+      inlineUploadedTurnImages(parsedMessage).then((request) => openCodeRuntime.handleRequest(request)).then((result) => {
         if (parsedMessage.id != null) {
           sendApplicationResponse(JSON.stringify({ id: parsedMessage.id, result }));
         }
@@ -1471,7 +1475,9 @@ function startBridge({
     if (voiceHandler.handleVoiceRequest(rawMessage, sendApplicationResponse, parsedMessage)) {
       return;
     }
-    if (endpointMethods.has(parsedMessage?.method)) {
+    const isBridgeUploadPreview = parsedMessage?.method === "workspace/readImage"
+      && isCompletedUploadPath(workspaceUploadRoot(), parsedMessage.params?.path);
+    if (endpointMethods.has(parsedMessage?.method) && !isBridgeUploadPreview) {
       forwardInboundRequestToCodex(rawMessage);
       return;
     }
@@ -1562,6 +1568,22 @@ function startBridge({
   }
 
   function forwardInboundRequestToCodex(rawMessage) {
+    const request = parseBridgeMessage(rawMessage);
+    if (config.codexEndpoint && !config.codexEndpoint.startsWith("ws+unix:")
+      && ["turn/start", "turn/steer"].includes(request?.method)
+      && Array.isArray(request.params?.input)
+      && request.params.input.some((item) => item?.type === "localImage" && isCompletedUploadPath(workspaceUploadRoot(), item.path))) {
+      inlineUploadedTurnImages(request).then((inlined) => {
+        forwardCodexRequest(JSON.stringify(inlined));
+      }).catch((error) => {
+        if (request.id != null) sendApplicationResponse(createJsonRpcErrorResponse(request.id, error, "image_upload_read_failed"));
+      });
+      return;
+    }
+    forwardCodexRequest(rawMessage);
+  }
+
+  function forwardCodexRequest(rawMessage) {
     const codexRequest = normalizeTurnStartForCodex(rawMessage);
     const parsedRequest = parseBridgeMessage(codexRequest);
     if (parsedRequest?.id != null
@@ -2128,6 +2150,7 @@ function startBridge({
           ...(error?.predictionStage ? { stage: error.predictionStage, upstreamCode: error.upstreamCode, upstreamData: error.cause?.data } : {}),
           ...(error?.accountStage ? { stage: error.accountStage, upstreamCode: error.code } : {}),
           ...(error?.profileDiagnostic ? { diagnostic: error.profileDiagnostic } : {}),
+          ...(error?.attachmentStage ? { stage: error.attachmentStage, diagnostic: downloadErrorDiagnostic(error) } : {}),
         },
       },
     });
@@ -2703,13 +2726,13 @@ function startBridge({
         keepMacAwake: config.keepMacAwakeEnabled !== false,
       },
       applied: bridgeWakeAssertion.active,
+      xddPackageUpdateSupported: managedMacUpdate,
+      installedXddVersion: xddUpdate.installedVersion(installRoot),
     };
   }
 
   function updateBridgePreferences(preferences = {}) {
     const nextKeepMacAwakeEnabled = preferences.keepMacAwake !== false;
-    config.keepMacAwakeEnabled = nextKeepMacAwakeEnabled;
-    bridgeWakeAssertion.setEnabled?.(nextKeepMacAwakeEnabled);
 
     try {
       persistBridgePreferences({
@@ -2723,6 +2746,8 @@ function startBridge({
       throw nextError;
     }
 
+    config.keepMacAwakeEnabled = nextKeepMacAwakeEnabled;
+    bridgeWakeAssertion.setEnabled?.(nextKeepMacAwakeEnabled);
     return readBridgePreferences();
   }
 
@@ -2734,48 +2759,35 @@ function startBridge({
       throw error;
     }
 
-    try {
-      await execFileAsync("/bin/zsh", [
-        "-lc",
-        [
-          "export TERM=dumb",
-          "source ~/.zshrc >/dev/null 2>/dev/null || true",
-          BRIDGE_PACKAGE_UPDATE_COMMAND,
-        ].join("; "),
-      ], {
-        timeout: BRIDGE_PACKAGE_UPDATE_TIMEOUT_MS,
-        maxBuffer: 2 * 1024 * 1024,
-      });
-    } catch (error) {
-      const nextError = new Error(
-        truncateCommandOutput(error?.stderr || error?.stdout || error?.message)
-          || "Could not update the Remodex bridge package on this Mac."
-      );
-      nextError.errorCode = "bridge_update_failed";
-      nextError.userMessage = nextError.message;
-      nextError.cause = error;
-      throw nextError;
+    if (!managedMacUpdate || updateInProgress) {
+      const code = updateInProgress ? "bridge_update_busy" : "unsupported_bridge_update";
+      throw Object.assign(new Error(code), {errorCode: code});
     }
-
-    scheduleBridgeServiceRestartAfterUpdate();
-    return {
-      success: true,
-      command: BRIDGE_PACKAGE_UPDATE_COMMAND,
-      restartScheduled: true,
-      restartDelayMs: BRIDGE_RESTART_AFTER_UPDATE_DELAY_MS,
-    };
+    updateInProgress = true;
+    try {
+      const candidate = await xddUpdate.stageRelease(installRoot);
+      if (!candidate) {
+        updateInProgress = false;
+        return {success: true, upToDate: true, restartScheduled: false};
+      }
+      scheduleBridgeServiceRestartAfterUpdate(candidate.cli);
+      return {success: true, version: candidate.version, restartScheduled: true, restartDelayMs: BRIDGE_RESTART_AFTER_UPDATE_DELAY_MS};
+    } catch (cause) {
+      updateInProgress = false;
+      throw Object.assign(new Error("XDD bridge update: " + cause.message, {cause}), {errorCode: "bridge_update_failed"});
+    }
   }
 
-  // Restarts after the RPC response has crossed the encrypted phone channel.
-  function scheduleBridgeServiceRestartAfterUpdate() {
+  function scheduleBridgeServiceRestartAfterUpdate(cliPath) {
     const restartTimer = setTimeout(() => {
-      const cliPath = path.join(__dirname, "..", "bin", "remodex.js");
       const child = spawn(process.execPath, [cliPath, "restart"], {
         detached: true,
         stdio: "ignore",
         env: process.env,
       });
+      child.on?.("exit", () => { updateInProgress = false; });
       child.on?.("error", (error) => {
+        updateInProgress = false;
         console.warn(`[remodex] Failed to schedule the post-update bridge restart: ${error?.message || error}`);
       });
       child.unref?.();
@@ -3047,6 +3059,12 @@ function normalizeTurnStartForCodex(rawMessage) {
   const effort = normalizeNonEmptyString(params.effort);
   let changed = false;
   let nextParams = params;
+  // Astra's catalog default is "none". Request public summaries on new turns
+  // for this verified model while respecting explicit per-turn preferences.
+  if (params.summary == null && readTurnStartModel(params) === "gpt-6.2-astra") {
+    nextParams = { ...params, summary: "auto" };
+    changed = true;
+  }
 
   for (const collaborationKey of ["collaborationMode", "collaboration_mode"]) {
     const collaborationMode = nextParams[collaborationKey];
