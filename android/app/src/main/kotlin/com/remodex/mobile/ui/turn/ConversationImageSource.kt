@@ -22,13 +22,13 @@ internal fun conversationImageSource(raw: String): ConversationImageSource {
         return ConversationImageSource.Remote(source)
     }
     if (source.startsWith("data:image/", true)) return ConversationImageSource.Inline(source)
-    val local = source.removePrefix("sandbox:")
-    require(!Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:").containsMatchIn(local) ||
-        local.startsWith("file:", true) || Regex("^[a-zA-Z]:[/\\\\]").containsMatchIn(local)) {
+    require(!Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:").containsMatchIn(source) ||
+        source.startsWith("file:", true) || source.startsWith("sandbox:", true) ||
+        Regex("^[a-zA-Z]:[/\\\\]").containsMatchIn(source)) {
         "Unsupported image source scheme stage=image_source"
     }
     return ConversationImageSource.Workspace(
-        RepoMarkdownFileLink.previewPath(local)
+        RepoMarkdownFileLink.previewPath(source)
             ?: throw IllegalArgumentException("Invalid image path stage=image_source"),
     )
 }

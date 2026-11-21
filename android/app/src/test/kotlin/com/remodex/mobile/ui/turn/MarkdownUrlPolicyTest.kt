@@ -26,6 +26,18 @@ class MarkdownUrlPolicyTest {
     }
 
     @Test
+    fun sandboxArtifactLinksUseHostPathAndParentForPreview() {
+        val link = "sandbox:/mnt/data/A4L-S4-refined.png"
+        val path = requireNotNull(RepoMarkdownFileLink.previewPath(link))
+        assertEquals("/mnt/data/A4L-S4-refined.png", path)
+        assertEquals("/mnt/data", RepoMarkdownFileLink.previewWorkspaceCwd(path))
+        assertEquals("C:/repo/image.png", RepoMarkdownFileLink.previewPath("sandbox:/C:/repo/image.png"))
+        assertEquals("/mnt/data/A+B #1.glb", RepoMarkdownFileLink.previewPath("sandbox:/mnt/data/A+B%20%231.glb?download=1"))
+        assertEquals(null, RepoMarkdownFileLink.previewPath("sandbox://other-host/mnt/data/file.png"))
+        assertEquals(null, RepoMarkdownFileLink.previewPath("sandbox:relative.png"))
+    }
+
+    @Test
     fun repoMarkdownPreviewPathDropsLineSuffixes() {
         assertEquals("README.md", RepoMarkdownFileLink.previewPath("README.md:12"))
         assertEquals("./Docs/README.md", RepoMarkdownFileLink.previewPath("./Docs/README.md:12:3"))

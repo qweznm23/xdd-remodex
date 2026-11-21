@@ -39,7 +39,7 @@ private data class VideoPlaybackPlan(val uri: Uri, val reader: VideoRangeReader?
 internal fun ConversationVideoPlayer(source: String, cwd: String?, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val repository = LocalCodexRepository.current
-    val localDownloadPath = RepoMarkdownFileLink.previewPath(source.trim().removePrefix("sandbox:"))
+    val localDownloadPath = RepoMarkdownFileLink.previewPath(source)
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var showDownload by remember(source,cwd) { mutableStateOf(false) }
     var attempt by remember(source,cwd) { mutableIntStateOf(0) }
@@ -52,7 +52,7 @@ internal fun ConversationVideoPlayer(source: String, cwd: String?, onDismiss: ()
     }
     LaunchedEffect(source,cwd,attempt) {
         try {
-            val normalized = source.trim().removePrefix("sandbox:")
+            val normalized = source.trim()
             if (normalized.startsWith("https://",true) || normalized.startsWith("http://",true)) plan = VideoPlaybackPlan(Uri.parse(normalized))
             else {
                 val local = conversationImageSource(normalized) as? ConversationImageSource.Workspace

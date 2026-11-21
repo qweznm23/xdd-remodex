@@ -66,6 +66,17 @@ internal object RepoMarkdownFileLink {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return null
         val lower = trimmed.lowercase()
+        if (lower.startsWith("sandbox:")) {
+            val uri = try {
+                java.net.URI(trimmed.replace(" ", "%20"))
+            } catch (_: java.net.URISyntaxException) {
+                return null
+            }
+            return uri.path?.takeIf {
+                uri.rawAuthority == null && it.startsWith("/") && !it.startsWith("//") &&
+                    '\u0000' !in it && '\\' !in it
+            }?.let(::dropWindowsUriSlash)?.let(::stripTrailingLineLocation)
+        }
         if (lower.startsWith("http://") || lower.startsWith("https://")) return null
         if (lower.startsWith("mailto:") || lower.startsWith("tel:")) return null
         if ("://" in trimmed && !lower.startsWith("file:")) return null
