@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -88,6 +89,13 @@ fun SidebarDrawerContent(
     var trophySpotlightPx by remember { mutableStateOf<TrophySpotlightPx?>(null) }
     val sidebarColors = rememberSidebarColorPalette()
 
+    fun openDestination(open: () -> Unit) {
+        drawerScope.launch {
+            drawerState.snapTo(DrawerValue.Closed)
+            open()
+        }
+    }
+
     LaunchedEffect(coachmarkRootCoords, trophyLayoutCoords, showTesterHqCoachmark) {
         if (!showTesterHqCoachmark) {
             trophySpotlightPx = null
@@ -134,49 +142,18 @@ fun SidebarDrawerContent(
             SidebarScreen(
                 repository = repository,
                 drawerOpen = drawerState.isOpen,
+                onCloseDrawer = { drawerScope.launch { closeDrawer() } },
                 dotAnimationsEnabled = drawerState.isOpen && !drawerState.isAnimationRunning,
                 activeChatMetadata = activeChatMetadata,
-                onOpenArchivedChats = {
-                    drawerScope.launch {
-                        closeDrawer()
-                        navController.navigate(AppRoutes.Archived)
-                    }
-                },
-                onOpenSettings = {
-                    drawerScope.launch {
-                        closeDrawer()
-                        navController.navigate(AppRoutes.Settings)
-                    }
-                },
-                onOpenTerminal = {
-                    drawerScope.launch {
-                        closeDrawer()
-                        navController.navigate(AppRoutes.Terminal)
-                    }
-                },
-                onOpenPairingScanner = {
-                    drawerScope.launch {
-                        closeDrawer()
-                        onOpenPairingScanner()
-                    }
-                },
-                onOpenMyDevices = {
-                    drawerScope.launch {
-                        closeDrawer()
-                        navController.navigate(AppRoutes.MyDevices)
-                    }
-                },
+                onOpenArchivedChats = { openDestination { navController.navigate(AppRoutes.Archived) { launchSingleTop = true } } },
+                onOpenSettings = { openDestination { navController.navigate(AppRoutes.Settings) { launchSingleTop = true } } },
+                onOpenTerminal = { openDestination { navController.navigate(AppRoutes.Terminal) { launchSingleTop = true } } },
+                onOpenPairingScanner = { openDestination(onOpenPairingScanner) },
+                onOpenMyDevices = { openDestination { navController.navigate(AppRoutes.MyDevices) { launchSingleTop = true } } },
                 onOpenNewChatDraft = { source, preferredProjectPath ->
-                    drawerScope.launch {
-                        closeDrawer()
+                    openDestination {
                         val route = NewChatDraftRoute.create(source, preferredProjectPath)
-                        navController.navigate(
-                            AppRoutes.newChatDraftRoute(
-                                routeId = route.id,
-                                source = route.source,
-                                preferredProjectPath = route.preferredProjectPath,
-                            ),
-                        )
+                        navController.navigate(AppRoutes.newChatDraftRoute(route))
                     }
                 },
                 onThreadSelected = {
@@ -192,11 +169,11 @@ fun SidebarDrawerContent(
                 TextButton(
                     onClick = {
                         if (reconnectUiState.attempt == null) {
-                            drawerScope.launch {
+                            if (reconnectUiState.recoveryAction == RootReconnectRecoveryAction.ScanNewQr) {
+                                openDestination(onOpenPairingScanner)
+                            } else drawerScope.launch {
                                 closeDrawer()
-                                if (reconnectUiState.recoveryAction == RootReconnectRecoveryAction.ScanNewQr) {
-                                    onOpenPairingScanner()
-                                } else if (reconnectUiState.wakeDisplayAvailable) {
+                                if (reconnectUiState.wakeDisplayAvailable) {
                                     onWakeSavedComputer()
                                 } else {
                                     onReconnectSavedPairing()

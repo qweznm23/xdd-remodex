@@ -40,9 +40,25 @@ class ProjectFolderService(
                 throw error
             }
         val obj = response.result?.objectValue
-            ?: throw CodexServiceError.InvalidInput("project/listDirectory response missing entries")
-        return CodexProjectDirectoryListing.fromJson(obj)
+            ?: throw CodexServiceError.InvalidResponse("project/listDirectory response missing directory")
+        val result = CodexProjectDirectoryListing.fromJson(obj)
+        if (result.path.isBlank()) throw CodexServiceError.InvalidResponse("project/listDirectory response missing path")
+        return result
     }
+
+    /** A thread's existing cwd can be outside the bridge's directory browser. */
+    internal suspend fun resolveExistingWorkspace(
+        path: String,
+        onBrowseDenied: (CodexServiceError.RpcFailure) -> Unit,
+    ): String =
+        try {
+            listDirectory(path).path
+        } catch (failure: CodexServiceError.RpcFailure) {
+            val code = failure.rpcError.data?.objectValue?.get("errorCode")?.stringValue
+            if (code != "path_not_allowed") throw failure
+            onBrowseDenied(failure)
+            path
+        }
 
     suspend fun searchDirectories(
         rootPath: String,
@@ -94,20 +110,13 @@ class ProjectFolderService(
             ?: throw CodexServiceError.InvalidInput("project/createDirectory response missing path")
     }
 
-    suspend fun createRootlessChatRoot(promptHint: String?): String? {
-        val params =
-            promptHint
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?.let { mapOf("promptHint" to JSONValue.Str(it)) }
-                ?: emptyMap()
-        val response =
-            runCatching {
-                repository.sendRequest("project/createRootlessChatRoot", JSONValue.Obj(params))
-            }.getOrElse { error ->
-                throw error
-            }
+    suspend fun createRootlessChatRoot(promptHint: String?): String {
+        val params = promptHint?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { mapOf("promptHint" to JSONValue.Str(it)) }
+            .orEmpty()
+        val response = repository.sendRequest("project/createRootlessChatRoot", JSONValue.Obj(params))
         return response.result?.objectValue?.get("path")?.stringValue?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw CodexServiceError.InvalidResponse("project/createRootlessChatRoot response missing path")
     }
 
     private suspend fun listDirectoryWithFsRpc(path: String): CodexProjectDirectoryListing {

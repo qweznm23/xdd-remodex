@@ -47,29 +47,19 @@ class SidebarNewChatStartContractTest {
         }
 
     @Test
-    fun floatingChatDraftTarget_usesQuickChatWhenChatsTabIsSelected() {
-        val target =
-            sidebarFloatingChatDraftTarget(
-                listTab = SidebarListTab.Home,
-                activeThreadId = "project-thread",
-                threads = listOf(CodexThread(id = "project-thread", cwd = "/repo")),
-            )
+    fun floatingChatDraftStartsWithoutAWorkspaceOutsideProjectDetails() {
+        val target = sidebarFloatingChatDraftTarget(selectedProjectPath = null)
 
         assertEquals(NewChatDraftSource.generalChat, target.source)
         assertNull(target.preferredProjectPath)
     }
 
     @Test
-    fun floatingChatDraftTarget_usesActiveProjectWhenProjectsTabIsSelected() {
-        val target =
-            sidebarFloatingChatDraftTarget(
-                listTab = SidebarListTab.Projects,
-                activeThreadId = "project-thread",
-                threads = listOf(CodexThread(id = "project-thread", cwd = "/repo")),
-            )
+    fun floatingChatDraftUsesTheProjectBeingBrowsed() {
+        val target = sidebarFloatingChatDraftTarget(selectedProjectPath = "/opened-project")
 
-        assertEquals(NewChatDraftSource.generalChat, target.source)
-        assertEquals("/repo", target.preferredProjectPath)
+        assertEquals(NewChatDraftSource.folderChat, target.source)
+        assertEquals("/opened-project", target.preferredProjectPath)
     }
 }
 

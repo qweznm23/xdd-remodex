@@ -2,6 +2,7 @@ package com.remodex.mobile.ui.turn
 
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CodexImageAttachment
+import com.remodex.mobile.core.model.CodexFileAttachment
 import com.remodex.mobile.core.model.CodexTurnMention
 import com.remodex.mobile.core.model.CodexTurnSkillMention
 
@@ -14,4 +15,6 @@ internal data class FailedTurnSend(
     val collaborationMode: CodexCollaborationModeKind?,
     val requestId: String,
     val attempt: Int,
+    val composerText: String?,
+    val files: List<CodexFileAttachment>,
 )

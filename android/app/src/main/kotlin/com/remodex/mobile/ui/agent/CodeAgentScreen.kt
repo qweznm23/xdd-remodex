@@ -22,6 +22,7 @@ fun CodeAgentScreen(
     onOpenPairingScanner: () -> Unit = {},
     onGitContextChanged: () -> Unit = {},
     modifier: Modifier = Modifier,
+    onRecoverDraft: ((deviceId: String, threadId: String) -> Unit)? = null,
 ) {
     TurnConversationPane(
         threadId = threadId,
@@ -31,6 +32,7 @@ fun CodeAgentScreen(
         onWakeSavedComputer = onWakeSavedComputer,
         onOpenPairingScanner = onOpenPairingScanner,
         onGitContextChanged = onGitContextChanged,
+        onRecoverDraft = onRecoverDraft,
         modifier = modifier,
     )
 }

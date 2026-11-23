@@ -128,7 +128,12 @@ internal class EncryptedFileStream(private val client: OkHttpClient = clientInst
             is java.net.UnknownHostException -> "dns_failure"
             is javax.net.ssl.SSLException -> "tls_error"
             is java.net.ProtocolException -> "protocol_error"
-            else -> "io_unknown"
+            else -> if (stage == "stream_connect" && cause.cause is java.io.EOFException) {
+                // OkHttp wraps a closed connection before the HTTP response headers.
+                "incomplete_stream"
+            } else {
+                "io_unknown"
+            }
         }
         return FileTransferFailure(stage,code,"File transfer interrupted at byte $offset ($code)",cause)
     }

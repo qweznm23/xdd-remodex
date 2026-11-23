@@ -45,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -103,6 +104,7 @@ fun SidebarScreen(
     modifier: Modifier = Modifier,
     dotAnimationsEnabled: Boolean = true,
     drawerOpen: Boolean = true,
+    onCloseDrawer: (() -> Unit)? = null,
 ) {
     val threads by repository.threads.collectAsStateWithLifecycle()
     val pendingQuestions by repository.pendingStructuredInputRequests.collectAsStateWithLifecycle()
@@ -125,8 +127,15 @@ fun SidebarScreen(
     var query by rememberSaveable(pinDeviceId) { mutableStateOf("") }
     fun closeSearch() { query = ""; searching = false }
     val inProject = listTab == SidebarListTab.Projects && projectId != null
-    BackHandler(enabled = drawerOpen && (searching || inProject)) {
-        if (searching) closeSearch() else projectId = null
+    // Register on opening so the overlay handles Back before the page underneath.
+    if (drawerOpen) {
+        BackHandler(enabled = searching || inProject || onCloseDrawer != null) {
+            when {
+                searching -> closeSearch()
+                inProject -> projectId = null
+                else -> onCloseDrawer?.invoke()
+            }
+        }
     }
     val searchResults = rememberLazyListState()
     val listState = when {
@@ -173,11 +182,6 @@ fun SidebarScreen(
     }
 
 
-    var newChatBusy by remember { mutableStateOf(false) }
-    var newChatError by remember { mutableStateOf<String?>(null) }
-    var showProjectPicker by remember { mutableStateOf(false) }
-    var projectPickerInitialPath by remember { mutableStateOf<String?>(null) }
-    var projectPickerFoldersCollapsed by remember { mutableStateOf(false) }
     var showWorktreeSheet by remember { mutableStateOf(false) }
     var worktreeSheetBasePath by remember { mutableStateOf<String?>(null) }
     var worktreeChatBusy by remember { mutableStateOf(false) }
@@ -248,13 +252,8 @@ fun SidebarScreen(
         source: NewChatDraftSource,
         preferredProjectPath: String? = null,
     ) {
-        if (newChatBusy || worktreeChatBusy) return
-        newChatError = null
+        if (worktreeChatBusy) return
         onOpenNewChatDraft(source, preferredProjectPath)
-    }
-
-    fun startQuickCloudChat() {
-        openNewChatDraft(NewChatDraftSource.generalChat, preferredProjectPath = null)
     }
 
     fun startManagedWorktreeChat(
@@ -377,36 +376,32 @@ fun SidebarScreen(
                     Icon(Icons.Filled.Close, stringResource(android.R.string.cancel))
                 }
             }
-        } else SidebarBrandHeader(
-            colors = sidebarColors,
-            navigation = {
-                if (inProject) Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { projectId = null }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.drawer_back_projects))
-                    }
-                    Text(selectedProject?.let { if (it.kind == SidebarThreadGroupKind.Chats) stringResource(R.string.sidebar_tab_chats) else it.label }.orEmpty(),
-                        style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                } else SidebarListTabRow(listTab, onSelected = { listTab = it })
-            },
-            onMoreMenu =
-                SidebarMoreMenuCallbacks(
-                    onNewChat = {
-                        newChatError = null
-                        projectPickerInitialPath = WorktreeNewChatDefaults.baseProjectPath(activeId, threads)
-                        projectPickerFoldersCollapsed = false
-                        showProjectPicker = true
-                    },
-                    onQuickCloudChat = { startQuickCloudChat() },
-                    onOpenArchivedChats = onOpenArchivedChats,
-                    onRefreshThreads = ::refreshList,
-                    onOpenConnections = onOpenMyDevices,
-                    toggleGroups = if (collapsibleGroupIds.isEmpty()) null else ::toggleGroups,
-                    allCollapsed = allCollapsed,
-                    openIndex = if (indexEntries.size > 1) { { projectIndexOpen = true } } else null,
-                ),
-            onOpenSettings = onOpenSettings,
-            onSearch = { searchResults.requestScrollToItem(0); searching = true },
-        )
+        } else key(drawerOpen) {
+            // Dispose the anchored popup as soon as its drawer leaves the screen.
+            SidebarBrandHeader(
+                colors = sidebarColors,
+                navigation = {
+                    if (inProject) Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { projectId = null }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.drawer_back_projects))
+                        }
+                        Text(selectedProject?.let { if (it.kind == SidebarThreadGroupKind.Chats) stringResource(R.string.sidebar_tab_chats) else it.label }.orEmpty(),
+                            style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    } else SidebarListTabRow(listTab, onSelected = { listTab = it })
+                },
+                onMoreMenu =
+                    SidebarMoreMenuCallbacks(
+                        onOpenArchivedChats = onOpenArchivedChats,
+                        onRefreshThreads = ::refreshList,
+                        onOpenConnections = onOpenMyDevices,
+                        toggleGroups = if (collapsibleGroupIds.isEmpty()) null else ::toggleGroups,
+                        allCollapsed = allCollapsed,
+                        openIndex = if (indexEntries.size > 1) { { projectIndexOpen = true } } else null,
+                    ),
+                onOpenSettings = onOpenSettings,
+                onSearch = { searchResults.requestScrollToItem(0); searching = true },
+            )
+        }
         if (searching) {
             val count = visibleGroups.single().totalCount
             val summary = when {
@@ -434,16 +429,6 @@ fun SidebarScreen(
             Text(stringResource(R.string.sidebar_pin_failed, error), color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             TextButton(onClick = { scope.launch { try { repository.refreshThreads(); pinError = null } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { pinError = failure.message; Log.e("RemodexSidebarPins", "operation=pin-refresh", failure) } } }, enabled = !pinBusy) { Text(stringResource(R.string.workspace_text_preview_retry)) }
-        }
-        newChatError?.let { err ->
-            Text(
-                text = err,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.heightIn(max = 40.dp),
-            )
         }
         worktreeChatError?.let { err ->
             Text(
@@ -476,7 +461,6 @@ fun SidebarScreen(
                         RepoHeader(
                             group = group,
                             modifier = Modifier.padding(horizontal = 4.dp),
-                            newChatBusy = newChatBusy,
                             worktreeChatBusy = worktreeChatBusy,
                             colors = sidebarColors,
                             directory = directory,
@@ -647,17 +631,9 @@ fun SidebarScreen(
         if (!searching) SidebarFloatingActionBar(
                 terminalEnabled = true,
                 chatEnabled = ready && !worktreeChatBusy,
-                chatBusy = newChatBusy,
                 onTerminal = onOpenTerminal,
                 onChat = {
-                    val target = if (inProject) {
-                        val path = selectedProject?.projectPath
-                        SidebarFloatingChatDraftTarget(if (path == null) NewChatDraftSource.generalChat else NewChatDraftSource.folderChat, path)
-                    } else sidebarFloatingChatDraftTarget(
-                            listTab = listTab,
-                            activeThreadId = activeId,
-                            threads = threads,
-                        )
+                    val target = sidebarFloatingChatDraftTarget(selectedProject?.projectPath.takeIf { inProject })
                     openNewChatDraft(
                         target.source,
                         preferredProjectPath = target.preferredProjectPath,
@@ -888,29 +864,6 @@ fun SidebarScreen(
                 },
             )
         }
-        SidebarProjectPickerSheet(
-            repository = repository,
-            visible = showProjectPicker,
-            initialPath = projectPickerInitialPath ?: WorktreeNewChatDefaults.baseProjectPath(activeId, threads),
-            onDismiss = {
-                showProjectPicker = false
-                projectPickerInitialPath = null
-                projectPickerFoldersCollapsed = false
-            },
-            onStartBusyChange = { newChatBusy = it },
-            onStartThread = { cwd ->
-                openNewChatDraft(
-                    NewChatDraftSource.generalChat,
-                    preferredProjectPath = cwd,
-                )
-                showProjectPicker = false
-            },
-            initialFoldersCollapsed = projectPickerFoldersCollapsed,
-            threads = threads,
-            activeThreadId = activeId,
-            activeChatMetadata = activeChatMetadata,
-            onThreadStarted = onThreadSelected,
-        )
         SidebarNewWorktreeSheet(
             repository = repository,
             visible = showWorktreeSheet,
@@ -1025,29 +978,16 @@ internal data class SidebarFloatingChatDraftTarget(
     val preferredProjectPath: String?,
 )
 
-internal fun sidebarFloatingChatDraftTarget(
-    listTab: SidebarListTab,
-    activeThreadId: String?,
-    threads: List<CodexThread>,
-): SidebarFloatingChatDraftTarget =
-    when (listTab) {
-        SidebarListTab.Home ->
-            SidebarFloatingChatDraftTarget(
-                source = NewChatDraftSource.generalChat,
-                preferredProjectPath = null,
-            )
-        SidebarListTab.Projects ->
-            SidebarFloatingChatDraftTarget(
-                source = NewChatDraftSource.generalChat,
-                preferredProjectPath = WorktreeNewChatDefaults.baseProjectPath(activeThreadId, threads),
-            )
-    }
+internal fun sidebarFloatingChatDraftTarget(selectedProjectPath: String?): SidebarFloatingChatDraftTarget =
+    SidebarFloatingChatDraftTarget(
+        source = if (selectedProjectPath == null) NewChatDraftSource.generalChat else NewChatDraftSource.folderChat,
+        preferredProjectPath = selectedProjectPath,
+    )
 
 @Composable
 private fun RepoHeader(
     group: SidebarThreadGroup,
     modifier: Modifier,
-    newChatBusy: Boolean,
     worktreeChatBusy: Boolean,
     colors: SidebarColorPalette,
     onNewChatInProject: (() -> Unit)?,
@@ -1085,7 +1025,7 @@ private fun RepoHeader(
                         .combinedClickable(
                             onClick = { if (onOpenArchivedChats != null) onOpenArchivedChats() else onToggleCollapse?.invoke() },
                             onLongClickLabel = stringResource(R.string.sidebar_project_actions_cd),
-                            onLongClick = if (hasMenuActions && !newChatBusy && !worktreeChatBusy) ({ showProjectMenu = true }) else null,
+                            onLongClick = if (hasMenuActions && !worktreeChatBusy) ({ showProjectMenu = true }) else null,
                         ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1125,7 +1065,7 @@ private fun RepoHeader(
                     )
                 }
             }
-            if (newChatBusy || worktreeChatBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            if (worktreeChatBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
         }
         if (hasMenuActions && showProjectMenu != null) {
             RemodexDropdownMenu(
@@ -1134,7 +1074,7 @@ private fun RepoHeader(
             ) {
                 onNewChatInProject?.let { action ->
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.sidebar_new_chat)) },
+                        text = { Text(stringResource(R.string.sidebar_new_chat_in_project)) },
                         onClick = {
                             showProjectMenu = false
                             action()

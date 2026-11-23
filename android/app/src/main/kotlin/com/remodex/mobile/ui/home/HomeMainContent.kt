@@ -40,6 +40,7 @@ fun HomeMainContent(
     onOpenPairingScanner: () -> Unit = {},
     onGitContextChanged: () -> Unit = {},
     modifier: Modifier = Modifier.fillMaxSize(),
+    onRecoverDraft: ((deviceId: String, threadId: String) -> Unit)? = null,
 ) {
     val activeThreadId by repository.activeThreadId.collectAsStateWithLifecycle()
     Box(
@@ -60,6 +61,7 @@ fun HomeMainContent(
                 onWakeSavedComputer = onWakeSavedComputer,
                 onOpenPairingScanner = onOpenPairingScanner,
                 onGitContextChanged = onGitContextChanged,
+                onRecoverDraft = onRecoverDraft,
                 modifier = Modifier.fillMaxSize(),
             )
         }

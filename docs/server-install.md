@@ -4,7 +4,7 @@
 
 ## 准备电脑
 
-1. 从 [fix140 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix140) 下载 `xdd-remodex-server-0.1.7-ws-fix140.tar.gz`，解压到长期使用的目录。中继和桥接所需的 Node 依赖已包含在包里。
+1. 从 [fix153 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix153) 下载 `xdd-remodex-server-0.1.7-ws-fix153.tar.gz`，解压到长期使用的目录。中继和桥接所需的 Node 依赖已包含在包里。
 2. 安装适合电脑芯片的 [Node.js 24](https://nodejs.org/en/download)。用平时使用 Codex 的账户打开终端，运行 `node -v` 确认显示 v24，再运行 `codex` 确认能正常进入已登录的会话，然后退出 Codex。
 3. 查电脑的局域网 IPv4 地址。Linux 可以用 `ip -brief -4 address` 查看当前网卡，Mac 可以在「系统设置 → 网络 → 当前连接 → 详细信息 → TCP/IP」查看。下面所有 `192.168.1.20` 都换成这个地址。
 

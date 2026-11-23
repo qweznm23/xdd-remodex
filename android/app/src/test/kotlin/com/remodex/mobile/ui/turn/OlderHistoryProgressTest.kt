@@ -95,6 +95,34 @@ class OlderHistoryProgressTest {
         assertFalse(page.canLoadOlder)
     }
 
+    @Test fun onePullTraversesCachedAndRemoteToolRowsAndFoldedAssistantCommentary() = runTest {
+        val final = row(300).copy(role = CodexMessageRole.assistant, text = "final response")
+        val cachedTools = (201..299).map { row(it).copy(role = CodexMessageRole.system, kind = CodexMessageKind.commandExecution) }
+        var rows = cachedTools + final
+        var page = state("tools")
+        val requests = mutableListOf<String>()
+        loadOlderHistoryUntilVisibleProgress(final.id, { rows }, { page }, {
+            when (page.olderCursor!!.stringValue!!.also(requests::add)) {
+                "tools" -> {
+                    rows = (101..200).map { row(it).copy(role = CodexMessageRole.system, kind = CodexMessageKind.fileChange) } + rows
+                    page = state("commentary")
+                }
+                "commentary" -> {
+                    rows = listOf(row(100).copy(role = CodexMessageRole.assistant, text = "running commands")) + rows
+                    page = state("dialogue")
+                }
+                "dialogue" -> {
+                    rows = listOf(row(99)) + rows
+                    page = state("still-older")
+                }
+                else -> fail("Pulled farther than the first older conversation row")
+            }
+        })
+        assertEquals(listOf("tools", "commentary", "dialogue"), requests)
+        assertEquals("row-99", rows[olderHistoryRevealStart(rows, olderHistoryBoundary(rows, final.id))].id)
+        assertEquals("still-older", page.olderCursor?.stringValue)
+    }
+
     @Test fun failedPagePreservesOriginalCauseAndCommittedCursorWithoutAutomaticRetry() = runTest {
         val cause = IOException("connection reset")
         val failure = IOException("older page failed", cause).apply { addSuppressed(IOException("cleanup failed")) }

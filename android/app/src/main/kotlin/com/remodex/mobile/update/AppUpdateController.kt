@@ -59,14 +59,14 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
     private var lastCheckStartedAt = 0L
     private val mutableState = MutableStateFlow(AppUpdateState())
     val state = mutableState.asStateFlow()
-    val customSource: String? get() = prefs.getString("source", null)?.takeIf {
-        prefs.getBoolean("source_custom", false) || it != BuildConfig.APP_UPDATE_URL
-    }
+    val savedSource: String? get() = prefs.getString("source", null)?.takeIf { it.isNotBlank() }
+    // Legacy installations saved only the URL. Honour it until the user explicitly follows the relay.
+    val customSource: String? get() = savedSource?.takeIf { prefs.getBoolean("source_custom", true) }
     val source: String get() = customSource ?: connectionSource()
     val pairedSource: String get() = connectionSource()
     fun followConnectionSource() {
         if (state.value.busy) return
-        prefs.edit().remove("source").remove("source_custom").apply()
+        prefs.edit().putBoolean("source_custom", false).apply()
         check(source)
     }
     private fun updateDir(): File = File(app.getExternalFilesDir(null)

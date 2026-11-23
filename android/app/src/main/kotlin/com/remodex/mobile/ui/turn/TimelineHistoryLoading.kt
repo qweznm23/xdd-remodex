@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.hasConversationContent
 import com.remodex.mobile.data.CodexRepository
@@ -16,8 +17,10 @@ import com.remodex.mobile.ui.agent.TimelinePresentation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.TimeoutException
 
-/** One automatic page per user gesture, including its fling; programmatic scrolling never arms it. */
+/** One automatic load per user gesture, including its fling; programmatic scrolling never arms it. */
 internal class TimelineHistoryAutoLoadGate {
     private var requested = false
     private var towardHistory = false
@@ -56,16 +59,9 @@ internal fun historyAnchorIndex(items: List<TimelineListItem>, anchor: HistoryVi
     items.indexOfFirst { it.stableKey == anchor.key }.takeIf { it >= 0 }
         ?: anchor.messageId?.let { id -> items.indexOfFirst { id in it.messageIds() }.takeIf { it >= 0 } }
 
-internal data class TimelineHistoryLoadingUi(val modifier: Modifier, val busy: Boolean, val error: String?, val load: () -> Unit)
+internal data class TimelineHistoryLoadingUi(val modifier: Modifier, val busy: Boolean, val error: String?, val showHeader: Boolean, val load: () -> Unit)
 
 private data class PendingHistoryAnchor(val anchor: HistoryViewportAnchor?, val firstId: String, val gesture: Int)
-
-internal fun shouldContinueHistoryReveal(
-    before: TimelineListItem?, after: TimelineListItem?, beforeSize: Int?, afterSize: Int?,
-    sameGesture: Boolean, hasMore: Boolean,
-): Boolean = sameGesture && hasMore && before is TimelineListItem.AssistantWorkGroup &&
-    after is TimelineListItem.AssistantWorkGroup && before.stableKey == after.stableKey &&
-    beforeSize != null && beforeSize == afterSize
 
 /** The repository receives pages immediately; reveal them at idle with the visible message anchored. */
 @Composable
@@ -76,7 +72,7 @@ internal fun rememberTimelineHistoryLoading(
     messages: List<CodexMessage>,
     visibleMessages: List<CodexMessage>,
     presentation: TimelinePresentation,
-    headerCount: Int,
+    displayedHiddenCount: Int,
     hiddenCount: Int,
     canLoadRemote: Boolean,
     remoteLoading: Boolean,
@@ -95,7 +91,8 @@ internal fun rememberTimelineHistoryLoading(
     val latestMessages by rememberUpdatedState(messages)
     val latestVisibleMessages by rememberUpdatedState(visibleMessages)
     val latestPresentation by rememberUpdatedState(presentation)
-    val latestHeaderCount by rememberUpdatedState(headerCount)
+    val showHeader = displayedHiddenCount > 0 || canLoadRemote || remoteLoading || busy || !error.isNullOrBlank() || localFailure != null
+    val latestHeaderCount by rememberUpdatedState(if (showHeader) 1 else 0)
     val visible by rememberUpdatedState(LocalTimelineRenderingEnabled.current)
     val hidden by rememberUpdatedState(hiddenCount)
     val canRemote by rememberUpdatedState(canLoadRemote)
@@ -115,49 +112,42 @@ internal fun rememberTimelineHistoryLoading(
             scope.launch {
                 var stage = "older_history_request"
                 try {
-                    val startedGesture = gesture
-                    do {
-                        val beforeItem = latestPresentation.items.firstOrNull()
-                        val beforeSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == beforeItem?.stableKey }?.size
-                        if (hidden == 0) {
-                            stage = "older_history_request"
-                            loadOlderHistoryUntilVisibleProgress(
-                                beforeMessageId = latestVisibleMessages.firstOrNull()?.id,
-                                messages = { repository.messagesByThread.value[threadId].orEmpty() },
-                                pagination = { repository.threadHistoryPaginationByThread.value[threadId] },
-                                loadPage = {
-                                    repository.loadOlderThreadHistory(threadId)
-                                    // If another caller owned this page, wait for its committed cursor.
-                                    repository.loadingOlderHistoryThreadIds.first { threadId !in it }
-                                },
-                            )
-                            // Wait for the sampled prefix, without requiring an ever-moving live tail.
-                            stage = "history_display_catchup"
-                            val receivedFirst = repository.messagesByThread.value[threadId]?.firstOrNull()?.id
-                            if (receivedFirst != null) snapshotFlow { latestMessages }.first { rows -> rows.any { it.id == receivedFirst } }
+                    val beforeMessageId = latestVisibleMessages.firstOrNull()?.id
+                    if (connectionReady && canRemote) {
+                        loadOlderHistoryUntilVisibleProgress(
+                            beforeMessageId = beforeMessageId,
+                            messages = { repository.messagesByThread.value[threadId].orEmpty() },
+                            pagination = { repository.threadHistoryPaginationByThread.value[threadId] },
+                            loadPage = {
+                                if (!repository.isSessionReady.value) throw CodexServiceError.Disconnected
+                                repository.loadOlderThreadHistory(threadId)
+                                repository.loadingOlderHistoryThreadIds.first { threadId !in it }
+                                if (!repository.isSessionReady.value) throw CodexServiceError.Disconnected
+                                repository.olderHistoryErrorByThread.value[threadId]?.let { error(it) }
+                            },
+                        )
+                        // Only the fetched prefix is needed. The live tail can keep changing.
+                        stage = "history_display_catchup"
+                        val receivedFirst = repository.messagesByThread.value[threadId]?.firstOrNull()?.id
+                        if (receivedFirst != null) awaitHistoryPresentation(stage) {
+                            snapshotFlow { latestMessages }.first { rows -> rows.any { it.id == receivedFirst } }
                         }
-                        stage = "history_reveal"
-                        snapshotFlow { !listState.isScrollInProgress && visible }.first { it }
-                        val rows = latestMessages
-                        val shown = latestVisibleMessages
-                        val start = rows.indexOfFirst { it.id == shown.firstOrNull()?.id }.takeIf { it >= 0 } ?: rows.size
-                        val nextStart = (start - 80).coerceAtLeast(0)
-                        if (nextStart < start && rows.isNotEmpty()) {
-                            val layout = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "load-earlier-messages" }
-                            val item = layout?.let { latestPresentation.items.getOrNull(it.index - latestHeaderCount) }
-                            val anchor = if (layout != null && item != null) HistoryViewportAnchor(item.stableKey, item.messageIds().firstOrNull(), layout.offset) else null
-                            pending = PendingHistoryAnchor(anchor, rows[nextStart].id, gesture)
-                            reveal(rows[nextStart].id, rows.size - nextStart)
-                            stage = "history_presentation"
-                            snapshotFlow { pending == null }.first { it }
-                            withFrameNanos { } // Measure the committed row before checking visible progress.
-                        } else break
-                        val afterItem = latestPresentation.items.firstOrNull()
-                        val afterSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == afterItem?.stableKey }?.size
-                        // Cached work may only enlarge a collapsed card's hidden contents. An
-                        // expanded card grows in height and stops after one ordinary batch.
-                    } while (shouldContinueHistoryReveal(beforeItem, afterItem, beforeSize, afterSize,
-                        startedGesture == gesture, hidden > 0 || (connectionReady && canRemote)))
+                    }
+                    stage = "history_reveal"
+                    snapshotFlow { !visible || !listState.isScrollInProgress }.first { it }
+                    if (!visible) return@launch
+                    val rows = latestMessages
+                    val start = olderHistoryBoundary(rows, beforeMessageId)
+                    val nextStart = olderHistoryRevealStart(rows, start)
+                    if (nextStart < start) {
+                        val layout = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "load-earlier-messages" }
+                        val item = layout?.let { entry -> latestPresentation.items.firstOrNull { it.stableKey == entry.key } }
+                        val anchor = if (layout != null && item != null) HistoryViewportAnchor(item.stableKey, item.messageIds().firstOrNull(), layout.offset) else null
+                        pending = PendingHistoryAnchor(anchor, rows[nextStart].id, gesture)
+                        reveal(rows[nextStart].id, rows.size - nextStart)
+                        stage = "history_presentation"
+                        awaitHistoryPresentation(stage) { snapshotFlow { pending == null || !visible }.first { it } }
+                    }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) {
                     localFailure = "$stage: ${failure.message ?: failure.javaClass.name}"
@@ -202,11 +192,17 @@ internal fun rememberTimelineHistoryLoading(
             visibleMessages.firstOrNull()?.id == request.firstId) {
             if (gesture == request.gesture && !listState.isScrollInProgress) request.anchor?.let { anchor ->
                 historyAnchorIndex(presentation.items, anchor)?.let { index ->
-                    listState.requestScrollToItem(index + headerCount, -anchor.offset)
+                    listState.requestScrollToItem(index + latestHeaderCount, -anchor.offset)
                 }
             }
             pending = null
         }
     }
-    TimelineHistoryLoadingUi(Modifier.nestedScroll(connection), busy || pending != null, localFailure, load)
+    TimelineHistoryLoadingUi(Modifier.nestedScroll(connection), busy || pending != null, localFailure, showHeader, load)
+}
+
+private suspend fun awaitHistoryPresentation(stage: String, wait: suspend () -> Unit) {
+    if (withTimeoutOrNull(15_000) { wait(); true } == null) {
+        throw TimeoutException("History display timed out stage=$stage timeoutMs=15000")
+    }
 }

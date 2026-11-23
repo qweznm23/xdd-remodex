@@ -43,9 +43,8 @@ android {
         minSdk = 26
         targetSdk = 36
 
-        versionCode = 157
+        versionCode = 170
         versionName = "0.1.7"
-        buildConfigField("String", "APP_UPDATE_URL", quotedBuildConfigString(configValue("APP_UPDATE_URL")))
         buildConfigField("boolean", "BETA_ENABLED", betaEnabled.toString())
         buildConfigField("String", "BETA_API_BASE_URL", quotedBuildConfigString(betaApiBaseUrl))
         buildConfigField("String", "BETA_API_KEY", quotedBuildConfigString(betaApiKey))
@@ -67,10 +66,10 @@ android {
 
     buildTypes {
         debug {
-            versionNameSuffix = "-ws-fix140"
+            versionNameSuffix = "-ws-fix153"
         }
         release {
-            versionNameSuffix = "-ws-fix140"
+            versionNameSuffix = "-ws-fix153"
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true

@@ -12,20 +12,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Devices
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.outlined.Add
 import com.remodex.mobile.ui.theme.composerToolColor
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -96,29 +92,6 @@ fun SidebarBrandHeader(
             setExpanded = { moreExpanded = it },
         ) {
             DropdownMenuItem(
-                text = { Text(stringResource(R.string.sidebar_new_chat)) },
-                onClick = {
-                    moreExpanded = false
-                    onMoreMenu.onNewChat()
-                },
-                leadingIcon = {
-                    Icon(Icons.Outlined.Edit, contentDescription = null)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.sidebar_quick_chat)) },
-                onClick = {
-                    moreExpanded = false
-                    onMoreMenu.onQuickCloudChat()
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Outlined.ChatBubbleOutline,
-                        contentDescription = null,
-                    )
-                },
-            )
-            DropdownMenuItem(
                 text = { Text(stringResource(R.string.nav_archived_chats)) },
                 onClick = {
                     moreExpanded = false
@@ -168,8 +141,6 @@ fun SidebarBrandHeader(
 }
 
 data class SidebarMoreMenuCallbacks(
-    val onNewChat: () -> Unit,
-    val onQuickCloudChat: () -> Unit,
     val onOpenArchivedChats: () -> Unit,
     val onRefreshThreads: () -> Unit,
     val onOpenConnections: () -> Unit,
@@ -216,7 +187,6 @@ fun SidebarListTabRow(
 fun SidebarFloatingActionBar(
     terminalEnabled: Boolean,
     chatEnabled: Boolean,
-    chatBusy: Boolean,
     onTerminal: () -> Unit,
     onChat: () -> Unit,
     modifier: Modifier = Modifier,
@@ -231,14 +201,10 @@ fun SidebarFloatingActionBar(
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.sidebar_terminal))
         }
-        FilledTonalButton(onClick = onChat, enabled = chatEnabled && !chatBusy,
+        FilledTonalButton(onClick = onChat, enabled = chatEnabled,
             colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.composerToolColor(),
                 contentColor = MaterialTheme.colorScheme.onSurface)) {
-            if (chatBusy) {
-                CircularProgressIndicator(Modifier.size(18.dp), color = LocalContentColor.current, strokeWidth = 2.dp)
-            } else {
-                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
-            }
+            Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.sidebar_new_chat))
         }

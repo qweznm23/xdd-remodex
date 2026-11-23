@@ -15,9 +15,22 @@ internal suspend fun CodexService.startThreadInternal(
     model: String? = null,
     cwd: String? = null,
     serviceTier: String? = null,
-    beforeActivate: ((String) -> Unit)? = null,
+): CodexThread {
+    val created = createThreadInternal(model, cwd, serviceTier)
+    return runNewThreadOpenFlow(
+        thread = created,
+        normalizedCwd = CodexThread.normalizeThreadStartCwd(cwd?.trim()?.takeIf { it.isNotEmpty() }),
+        sink = CodexServiceNewThreadOpenSink(this),
+    )
+}
+
+internal suspend fun CodexService.createThreadInternal(
+    model: String?,
+    cwd: String?,
+    serviceTier: String?,
 ): CodexThread {
     if (!sessionReady) throw CodexServiceError.Disconnected
+    val generation = connectionGeneration
     val normalizedCwd = CodexThread.normalizeThreadStartCwd(cwd?.trim()?.takeIf { it.isNotEmpty() })
     val resolvedModel =
         model?.trim()?.takeIf { it.isNotEmpty() }?.let { selected ->
@@ -51,6 +64,9 @@ internal suspend fun CodexService.startThreadInternal(
             throw e
         }
     }
+    if (!sessionReady || generation != connectionGeneration) {
+        throw kotlinx.coroutines.CancellationException("Thread creation belongs to a replaced connection")
+    }
     val result =
         threadStartRpc?.result ?: throw CodexServiceError.InvalidResponse("thread/start missing result")
     val resultObj = result as? JSONValue.Obj ?: throw CodexServiceError.InvalidResponse("thread/start result not object")
@@ -61,22 +77,14 @@ internal suspend fun CodexService.startThreadInternal(
         runCatching {
             CodexThread.fromJsonObject(jsonObjectFromRpc(threadEl))
         }.getOrElse {
-            throw CodexServiceError.InvalidResponse("thread/start thread decode failed")
+            throw CodexServiceError.InvalidResponse("thread/start thread decode failed").also { error -> error.initCause(it) }
         }
     val patched = applyRequestedProjectPathForNewThread(decoded.copy(model = decoded.model ?: resolvedModel), normalizedCwd)
     CodexThread.normalizeProjectPath(normalizedCwd)?.let { projectPath ->
         beginAuthoritativeProjectPathTransition(patched.id, projectPath)
         rememberAssociatedManagedWorktreePathIfWorktree(projectPath, patched.id)
     }
-    return runNewThreadOpenFlow(
-        thread = patched,
-        normalizedCwd = normalizedCwd,
-        beforeActivate = beforeActivate,
-        sink =
-            CodexServiceNewThreadOpenSink(
-                service = this,
-            ),
-    )
+    return patched
 }
 
 internal interface NewThreadOpenFlowSink {
@@ -96,7 +104,6 @@ internal suspend fun runNewThreadOpenFlow(
     thread: CodexThread,
     normalizedCwd: String?,
     sink: NewThreadOpenFlowSink,
-    beforeActivate: ((String) -> Unit)? = null,
 ): CodexThread {
     sink.publishStartedThread(thread)
     val resumed =
@@ -111,7 +118,6 @@ internal suspend fun runNewThreadOpenFlow(
         }
     runCatching { sink.syncStartedThreadHistory(thread.id) }
         .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-    beforeActivate?.invoke(thread.id)
     sink.activateStartedThread(thread.id)
     return resumed
 }

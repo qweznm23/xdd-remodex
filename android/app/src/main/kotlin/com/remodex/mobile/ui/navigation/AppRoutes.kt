@@ -1,7 +1,7 @@
 package com.remodex.mobile.ui.navigation
 
 import android.net.Uri
-import com.remodex.mobile.ui.draft.NewChatDraftSource
+import com.remodex.mobile.ui.draft.NewChatDraftRoute
 
 /** Top-level destinations for [AppNavHost] (parity with ContentView navigation stack). */
 object AppRoutes {
@@ -19,20 +19,22 @@ object AppRoutes {
     const val NewChatDraftSourceArg = "source"
     const val NewChatDraftProjectPathArg = "preferredProjectPath"
 
-    const val NewChatDraft = "new_chat_draft/{routeId}/{source}?${NewChatDraftProjectPathArg}={${NewChatDraftProjectPathArg}}"
+    const val NewChatDraftRecoveryThreadArg = "recoveryThreadId"
+    const val NewChatDraftRecoveryDeviceArg = "recoveryDeviceId"
 
-    fun newChatDraftRoute(
-        routeId: String,
-        source: NewChatDraftSource,
-        preferredProjectPath: String? = null,
-    ): String {
-        val path = preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }
-        val base = "new_chat_draft/$routeId/${source.name}"
-        return if (path == null) {
-            base
-        } else {
-            "$base?$NewChatDraftProjectPathArg=${Uri.encode(path)}"
-        }
+    const val NewChatDraft = "new_chat_draft/{routeId}/{source}?" +
+        "$NewChatDraftProjectPathArg={$NewChatDraftProjectPathArg}&" +
+        "$NewChatDraftRecoveryThreadArg={$NewChatDraftRecoveryThreadArg}&" +
+        "$NewChatDraftRecoveryDeviceArg={$NewChatDraftRecoveryDeviceArg}"
+
+    fun newChatDraftRoute(route: NewChatDraftRoute): String {
+        val query = listOfNotNull(
+            route.preferredProjectPath?.let { "$NewChatDraftProjectPathArg=${Uri.encode(it)}" },
+            route.recoveryThreadId?.let { "$NewChatDraftRecoveryThreadArg=${Uri.encode(it)}" },
+            route.recoveryDeviceId?.let { "$NewChatDraftRecoveryDeviceArg=${Uri.encode(it)}" },
+        )
+        val base = "new_chat_draft/${route.id}/${route.source.name}"
+        return if (query.isEmpty()) base else query.joinToString("&", prefix = "$base?")
     }
 
     fun terminalRoute(cdHint: String? = null): String {

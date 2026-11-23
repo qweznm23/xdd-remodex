@@ -7,12 +7,12 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
 ## 首次安装
 
-手机和电脑分别安装一个文件，两个文件取自[同一版本 fix140](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix140)。
+手机和电脑分别安装一个文件，两个文件取自[同一版本 fix153](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix153)。
 
 | 在哪里安装 | 下载 | 安装后做什么 |
 | --- | --- | --- |
-| 运行 Codex 的电脑（Linux / macOS） | [下载服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix140/xdd-remodex-server-0.1.7-ws-fix140.tar.gz) | 解压，按[服务端安装指南](docs/server-install.md)启动中继和桥接，显示配对二维码 |
-| Android 手机（8.0 及以上） | [下载 Android APK](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix140/remodex-0.1.7-ws-fix140.apk) | 打开 APK 安装，按系统提示允许安装，再用 Remodex 扫描电脑上的二维码 |
+| 运行 Codex 的电脑（Linux / macOS） | [下载服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix153/xdd-remodex-server-0.1.7-ws-fix153.tar.gz) | 解压，按[服务端安装指南](docs/server-install.md)启动中继和桥接，显示配对二维码 |
+| Android 手机（8.0 及以上） | [下载 Android APK](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix153/remodex-0.1.7-ws-fix153.apk) | 打开 APK 安装，按系统提示允许安装，再用 Remodex 扫描电脑上的二维码 |
 
 两个系统使用同一个服务端包，包内安装说明在 `docs/server-install.md`。从 fix73 升级时请先保存 APK，再切换桥接和中继，最后覆盖安装手机应用。已有设备可以沿用原配对。[V2 升级与回退步骤](docs/v2-upgrade.md)
 
@@ -31,7 +31,7 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 从 Release 对应标签检出源码，并安装两个服务的 Node 依赖：
 
 ```bash
-git clone --branch v0.1.7-ws-fix140 https://github.com/qweznm23/xdd-remodex.git
+git clone --branch v0.1.7-ws-fix153 https://github.com/qweznm23/xdd-remodex.git
 cd xdd-remodex
 npm --prefix phodex-bridge ci --ignore-scripts
 npm --prefix relay ci --ignore-scripts
@@ -46,7 +46,7 @@ install -d -m 700 .local/config
 cp ops/build.env.example .local/config/build.env
 ```
 
-编辑刚复制的文件，把 `JAVA_HOME` 和 `ANDROID_HOME` 改为本机路径。直接联网时删除示例里的两行 `GRADLE_PROXY_*`，自测时可留空 `APP_UPDATE_URL`。然后执行：
+编辑刚复制的文件，把 `JAVA_HOME` 和 `ANDROID_HOME` 改为本机路径。直接联网时删除示例里的两行 `GRADLE_PROXY_*`。App 的更新地址默认跟随配对中继，也可以在手机上指定。然后执行：
 
 ```bash
 ./scripts/build-android.sh :app:assembleDebug

@@ -71,10 +71,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
-import com.remodex.mobile.data.ComposerPrediction
 import com.remodex.mobile.ui.theme.RemodexComposerCapsuleChrome
 import com.remodex.mobile.ui.theme.RemodexDropdownMenu
 import com.remodex.mobile.ui.theme.RemodexPopupChrome
@@ -103,13 +103,11 @@ internal val LocalComposerFocusTransfer = androidx.compose.runtime.compositionLo
 internal fun TurnComposerBar(
     draft: String,
     compact: Boolean = false,
-    queueEditFocusId: String? = null,
-    onQueueEditFocused: () -> Unit = {},
+    editFocusId: String? = null,
+    onEditFocused: () -> Unit = {},
     isFollowUp: Boolean = false,
     onExpand: () -> Unit = {},
-    prediction: ComposerPrediction? = null,
-    canFillPrediction: Boolean = false,
-    onAcceptPrediction: () -> Boolean = { false },
+    onOpenPrediction: (() -> Unit)? = null,
     attachments: List<TurnComposerAttachment>,
     model: TurnComposerModel,
     isPlanModeEnabled: Boolean,
@@ -247,7 +245,7 @@ internal fun TurnComposerBar(
         }
         var fieldState by remember { mutableStateOf(TextFieldValue(draft)) }
         var lastReportedText by remember(draft) { mutableStateOf(draft) }
-        val fieldValue = if (queueEditFocusId != null) {
+        val fieldValue = if (editFocusId != null) {
             TextFieldValue(draft, selection = TextRange(draft.length))
         } else fieldState.copy(text = draft)
         SideEffect {
@@ -255,12 +253,12 @@ internal fun TurnComposerBar(
                 fieldState = fieldValue
             }
         }
-        LaunchedEffect(queueEditFocusId, actions.textFieldEnabled) {
-            if (queueEditFocusId != null && actions.textFieldEnabled) {
+        LaunchedEffect(editFocusId, actions.textFieldEnabled) {
+            if (editFocusId != null && actions.textFieldEnabled) {
                 fieldState = fieldValue
                 focusRequester.requestFocus()
                 keyboard?.show()
-                onQueueEditFocused()
+                onEditFocused()
             }
         }
         var focusAfterFill by remember { mutableStateOf(false) }
@@ -273,22 +271,9 @@ internal fun TurnComposerBar(
         }
         // Keep ongoing IME composition and the first-send focus handoff in the editor.
         val reading = compact &&
-            fieldValue.composition == null && completeFocusTransfer == null && queueEditFocusId == null && !focusAfterFill
+            fieldValue.composition == null && completeFocusTransfer == null && editFocusId == null && !focusAfterFill
         val showSend = !reading && (draft.isNotBlank() || model.draftText.isNotBlank() || attachments.isNotEmpty())
-        val hasAction = actions.stopButtonVisible || actions.sendShowsProgress || showSend || prediction != null
-        var showSuggestion by remember(prediction?.sourceTurnId, prediction?.text) { mutableStateOf(false) }
-        if (showSuggestion && prediction != null) {
-            val suggestion = prediction
-            val fillEnabled = canFillPrediction && actions.textFieldEnabled && draft.isEmpty()
-            ComposerPredictionSheet(suggestion.text, { showSuggestion = false }, onFill = {
-                if (fillEnabled && onAcceptPrediction()) {
-                    if (reading) onExpand()
-                    fieldState = TextFieldValue(suggestion.text, selection = TextRange(suggestion.text.length))
-                    focusAfterFill = true
-                    showSuggestion = false
-                }
-            }, fillEnabled = fillEnabled)
-        }
+        val hasAction = actions.stopButtonVisible || actions.sendShowsProgress || showSend || onOpenPrediction != null
         Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) { composerEnvironment() }
         RemodexComposerCapsuleChrome(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -315,12 +300,12 @@ internal fun TurnComposerBar(
                                 contentAlignment = Alignment.CenterStart,
                             ) {
                                 Text(
-                                    text = draft.ifEmpty { prediction?.text?.takeIf { it.isNotBlank() } ?: hint },
+                                    text = draft.ifEmpty { hint },
                                     modifier = Modifier.padding(start = 7.dp, end = 4.dp),
                                     style = inputStyle,
                                     color = chat.inputHint,
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         } else {
@@ -358,6 +343,8 @@ internal fun TurnComposerBar(
                                                 text = hint,
                                                 style = inputStyle,
                                                 color = chat.inputHint,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
                                             )
                                         }
                                         innerTextField()
@@ -439,8 +426,8 @@ internal fun TurnComposerBar(
                                     scaleY = arrowScale.value
                                 })
                         }
-                    } else if (prediction != null) {
-                        IconButton(onClick = { showSuggestion = true }) {
+                    } else if (onOpenPrediction != null) {
+                        IconButton(onClick = onOpenPrediction) {
                             Icon(Icons.Outlined.Lightbulb, stringResource(R.string.prediction_heading),
                                 Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }

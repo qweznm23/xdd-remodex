@@ -3,6 +3,7 @@ package com.remodex.mobile.data
 import com.remodex.mobile.core.error.CodexServiceError
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CodexImageAttachment
+import com.remodex.mobile.core.model.CodexFileAttachment
 import com.remodex.mobile.core.model.CodexTurnMention
 import com.remodex.mobile.core.model.CodexTurnSkillMention
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,8 @@ data class QueuedTurnDraft(
     val skillMentions: List<CodexTurnSkillMention>,
     val fileMentions: List<CodexTurnMention>,
     val collaborationMode: CodexCollaborationModeKind?,
+    val composerText: String? = null,
+    val files: List<CodexFileAttachment> = emptyList(),
 )
 
 data class QueuedTurnDraftPreview(
@@ -50,7 +53,7 @@ internal class TurnDraftQueueStore {
                         QueuedTurnDraftPreview(
                             id = draft.id,
                             text = draft.text,
-                            attachmentCount = draft.attachments.size,
+                            attachmentCount = draft.attachments.size + draft.files.size,
                             collaborationMode = draft.collaborationMode,
                         )
                     }
@@ -66,6 +69,8 @@ internal class TurnDraftQueueStore {
         fileMentions: List<CodexTurnMention>,
         collaborationMode: CodexCollaborationModeKind?,
         prepend: Boolean = false,
+        composerText: String? = null,
+        files: List<CodexFileAttachment> = emptyList(),
     ) {
         val tid = threadId.trim()
         if (tid.isEmpty()) throw CodexServiceError.InvalidInput("Missing thread id")
@@ -84,6 +89,8 @@ internal class TurnDraftQueueStore {
                     skillMentions = skillMentions.normalizeSkillMentions(),
                     fileMentions = fileMentions.normalizeFileMentions(),
                     collaborationMode = collaborationMode,
+                    composerText = composerText,
+                    files = files,
                 )
             if (prepend) {
                 q.addFirst(draft)

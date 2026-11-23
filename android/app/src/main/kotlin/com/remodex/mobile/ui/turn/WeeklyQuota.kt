@@ -103,7 +103,6 @@ internal fun WeeklyQuotaMoreMenu(
     val color = MaterialTheme.colorScheme.primary
     val track = MaterialTheme.colorScheme.outlineVariant
     var usageOpen by remember { mutableStateOf(false) }
-    var afterClose by remember { mutableStateOf<(() -> Unit)?>(null) }
     val badge: @Composable () -> Unit = {
         Box(Modifier.size(36.dp).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
             if (window == null) {
@@ -121,18 +120,12 @@ internal fun WeeklyQuotaMoreMenu(
                 ))
         }
     }
-    val transition = updateTransition(expanded, label = "Quota menu")
-    val atSource = !expanded && !transition.currentState && !transition.isRunning
-    LaunchedEffect(atSource, afterClose) {
-        if (atSource) {
-            val action = afterClose
-            afterClose = null
-            action?.invoke()
-        }
-    }
+    // A detail sheet replaces the popup; ordinary dismissals keep the return-to-anchor transition.
+    val transition = if (usageOpen) null else updateTransition(expanded, label = "Quota menu")
+    val atSource = transition == null || (!expanded && !transition.currentState && !transition.isRunning)
     Box {
         RemodexCircleIconButton(
-            onClick = { afterClose = null; setExpanded(true) },
+            onClick = { setExpanded(true) },
             contentDescription = "$description · $label", size = 48.dp, icon = { if (atSource) badge() },
         )
         val width = if (sessionPanel) {
@@ -140,11 +133,17 @@ internal fun WeeklyQuotaMoreMenu(
             val preferred = 286.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceIn(1f, 1.3f)
             available.coerceIn(48.dp, preferred)
         } else null
-        QuotaAnchoredMenu(transition, onDismiss = { setExpanded(false) }, panelWidth = width, badge = badge) {
-            val openUsage = { afterClose = { usageOpen = true }; setExpanded(false) }
+        if (transition != null) QuotaAnchoredMenu(transition, onDismiss = { setExpanded(false) }, panelWidth = width, badge = badge) {
+            val openUsage = {
+                setExpanded(false)
+                usageOpen = true
+            }
             if (sessionPanel) {
                 SessionInfoOverview(window, running, openUsage, onOpenSettings?.let { open ->
-                    { afterClose = open; setExpanded(false) }
+                    {
+                        setExpanded(false)
+                        open()
+                    }
                 })
                 environment?.invoke()
             } else {

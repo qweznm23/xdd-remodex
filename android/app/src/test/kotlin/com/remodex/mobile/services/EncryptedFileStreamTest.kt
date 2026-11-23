@@ -62,6 +62,20 @@ class EncryptedFileStreamTest {
             assertEquals("/files/stream?offset=200000",server.takeRequest().path)
         }
     }
+    @Test fun closedConnectionBeforeResponseHeadersRetriesFromTheSameOffset() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+            server.enqueue(MockResponse().setBody(Buffer().write(wire())))
+
+            val output = ByteArrayOutputStream()
+            EncryptedFileStream().copy(server.url("/").toString(), ticket, output) {}
+
+            assertContentEquals(data, output.toByteArray())
+            repeat(2) {
+                assertEquals("/files/stream?offset=0", server.takeRequest().path)
+            }
+        }
+    }
     @Test fun tamperingIsNotRetriedAndKeepsCryptoCause() = runBlocking {
         MockWebServer().use { server ->
             val bytes=wire();bytes[25]=(bytes[25].toInt() xor 1).toByte();server.enqueue(MockResponse().setBody(Buffer().write(bytes)))

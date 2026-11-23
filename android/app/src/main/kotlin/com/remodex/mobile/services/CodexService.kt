@@ -10,6 +10,7 @@ import com.remodex.mobile.core.model.CommandExecutionDetails
 import com.remodex.mobile.core.model.ContextWindowUsage
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexImageAttachment
+import com.remodex.mobile.core.model.CodexFileAttachment
 import com.remodex.mobile.core.model.CodexModelOption
 import com.remodex.mobile.core.model.CodexRateLimitBucket
 import com.remodex.mobile.core.model.CodexPairingQRPayload
@@ -762,11 +763,13 @@ class CodexService(
             serviceTier = serviceTier,
         )
 
-    override suspend fun startThreadForRecoveredDraft(
+    override suspend fun createThreadForFirstTurn(
         model: String?,
         cwd: String?,
-        prepare: (String) -> Unit,
-    ): CodexThread = withContext(Dispatchers.IO) { startThreadInternal(model, cwd, beforeActivate = prepare) }
+        serviceTier: String?,
+    ): CodexThread = withContext(Dispatchers.IO) {
+        createThreadInternal(model, cwd, serviceTier).also { publishThreads(upsertThreadRow(_threads.value, it)) }
+    }
 
     override fun requestBranchPickerForThread(threadId: String) {
         val tid = CodexThread.normalizeIdentifier(threadId) ?: return
@@ -793,6 +796,8 @@ class CodexService(
         fileMentions: List<CodexTurnMention>,
         collaborationMode: CodexCollaborationModeKind?,
         prepend: Boolean,
+        composerText: String?,
+        files: List<CodexFileAttachment>,
     ) = withContext(Dispatchers.IO) {
         turnDraftQueueStore.enqueue(
             threadId = threadId,
@@ -802,6 +807,8 @@ class CodexService(
             fileMentions = fileMentions,
             collaborationMode = collaborationMode,
             prepend = prepend,
+            composerText = composerText,
+            files = files,
         )
     }
 

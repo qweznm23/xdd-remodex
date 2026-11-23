@@ -3,6 +3,7 @@ package com.remodex.mobile.data
 import com.remodex.mobile.core.model.CodexBridgeUpdatePrompt
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexImageAttachment
+import com.remodex.mobile.core.model.CodexFileAttachment
 import com.remodex.mobile.core.model.CodexAccessMode
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CommandExecutionDetails
@@ -302,12 +303,12 @@ interface CodexRepository {
         serviceTier: String? = null,
     ): CodexThread
 
-    /** Prepare an editable recovered draft before exposing the new conversation as active. */
-    suspend fun startThreadForRecoveredDraft(
+    /** Return the created thread before preparing or sending its first turn. */
+    suspend fun createThreadForFirstTurn(
         model: String?,
         cwd: String?,
-        prepare: (String) -> Unit,
-    ): CodexThread = throw UnsupportedOperationException("Draft recovery is unavailable")
+        serviceTier: String?,
+    ): CodexThread = startThread(model, cwd, serviceTier)
 
     fun requestBranchPickerForThread(threadId: String) {}
 
@@ -374,6 +375,8 @@ interface CodexRepository {
         fileMentions: List<CodexTurnMention> = emptyList(),
         collaborationMode: CodexCollaborationModeKind? = null,
         prepend: Boolean = false,
+        composerText: String? = null,
+        files: List<CodexFileAttachment> = emptyList(),
     ) = Unit
 
     /** Pops the next queued local draft for [threadId], or null if empty. */

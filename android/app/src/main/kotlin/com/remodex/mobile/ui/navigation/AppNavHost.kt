@@ -70,6 +70,14 @@ fun AppNavHost(
                     onWakeSavedComputer = onWakeSavedComputer,
                     onOpenPairingScanner = onOpenPairingScanner,
                     onGitContextChanged = onGitContextChanged,
+                    onRecoverDraft = { deviceId, threadId ->
+                        val route = NewChatDraftRoute.create(
+                            source = NewChatDraftSource.recoveredChat,
+                            recoveryThreadId = threadId,
+                            recoveryDeviceId = deviceId,
+                        )
+                        navController.navigate(AppRoutes.newChatDraftRoute(route))
+                    },
                 )
             }
         }
@@ -79,12 +87,17 @@ fun AppNavHost(
                 listOf(
                     navArgument(AppRoutes.NewChatDraftRouteIdArg) { type = NavType.StringType },
                     navArgument(AppRoutes.NewChatDraftSourceArg) { type = NavType.StringType },
-                    navArgument(AppRoutes.NewChatDraftProjectPathArg) {
+                ) + listOf(
+                    AppRoutes.NewChatDraftProjectPathArg,
+                    AppRoutes.NewChatDraftRecoveryThreadArg,
+                    AppRoutes.NewChatDraftRecoveryDeviceArg,
+                ).map { name ->
+                    navArgument(name) {
                         type = NavType.StringType
                         nullable = true
                         defaultValue = null
-                    },
-                ),
+                    }
+                },
         ) { entry ->
             val routeId = entry.arguments?.getString(AppRoutes.NewChatDraftRouteIdArg).orEmpty()
             val sourceName = entry.arguments?.getString(AppRoutes.NewChatDraftSourceArg).orEmpty()
@@ -98,6 +111,8 @@ fun AppNavHost(
                         id = routeId,
                         source = source,
                         preferredProjectPath = preferredProjectPath,
+                        recoveryThreadId = entry.arguments?.getString(AppRoutes.NewChatDraftRecoveryThreadArg),
+                        recoveryDeviceId = entry.arguments?.getString(AppRoutes.NewChatDraftRecoveryDeviceArg),
                     ),
                 repository = repository,
                 subscriptionService = AppContainer.subscriptionService,

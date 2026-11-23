@@ -3,7 +3,6 @@ package com.remodex.mobile.ui.turn
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexMessageRole
 import com.remodex.mobile.ui.agent.TimelineListItem
-import com.remodex.mobile.ui.agent.toTimelineListItems
 import com.remodex.mobile.core.model.CodexMessageKind
 import java.time.Instant
 import kotlin.test.*
@@ -52,23 +51,17 @@ class TimelineHistoryLoadingTest {
         assertNull(historyAnchorIndex(listOf(TimelineListItem.Single(row(9))), anchor))
     }
 
-    @Test fun cachedBatchInsideOneCollapsedTurnContinuesWithoutAnotherPull() {
+    @Test fun cachedCommandRowsExtendTheWindowThroughToTheOlderUserMessage() {
         val rows = listOf(row(0).copy(turnId = "turn")) +
             (1..240).map { row(it).copy(turnId = "turn", role = CodexMessageRole.system, kind = CodexMessageKind.commandExecution) } +
             row(241).copy(turnId = "turn", role = CodexMessageRole.assistant, text = "final answer")
-        val before = rows.takeLast(48).toTimelineListItems().first()
-        val stillSameCard = rows.takeLast(128).toTimelineListItems().first()
-        assertEquals(before.stableKey, stillSameCard.stableKey)
-        assertTrue(shouldContinueHistoryReveal(before, stillSameCard, 36, 36, sameGesture = true, hasMore = true))
-        val actualOlderRow = rows.toTimelineListItems().first()
-        assertFalse(shouldContinueHistoryReveal(stillSameCard, actualOlderRow, 36, 60, sameGesture = true, hasMore = true))
+        assertEquals(0, olderHistoryRevealStart(rows, boundary = rows.size - 48))
     }
 
-    @Test fun expandedActivityNewGestureUnknownLayoutAndEndStopAutomaticContinuation() {
-        val group = TimelineListItem.AssistantWorkGroup("turn", listOf(TimelineListItem.Single(row(1))))
-        assertFalse(shouldContinueHistoryReveal(group, group, 300, 600, sameGesture = true, hasMore = true))
-        assertFalse(shouldContinueHistoryReveal(group, group, 36, 36, sameGesture = false, hasMore = true))
-        assertFalse(shouldContinueHistoryReveal(group, group, null, null, sameGesture = true, hasMore = true))
-        assertFalse(shouldContinueHistoryReveal(group, group, 36, 36, sameGesture = true, hasMore = false))
+    @Test fun normalDialogueAndActivityOnlyEndKeepABoundedBatch() {
+        val rows = (0..200).map(::row)
+        assertEquals(120, olderHistoryRevealStart(rows, boundary = 200))
+        val onlyActivity = rows.map { it.copy(role = CodexMessageRole.system, kind = CodexMessageKind.fileChange) }
+        assertEquals(120, olderHistoryRevealStart(onlyActivity, boundary = 200))
     }
 }

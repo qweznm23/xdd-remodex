@@ -1,46 +1,35 @@
 package com.remodex.mobile.ui.sidebar
 
-import androidx.compose.foundation.border
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -53,17 +42,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.composables.icons.lucide.R as LucideR
-import com.remodex.mobile.AppContainer
 import com.remodex.mobile.R
 import com.remodex.mobile.core.model.CodexProjectDirectoryEntry
 import com.remodex.mobile.core.model.CodexProjectDirectoryListing
@@ -74,18 +57,12 @@ import com.remodex.mobile.data.CodexRepository
 import com.remodex.mobile.services.ProjectFolderService
 import com.remodex.mobile.ui.theme.RemodexModalBottomSheet
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-
-private enum class NewThreadSessionType {
-    LocalWorkspace,
-    CloudOnly,
-}
-
 
 private data class NewThreadWorkspaceSummary(
     val name: String,
     val path: String,
-    val metadata: String,
     val relativeTime: String? = null,
 )
 
@@ -96,13 +73,9 @@ fun SidebarProjectPickerSheet(
     visible: Boolean,
     initialPath: String?,
     onDismiss: () -> Unit,
-    onStartBusyChange: (Boolean) -> Unit,
-    onStartThread: suspend (String?) -> Unit,
+    onWorkspaceSelected: (String?) -> Unit,
     initialFoldersCollapsed: Boolean = false,
     threads: List<CodexThread> = emptyList(),
-    activeThreadId: String? = null,
-    activeChatMetadata: SidebarActiveChatMetadata? = null,
-    onThreadStarted: suspend () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (!visible) return
@@ -118,87 +91,24 @@ fun SidebarProjectPickerSheet(
     var searchQuery by remember(visible) { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CodexProjectDirectoryEntry>>(emptyList()) }
     var loadingError by remember { mutableStateOf<String?>(null) }
-    var startError by remember { mutableStateOf<String?>(null) }
-    var createName by remember(visible, initialPath) { mutableStateOf("") }
-    var startBusy by remember { mutableStateOf(false) }
-    var startingPath by remember { mutableStateOf<String?>(null) }
-    var noCwdBusy by remember { mutableStateOf(false) }
+    var createName by remember { mutableStateOf("") }
     var createBusy by remember { mutableStateOf(false) }
-    var foldersCollapsed by remember(visible, initialPath, initialFoldersCollapsed) {
-        mutableStateOf(initialFoldersCollapsed)
-    }
-    var sessionType by remember(visible) { mutableStateOf(NewThreadSessionType.LocalWorkspace) }
-    var showAllRecentWorkspaces by remember(visible) { mutableStateOf(false) }
-
-    fun normalizedPath(): String = currentPath.trim()
-
-    fun closeSheet() {
-        onStartBusyChange(false)
-        onDismiss()
-    }
-
-    fun startChat(path: String) {
-        val cwd = path.trim()
-        if (cwd.isBlank() || startBusy) return
-        startError = null
-        startBusy = true
-        startingPath = cwd
-        onStartBusyChange(true)
-        scope.launch {
-            try {
-                onStartThread(cwd)
-                AppContainer.betaEngagementRepository.recordMissionEvent(
-                    eventType = "project_thread_started",
-                    screen = "sidebar",
-                    refreshAfter = false,
-                )
-                closeSheet()
-                onThreadStarted()
-            } catch (e: Exception) {
-                startError = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-            } finally {
-                startBusy = false
-                startingPath = null
-                onStartBusyChange(false)
-            }
-        }
-    }
-
-    fun startCloudChat() {
-        if (noCwdBusy || startBusy) return
-        startError = null
-        noCwdBusy = true
-        onStartBusyChange(true)
-        scope.launch {
-            try {
-                onStartThread(null)
-                AppContainer.betaEngagementRepository.recordMissionEvent(
-                    eventType = "project_thread_started",
-                    screen = "sidebar",
-                    refreshAfter = false,
-                )
-                closeSheet()
-                onThreadStarted()
-            } catch (e: Exception) {
-                startError = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-            } finally {
-                noCwdBusy = false
-                onStartBusyChange(false)
-            }
-        }
-    }
+    var foldersCollapsed by remember { mutableStateOf(initialFoldersCollapsed) }
+    var showAllRecentWorkspaces by remember { mutableStateOf(false) }
 
     fun selectFolder(path: String) {
         val cwd = path.trim()
         if (cwd.isBlank()) return
+        if (cwd != currentPath) listing = null
         currentPath = cwd
+        foldersCollapsed = false
         searchQuery = ""
         createName = ""
         loadingError = null
     }
 
     fun createFolder() {
-        val parent = normalizedPath()
+        val parent = listing?.path ?: return
         val name = createName.trim()
         if (parent.isBlank() || name.isBlank() || createBusy) return
         createBusy = true
@@ -208,76 +118,61 @@ fun SidebarProjectPickerSheet(
                 val createdPath = service.createDirectory(parent, name)
                 createName = ""
                 searchQuery = ""
-                currentPath = createdPath
-            } catch (e: Exception) {
-                loadingError = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                selectFolder(createdPath)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                reportFolderPickerError("create-directory", error) { loadingError = it }
             } finally {
                 createBusy = false
             }
         }
     }
 
-    LaunchedEffect(visible) {
-        if (!visible) return@LaunchedEffect
-        loadingError = null
-        startError = null
-        searchQuery = ""
-        createName = ""
-        startingPath = null
-        sessionType = NewThreadSessionType.LocalWorkspace
-        showAllRecentWorkspaces = false
-        quickLocations =
-            runCatching { service.quickLocations() }
-                .getOrElse {
-                    loadingError = it.message?.takeIf { msg -> msg.isNotBlank() } ?: it.javaClass.simpleName
-                    emptyList()
-                }
-        if (normalizedPath().isBlank()) {
-            currentPath = quickLocations.firstOrNull()?.path.orEmpty()
+    LaunchedEffect(repository) {
+        try {
+            quickLocations = service.quickLocations()
+            if (currentPath.isBlank()) currentPath = quickLocations.firstOrNull()?.path.orEmpty()
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            reportFolderPickerError("quick-locations", error) {
+                if (currentPath.isBlank()) loadingError = it
+            }
         }
     }
 
-    LaunchedEffect(currentPath, searchQuery, visible) {
-        if (!visible) return@LaunchedEffect
-        val path = normalizedPath()
-        if (path.isBlank()) {
-            listing = null
-            searchResults = emptyList()
-            return@LaunchedEffect
-        }
+    LaunchedEffect(currentPath) {
+        val path = currentPath
+        if (path.isBlank()) return@LaunchedEffect
+        listing = null
         loadingError = null
-        if (searchQuery.trim().isNotEmpty()) {
-            searchResults =
-                runCatching { service.searchDirectories(path, searchQuery) }
-                    .getOrElse {
-                        loadingError = it.message?.takeIf { msg -> msg.isNotBlank() } ?: it.javaClass.simpleName
-                        emptyList()
-                    }
-                    .sortedForWorkspacePicker()
-            listing = null
-        } else {
-            listing =
-                runCatching { service.listDirectory(path) }
-                    .getOrElse {
-                        loadingError = it.message?.takeIf { msg -> msg.isNotBlank() } ?: it.javaClass.simpleName
-                        null
-                    }
-            searchResults = emptyList()
-            listing?.path?.trim()?.takeIf { it.isNotBlank() }?.let { canonical ->
-                if (canonical != currentPath) {
-                    currentPath = canonical
-                }
-            }
+        try {
+            listing = service.listDirectory(path)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            reportFolderPickerError("list-directory", error) { loadingError = it }
+        }
+    }
+
+    var searchError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(currentPath, searchQuery) {
+        searchResults = emptyList()
+        searchError = null
+        if (currentPath.isBlank() || searchQuery.isBlank()) return@LaunchedEffect
+        try {
+            searchResults = service.searchDirectories(currentPath, searchQuery).sortedForWorkspacePicker()
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            reportFolderPickerError("search-directories", error) { searchError = it }
         }
     }
 
     RemodexModalBottomSheet(
         modifier = modifier,
-        onDismissRequest = {
-            if (!startBusy) {
-                closeSheet()
-            }
-        },
+        onDismissRequest = onDismiss,
         sheetState = sheetState,
     ) {
         val visibleEntries =
@@ -288,21 +183,9 @@ fun SidebarProjectPickerSheet(
             }
         val searchingFolders = searchQuery.trim().isNotEmpty()
         val folderListCollapsed = foldersCollapsed && !searchingFolders
-        val currentWorkspace =
-            remember(normalizedPath(), threads, activeThreadId, activeChatMetadata) {
-                currentWorkspaceSummary(
-                    path = normalizedPath(),
-                    threads = threads,
-                    activeThreadId = activeThreadId,
-                    activeChatMetadata = activeChatMetadata,
-                )
-            }
         val recentWorkspaces =
-            remember(threads, normalizedPath()) {
-                recentWorkspaceSummaries(
-                    threads = threads,
-                    currentPath = normalizedPath(),
-                )
+            remember(threads, currentPath) {
+                recentWorkspaceSummaries(threads, currentPath)
             }
         val visibleRecentWorkspaces =
             if (showAllRecentWorkspaces) {
@@ -324,34 +207,9 @@ fun SidebarProjectPickerSheet(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 item {
-                    NewThreadHeader(
-                        colors = colors,
-                        startBusy = startBusy,
-                        onCancel = { closeSheet() },
-                    )
-                }
-
-                item {
-                    CurrentWorkspaceSection(
-                        workspace = currentWorkspace,
-                    )
-                }
-
-                item {
-                    SessionTypeSelector(
-                        selected = sessionType,
-                        colors = colors,
-                        cloudBusy = noCwdBusy,
-                        enabled = !startBusy && !createBusy,
-                        onSelected = { sessionType = it },
-                    )
-                }
-
-                item {
-                    NewThreadPreviewSection(
-                        workspace = currentWorkspace,
-                        sessionType = sessionType,
-                        colors = colors,
+                    Text(
+                        text = stringResource(R.string.new_chat_choose_workspace),
+                        style = MaterialTheme.typography.headlineSmall,
                     )
                 }
 
@@ -369,11 +227,8 @@ fun SidebarProjectPickerSheet(
                     items(visibleRecentWorkspaces, key = { "recent-${it.path}" }) { workspace ->
                         WorkspaceRow(
                             workspace = workspace,
-                            colors = colors,
-                            enabled = !startBusy && !noCwdBusy && !createBusy,
-                            busy = false,
-                            selected = workspace.path == currentWorkspace?.path,
-                            onClick = { selectFolder(workspace.path) },
+                            enabled = !createBusy,
+                            onClick = { onWorkspaceSelected(workspace.path) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -381,36 +236,21 @@ fun SidebarProjectPickerSheet(
 
                 item {
                     BrowseWorkspaceSection(
-                        currentPath = currentPath,
+                        currentPath = listing?.path ?: currentPath,
                         parentPath = listing?.parentPath,
                         quickLocations = quickLocationChips,
                         query = searchQuery,
                         colors = colors,
-                        enabled = !startBusy && !noCwdBusy && !createBusy,
+                        enabled = !createBusy,
                         onQueryChange = { searchQuery = it },
                         onQuickLocation = { selectFolder(it.path) },
                         onParent = { parent -> selectFolder(parent) },
                     )
                 }
 
-                if (loadingError != null || startError != null) {
+                (searchError ?: loadingError)?.let { error ->
                     item {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            loadingError?.let { error ->
-                                Text(
-                                    text = error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            startError?.let { error ->
-                                Text(
-                                    text = error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
+                        Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                 }
 
@@ -418,7 +258,7 @@ fun SidebarProjectPickerSheet(
                     CreateFolderField(
                         value = createName,
                         colors = colors,
-                        enabled = !createBusy && !startBusy && currentPath.isNotBlank(),
+                        enabled = !createBusy && listing != null,
                         busy = createBusy,
                         onValueChange = { createName = it },
                         onCreate = { createFolder() },
@@ -467,311 +307,35 @@ fun SidebarProjectPickerSheet(
                         items(visibleEntries, key = { "folder-${it.id}" }) { entry ->
                             FolderRow(
                                 entry = entry,
-                                enabled = !startBusy && !createBusy,
+                                enabled = !createBusy,
                                 onClick = { selectFolder(entry.path) },
                             )
                         }
                     }
                 }
             }
-            NewThreadActions(
-                sessionType = sessionType,
-                enabled =
-                    !startBusy &&
-                        !createBusy &&
-                        when (sessionType) {
-                            NewThreadSessionType.LocalWorkspace -> normalizedPath().isNotBlank()
-                            NewThreadSessionType.CloudOnly -> true
-                        },
-                busy = startBusy || noCwdBusy,
-                onCancel = { closeSheet() },
-                onCreate = {
-                    when (sessionType) {
-                        NewThreadSessionType.LocalWorkspace -> startChat(normalizedPath())
-                        NewThreadSessionType.CloudOnly -> startCloudChat()
-                    }
-                },
+            Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun NewThreadHeader(
-    colors: SidebarColorPalette,
-    startBusy: Boolean,
-    onCancel: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    text = stringResource(R.string.sidebar_project_picker_title),
-                    style =
-                        MaterialTheme.typography.headlineSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.sp,
-                        ),
-                    color = colors.primaryText,
-                )
-
-            }
-            IconButton(
-                onClick = onCancel,
-                enabled = !startBusy,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    painter = painterResource(LucideR.drawable.lucide_ic_x),
-                    contentDescription = stringResource(android.R.string.cancel),
-                    tint = colors.primaryText,
-                    modifier = Modifier.size(22.dp),
-                )
+                OutlinedButton(onClick = { onWorkspaceSelected(null) }, enabled = !createBusy, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.new_chat_no_project))
+                }
+                Button(
+                    onClick = { listing?.path?.let(onWorkspaceSelected) },
+                    enabled = listing != null && !createBusy,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.new_chat_use_directory))
+                }
             }
         }
     }
 }
 
-@Composable
-private fun CurrentWorkspaceSection(
-    workspace: NewThreadWorkspaceSummary?,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionHeading(stringResource(R.string.sidebar_project_picker_current_workspace))
-        if (workspace == null) {
-            Text(stringResource(R.string.sidebar_project_picker_browse_empty), style = MaterialTheme.typography.bodyMedium)
-        } else {
-            ListItem(
-                modifier = Modifier.clip(MaterialTheme.shapes.medium),
-                headlineContent = { Text(workspace.name) },
-                supportingContent = { Text(workspace.path) },
-                overlineContent = { Text(workspace.metadata) },
-                leadingContent = { Icon(painterResource(LucideR.drawable.lucide_ic_laptop), null) },
-                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-            )
-        }
-    }
-}
-
-@Composable
-private fun SessionTypeSelector(
-    selected: NewThreadSessionType,
-    colors: SidebarColorPalette,
-    cloudBusy: Boolean,
-    enabled: Boolean,
-    onSelected: (NewThreadSessionType) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        SectionHeading(
-            title = stringResource(R.string.sidebar_project_picker_session_type),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            SessionModeCard(
-                title = stringResource(R.string.sidebar_project_picker_session_local),
-                body = stringResource(R.string.sidebar_project_picker_session_local_desc),
-                icon = LucideR.drawable.lucide_ic_laptop,
-                selected = selected == NewThreadSessionType.LocalWorkspace,
-                enabled = enabled && !cloudBusy,
-                onClick = { onSelected(NewThreadSessionType.LocalWorkspace) },
-                modifier = Modifier.weight(1f),
-            )
-            SessionModeCard(
-                title = stringResource(R.string.sidebar_project_picker_session_cloud),
-                body = stringResource(R.string.sidebar_project_picker_session_cloud_desc),
-                imageVector = Icons.Outlined.ChatBubbleOutline,
-                selected = selected == NewThreadSessionType.CloudOnly,
-                enabled = enabled && !cloudBusy,
-                onClick = { onSelected(NewThreadSessionType.CloudOnly) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        if (cloudBusy) {
-            BusyIndicator(colors = colors)
-        }
-    }
-}
-
-@Composable
-private fun SessionModeCard(
-    title: String,
-    body: String,
-    icon: Int? = null,
-    imageVector: ImageVector? = null,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        selected = selected,
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.heightIn(min = 112.dp),
-        shape = MaterialTheme.shapes.medium,
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (imageVector != null) Icon(imageVector, null) else if (icon != null) Icon(painterResource(icon), null)
-                Spacer(Modifier.weight(1f))
-                RadioButton(selected = selected, enabled = enabled, onClick = null)
-            }
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(body, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun NewThreadPreviewSection(
-    workspace: NewThreadWorkspaceSummary?,
-    sessionType: NewThreadSessionType,
-    colors: SidebarColorPalette,
-    modifier: Modifier = Modifier,
-) {
-    val mode =
-        when (sessionType) {
-            NewThreadSessionType.LocalWorkspace -> stringResource(R.string.sidebar_project_picker_session_local)
-            NewThreadSessionType.CloudOnly -> stringResource(R.string.sidebar_project_picker_session_cloud)
-        }
-    val workspaceName =
-        when (sessionType) {
-            NewThreadSessionType.LocalWorkspace ->
-                workspace?.name ?: stringResource(R.string.sidebar_project_picker_preview_none)
-            NewThreadSessionType.CloudOnly -> stringResource(R.string.sidebar_project_picker_preview_none)
-        }
-    val branch =
-        when (sessionType) {
-            NewThreadSessionType.LocalWorkspace ->
-                workspace?.metadata?.substringBefore(" · ")?.takeIf { it != "Local" }
-                    ?: stringResource(R.string.sidebar_project_picker_preview_none)
-            NewThreadSessionType.CloudOnly -> stringResource(R.string.sidebar_project_picker_preview_none)
-        }
-    val location =
-        when (sessionType) {
-            NewThreadSessionType.LocalWorkspace ->
-                workspace?.path?.let { "Local (${it.compactMiddle()})" }
-                    ?: stringResource(R.string.sidebar_project_picker_preview_none)
-            NewThreadSessionType.CloudOnly -> stringResource(R.string.sidebar_project_picker_session_cloud)
-        }
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        SectionHeading(
-            title = stringResource(R.string.sidebar_project_picker_preview_title),
-        )
-        Surface(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, colors.border, RoundedCornerShape(12.dp)),
-            shape = RoundedCornerShape(12.dp),
-            color = colors.surface,
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                PreviewRow(
-                    icon = LucideR.drawable.lucide_ic_laptop,
-                    label = stringResource(R.string.sidebar_project_picker_preview_workspace),
-                    value = workspaceName,
-                    colors = colors,
-                )
-                PreviewRow(
-                    imageVector = Icons.Outlined.ChatBubbleOutline,
-                    label = stringResource(R.string.sidebar_project_picker_preview_mode),
-                    value = mode,
-                    colors = colors,
-                )
-                PreviewRow(
-                    icon = LucideR.drawable.lucide_ic_git_branch,
-                    label = stringResource(R.string.sidebar_project_picker_preview_branch),
-                    value = branch,
-                    colors = colors,
-                )
-                PreviewRow(
-                    icon = LucideR.drawable.lucide_ic_laptop,
-                    label = stringResource(R.string.sidebar_project_picker_preview_location),
-                    value = location,
-                    colors = colors,
-                    showDivider = false,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PreviewRow(
-    icon: Int? = null,
-    imageVector: ImageVector? = null,
-    label: String,
-    value: String,
-    colors: SidebarColorPalette,
-    modifier: Modifier = Modifier,
-    showDivider: Boolean = true,
-) {
-    Column(modifier = modifier) {
-        Row(
-            modifier = Modifier.padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (imageVector != null) {
-                Icon(
-                    imageVector = imageVector,
-                    contentDescription = null,
-                    tint = colors.primaryText,
-                    modifier = Modifier.size(18.dp),
-                )
-            } else if (icon != null) {
-                Icon(
-                    painter = painterResource(icon),
-                    contentDescription = null,
-                    tint = colors.primaryText,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            Text(
-                text = label,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.secondaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.primaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (showDivider) {
-            HorizontalDivider(color = colors.border, thickness = 0.5.dp)
-        }
-    }
+private inline fun reportFolderPickerError(stage: String, error: Exception, display: (String) -> Unit) {
+    Log.e("RemodexWorkspace", "Workspace operation failed stage=$stage", error)
+    display(error.localizedMessage?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName)
 }
 
 @Composable
@@ -858,27 +422,16 @@ private fun QuickLocationChip(
 @Composable
 private fun WorkspaceRow(
     workspace: NewThreadWorkspaceSummary,
-    colors: SidebarColorPalette,
     enabled: Boolean,
-    busy: Boolean,
-    selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     ListItem(
-        modifier = modifier.selectable(selected, enabled = enabled && !busy, role = Role.RadioButton, onClick = onClick),
-        colors = ListItemDefaults.colors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer
-            else MaterialTheme.colorScheme.surface),
+        modifier = modifier.clickable(enabled = enabled, onClick = onClick),
         headlineContent = { Text(workspace.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        supportingContent = { Text(workspace.metadata, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(workspace.path, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = { Icon(Icons.Outlined.Folder, null) },
-        trailingContent = {
-            when {
-                busy -> BusyIndicator(colors = colors)
-                selected -> RadioButton(selected = true, onClick = null)
-                else -> workspace.relativeTime?.let { Text(it) }
-            }
-        },
+        trailingContent = { workspace.relativeTime?.let { Text(it) } },
     )
 }
 
@@ -959,37 +512,6 @@ private fun CreateFolderField(
 }
 
 @Composable
-private fun NewThreadActions(
-    sessionType: NewThreadSessionType,
-    enabled: Boolean,
-    busy: Boolean,
-    onCancel: () -> Unit,
-    onCreate: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        OutlinedButton(onClick = onCancel, enabled = !busy, modifier = Modifier.weight(.82f)) {
-            Text(stringResource(android.R.string.cancel))
-        }
-        Button(onClick = onCreate, enabled = enabled && !busy, modifier = Modifier.weight(1.18f)) {
-            if (busy) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
-            } else {
-                Icon(if (sessionType == NewThreadSessionType.CloudOnly) Icons.Outlined.ChatBubbleOutline else Icons.Filled.Add,
-                    null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.sidebar_project_picker_start_selected))
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionHeading(title: String) {
-    Text(title, style = MaterialTheme.typography.titleMedium)
-}
-
-@Composable
 private fun SectionLabel(
     text: String,
     colors: SidebarColorPalette,
@@ -1041,28 +563,6 @@ private fun BusyIndicator(
     )
 }
 
-private fun currentWorkspaceSummary(
-    path: String,
-    threads: List<CodexThread>,
-    activeThreadId: String?,
-    activeChatMetadata: SidebarActiveChatMetadata?,
-): NewThreadWorkspaceSummary? {
-    val normalized = CodexThread.normalizeProjectPath(path) ?: return null
-    val activeThread = activeThreadId?.let { id -> threads.firstOrNull { it.id == id } }
-    val branch =
-        if (activeThread?.normalizedProjectPath == normalized) {
-            activeChatMetadata?.branch?.trim()?.takeIf { it.isNotEmpty() }
-                ?: activeThread.workspaceBranch()
-        } else {
-            threads.firstOrNull { it.normalizedProjectPath == normalized }?.workspaceBranch()
-        }
-    return NewThreadWorkspaceSummary(
-        name = projectDisplayLabelFor(normalized),
-        path = normalized,
-        metadata = workspaceMetadata(branch),
-    )
-}
-
 private fun recentWorkspaceSummaries(
     threads: List<CodexThread>,
     currentPath: String,
@@ -1080,7 +580,6 @@ private fun recentWorkspaceSummaries(
             NewThreadWorkspaceSummary(
                 name = projectDisplayLabelFor(path),
                 path = path,
-                metadata = workspaceMetadata(representative.workspaceBranch()),
                 relativeTime = SidebarRelativeTimeFormatter.compactLabel(representative),
             )
         }
@@ -1092,34 +591,6 @@ private fun recentWorkspaceSummaries(
                     ?: Instant.EPOCH
             }.thenBy { it.name.lowercase() },
         )
-}
-
-private fun workspaceMetadata(branch: String?): String =
-    listOfNotNull(branch?.trim()?.takeIf { it.isNotEmpty() }, "Local").joinToString(" \u00B7 ")
-
-private fun String.compactMiddle(maxLength: Int = 26): String {
-    if (length <= maxLength) return this
-    val edge = (maxLength - 1) / 2
-    return take(edge) + "..." + takeLast(edge)
-}
-
-private fun CodexThread.workspaceBranch(): String? =
-    firstMetadataString(
-        "branch",
-        "current",
-        "currentBranch",
-        "current_branch",
-        "gitBranch",
-        "git_branch",
-        "headBranch",
-        "head_branch",
-    )
-
-private fun CodexThread.firstMetadataString(vararg keys: String): String? {
-    val meta = metadata ?: return null
-    return keys.firstNotNullOfOrNull { key ->
-        meta[key]?.stringValue?.trim()?.takeIf { it.isNotEmpty() }
-    }
 }
 
 private fun List<CodexProjectDirectoryEntry>.sortedForWorkspacePicker(): List<CodexProjectDirectoryEntry> =

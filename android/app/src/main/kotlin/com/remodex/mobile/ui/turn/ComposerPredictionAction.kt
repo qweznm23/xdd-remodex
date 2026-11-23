@@ -2,6 +2,8 @@ package com.remodex.mobile.ui.turn
 
 import com.remodex.mobile.ui.theme.LocalSheetClose
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -14,10 +16,62 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.R
 import com.remodex.mobile.ui.theme.RemodexModalBottomSheet
 import com.remodex.mobile.ui.theme.conversationColors
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun PredictionCard(
+    text: String,
+    timelineHeight: Dp,
+    onOpen: () -> Unit,
+    onFill: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    // Allow for the action row when it wraps, and keep the rest of the timeline readable.
+    val previewHeight = (timelineHeight * 0.4f - 48.dp).coerceAtLeast(48.dp)
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = colors.surfaceContainerLow,
+        contentColor = colors.onSurfaceVariant,
+        border = BorderStroke(0.5.dp, colors.outlineVariant.copy(alpha = 0.55f)),
+    ) {
+        FlowRow(horizontalArrangement = Arrangement.End) {
+            Box(
+                Modifier.align(Alignment.CenterVertically).heightIn(max = previewHeight).clickable(
+                    role = Role.Button, onClickLabel = stringResource(R.string.prediction_expand), onClick = onOpen,
+                ).sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text(text, style = MaterialTheme.typography.bodyMedium, overflow = TextOverflow.Ellipsis)
+            }
+            Row(modifier = Modifier.align(Alignment.CenterVertically), verticalAlignment = Alignment.CenterVertically) {
+                val fillLabel = stringResource(R.string.prediction_fill)
+                TextButton(
+                    onClick = onFill,
+                    colors = ButtonDefaults.textButtonColors(contentColor = colors.onSurfaceVariant),
+                    contentPadding = PaddingValues(horizontal = 6.dp),
+                ) {
+                    Text(stringResource(R.string.prediction_fill_short),
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = fillLabel },
+                        style = MaterialTheme.typography.labelMedium)
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, stringResource(R.string.prediction_collapse), Modifier.size(16.dp))
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun RowScope.PredictionHeading() {

@@ -97,7 +97,7 @@ internal fun AppUpdateDialog(onDismiss: () -> Unit) {
     val installStage = phase == UpdatePhase.READY || state.retry == UpdateRetry.INSTALL
     if (showSource) {
         var follow by rememberSaveable { mutableStateOf(updater.customSource == null) }
-        var draft by rememberSaveable { mutableStateOf(updater.customSource ?: updater.pairedSource) }
+        var draft by rememberSaveable { mutableStateOf(updater.savedSource ?: updater.pairedSource) }
         val valid = remember(draft) {
             try { updateHttpUrl(draft); true } catch (_: AppUpdateFailure) { false }
         }

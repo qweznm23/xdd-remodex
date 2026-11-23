@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.R as LucideR
@@ -60,6 +61,8 @@ import com.remodex.mobile.ui.turn.CommandGroupRow
 import com.remodex.mobile.ui.turn.TurnTimelineGroupedRunsRow
 import kotlinx.coroutines.launch
 
+internal const val PREDICTION_FOOTER_KEY = "composer-prediction-footer"
+
 /**
  * Scrollable conversation timeline. SwiftUI: `ScrollView` + `LazyVStack` pattern.
  */
@@ -70,7 +73,7 @@ internal fun MessageList(
     modifier: Modifier = Modifier,
     showEmptyContent: Boolean = true,
     hiddenEarlierCount: Int = 0,
-    canLoadOlderRemoteHistory: Boolean = false,
+    canLoadEarlierMessages: Boolean = true,
     isLoadingOlderHistory: Boolean = false,
     olderHistoryError: String? = null,
     onLoadEarlierMessages: (() -> Unit)? = null,
@@ -81,6 +84,7 @@ internal fun MessageList(
     canApplyPlan: Boolean = true,
     isAssistantTurnActive: Boolean = false,
     activeTurnId: String? = null,
+    predictionFooter: (@Composable () -> Unit)? = null,
     verticalItemSpacing: Dp = 10.dp,
     contentPadding: PaddingValues =
         PaddingValues(top = 10.dp, bottom = 18.dp, start = 2.dp, end = 2.dp),
@@ -173,8 +177,20 @@ internal fun MessageList(
     val forkActionLabel = stringResource(R.string.turn_message_action_fork_cd)
     val undoActionLabel = stringResource(R.string.turn_message_action_undo_changes)
 
+    val hasFooter = predictionFooter != null
+    val arrangement = remember(verticalItemSpacing, hasFooter) {
+        val spaced = Arrangement.spacedBy(verticalItemSpacing)
+        if (!hasFooter) spaced else object : Arrangement.Vertical by spaced {
+            override fun Density.arrange(totalSize: Int, sizes: IntArray, outPositions: IntArray) {
+                with(spaced) { arrange(totalSize, sizes, outPositions) }
+                // In short conversations keep the suggestion beside the composer.
+                if (sizes.isNotEmpty()) outPositions[sizes.lastIndex] = totalSize - sizes.last()
+            }
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
-        if (messages.isEmpty() && !presentation.hasActivityRow && olderHistoryError.isNullOrBlank() && !canLoadOlderRemoteHistory) {
+        if (messages.isEmpty() && !presentation.hasActivityRow && onLoadEarlierMessages == null) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (showEmptyContent) emptyContent()
             }
@@ -184,10 +200,10 @@ internal fun MessageList(
                 // Chat should stop at its boundary without Android's edge stretch/rebound.
                 overscrollEffect = null,
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(verticalItemSpacing),
+                verticalArrangement = arrangement,
                 contentPadding = contentPadding,
             ) {
-                if ((hiddenEarlierCount > 0 || canLoadOlderRemoteHistory || !olderHistoryError.isNullOrBlank()) && onLoadEarlierMessages != null) {
+                if (onLoadEarlierMessages != null) {
                     item(key = "load-earlier-messages") {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -195,7 +211,7 @@ internal fun MessageList(
                         ) {
                             TextButton(
                                 onClick = onLoadEarlierMessages,
-                                enabled = !isLoadingOlderHistory,
+                                enabled = canLoadEarlierMessages && !isLoadingOlderHistory,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 if (isLoadingOlderHistory) {
@@ -322,6 +338,11 @@ internal fun MessageList(
                                 ReasoningSummaryRow(presentation.activeSummary)
                             }
                         }
+                    }
+                }
+                if (predictionFooter != null) {
+                    item(key = PREDICTION_FOOTER_KEY, contentType = PREDICTION_FOOTER_KEY) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) { predictionFooter() }
                     }
                 }
             }

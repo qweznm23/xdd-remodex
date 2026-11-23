@@ -14,24 +14,6 @@ import kotlinx.coroutines.test.runTest
 
 class NewThreadCreationFlowTest {
     @Test
-    fun recoveredDraftIsPreparedBeforeActivationAndStorageFailureKeepsTheSourceOpen() = runTest {
-        val thread = CodexThread(id = "successor", cwd = "/repo")
-        val sink = RecordingNewThreadOpenSink()
-        val failure = java.io.IOException("draft storage full")
-        val actual = assertFailsWith<java.io.IOException> {
-            runNewThreadOpenFlow(thread, "/repo", sink) { id ->
-                assertEquals("successor", id)
-                assertFalse(sink.events.contains("activate:successor"))
-                throw failure
-            }
-        }
-        assertTrue(actual === failure)
-        assertFalse(sink.events.contains("activate:successor"))
-        runNewThreadOpenFlow(thread, "/repo", sink) { sink.events += "store:$it" }
-        assertEquals(listOf("store:successor", "activate:successor"), sink.events.takeLast(2))
-    }
-
-    @Test
     fun backendFlow_publishesThenResumesBeforeActivatingWithoutAutoBranchPicker() =
         runTest {
             val started =

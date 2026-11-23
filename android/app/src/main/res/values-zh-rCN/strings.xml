@@ -447,6 +447,16 @@
     <string name="my_devices_hide_from_menu">从侧栏菜单中隐藏</string>
     <string name="sidebar_device_switcher_cd">切换设备</string>
     <string name="sidebar_connections_cd">我的设备</string>
+    <string name="sidebar_new_chat_in_project">在此项目新建</string>
+    <string name="new_chat_workspace">工作区</string>
+    <string name="new_chat_choose_workspace">选择工作区</string>
+    <string name="new_chat_no_project">无项目</string>
+    <string name="new_chat_use_directory">使用此目录</string>
+    <string name="new_chat_recovery_loading">正在加载已保留的草稿…</string>
+    <string name="new_chat_recovery_unavailable">无法打开已保留的草稿。</string>
+    <string name="new_chat_recovery_device_changed">此草稿属于另一台电脑。</string>
+    <string name="new_chat_recovery_directory_error">无法打开原目录，可以在输入栏上方更换工作区。</string>
+    <string name="new_chat_review_needs_workspace">请先选择代码审查的工作区。</string>
     <string name="new_chat_draft_title">新建会话</string>
     <string name="new_chat_draft_prompt">你想处理什么任务？</string>
     <string name="new_chat_draft_quick_chat_hint">快速聊天在发送消息前不会关联项目文件夹。</string>
