@@ -6,6 +6,7 @@
 
 const http = require("http");
 const { createFileDownloads } = require("./file-downloads");
+const { createLocalUpdates } = require("./local-updates");
 const { createUpdateDownloads } = require("./update-downloads");
 const { monitorEventLoopDelay } = require("perf_hooks");
 const { WebSocketServer } = require("ws");
@@ -29,10 +30,11 @@ function createRelayServer({
   relayOptions = {},
   trustProxy = false,
   updateOrigin = "",
+  updateDirectory = "",
   fileOrigin = "",
 } = {}) {
   const runtimeMetrics = createRuntimeMetrics();
-  const updateDownloads = createUpdateDownloads(updateOrigin);
+  const updateDownloads = updateDirectory ? createLocalUpdates(updateDirectory) : createUpdateDownloads(updateOrigin);
   const fileDownloads = createFileDownloads(fileOrigin);
   const pushEnabled = Boolean(enablePushService || pushSessionService);
   const resolvedPushSessionService = pushEnabled
@@ -448,7 +450,20 @@ if (require.main === module) {
     ["REMODEX_ENABLE_PUSH_SERVICE", "PHODEX_ENABLE_PUSH_SERVICE"]
   ) ?? false;
   const bindHost = process.env.RELAY_BIND_HOST || "0.0.0.0";
-  const { server } = createRelayServer({ enablePushService, trustProxy, updateOrigin: process.env.REMODEX_UPDATE_ORIGIN || "", fileOrigin: process.env.REMODEX_FILE_ORIGIN || "" });
+  const updateDirectory = process.env.REMODEX_UPDATE_DIR || "";
+  if (process.env.UPDATE_PORT && updateDirectory) {
+    const legacyPort = Number(process.env.UPDATE_PORT);
+    if (!Number.isInteger(legacyPort) || legacyPort < 1 || legacyPort > 65535 || legacyPort === port) {
+      throw new Error("UPDATE_PORT must be a distinct TCP port between 1 and 65535");
+    }
+    const downloads = createLocalUpdates(updateDirectory, { legacy: true });
+    const legacy = http.createServer((req, res) => {
+      if (!downloads(req, res, safePathname(req.url))) res.writeHead(404).end();
+    });
+    legacy.setTimeout(30_000);
+    legacy.listen(legacyPort, process.env.UPDATE_BIND || bindHost);
+  }
+  const { server } = createRelayServer({ enablePushService, trustProxy, updateDirectory, updateOrigin: process.env.REMODEX_UPDATE_ORIGIN || "", fileOrigin: process.env.REMODEX_FILE_ORIGIN || "" });
   server.listen(port, bindHost, () => {
     console.log(`[relay] listening on ${bindHost}:${port}`);
   });

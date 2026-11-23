@@ -7,7 +7,7 @@ const path = require('node:path');
 const root = process.env.REMODEX_RUNTIME_DIR || path.resolve(__dirname, '../.local/runtime');
 const stateDir = process.env.REMODEX_DEVICE_STATE_DIR || path.join(root, 'state');
 fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-const downloadPage = process.env.REMODEX_DOWNLOAD_PAGE_URL || 'http://127.0.0.1:19093/';
+const downloadPage = process.env.REMODEX_DOWNLOAD_PAGE_URL || 'https://github.com/qweznm23/xdd-remodex/releases/latest';
 const relayLabel = process.env.REMODEX_RELAY || 'local relay';
 const html = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let pairing = null;

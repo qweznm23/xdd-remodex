@@ -1,18 +1,18 @@
 # XDD Remodex
 
-Android 客户端、Codex 桥接服务、中继及更新服务统一在这个 Git 仓库维护。
+Android 客户端、Codex 桥接服务、中继及其 APK 更新功能统一在这个 Git 仓库维护。
 这是沿用原 Remodex Git 历史的维护仓库，保留 Apache-2.0 许可证及来源说明。当前功能以本仓库代码为准。
 GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公开 Fork。
 来源与基线说明见 [Legal/UPSTREAM.md](Legal/UPSTREAM.md)。
 
 ## 首次安装
 
-手机和电脑分别安装一个文件，两个文件取自[同一版本 fix153](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix153)。
+手机和电脑分别安装一个文件，最新发布包含服务端 fix154 和 Android fix153，两个文件都可从[fix154 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix154)下载。
 
 | 在哪里安装 | 下载 | 安装后做什么 |
 | --- | --- | --- |
-| 运行 Codex 的电脑（Linux / macOS） | [下载服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix153/xdd-remodex-server-0.1.7-ws-fix153.tar.gz) | 解压，按[服务端安装指南](docs/server-install.md)启动中继和桥接，显示配对二维码 |
-| Android 手机（8.0 及以上） | [下载 Android APK](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix153/remodex-0.1.7-ws-fix153.apk) | 打开 APK 安装，按系统提示允许安装，再用 Remodex 扫描电脑上的二维码 |
+| 运行 Codex 的电脑（Linux / macOS） | [下载服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix154/xdd-remodex-server-0.1.7-ws-fix154.tar.gz) | 解压，按[服务端安装指南](docs/server-install.md)启动中继和桥接，显示配对二维码 |
+| Android 手机（8.0 及以上） | [下载 Android APK](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix154/remodex-0.1.7-ws-fix153.apk) | 打开 APK 安装，按系统提示允许安装，再用 Remodex 扫描电脑上的二维码 |
 
 两个系统使用同一个服务端包，包内安装说明在 `docs/server-install.md`。从 fix73 升级时请先保存 APK，再切换桥接和中继，最后覆盖安装手机应用。已有设备可以沿用原配对。[V2 升级与回退步骤](docs/v2-upgrade.md)
 
@@ -20,9 +20,9 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
 | TCP 端口 | 用途 | 谁需要访问 |
 | --- | --- | --- |
-| 10004 | WebSocket 中继、HTTP 健康检查 | 手机需要能访问电脑的这个端口 |
+| 10004 | WebSocket 中继、HTTP 健康检查和 App 更新 | 手机需要能访问电脑的这个端口 |
 | 19092 | Linux 启动器的二维码网页 | 仅电脑本机。macOS 指南直接在终端显示二维码 |
-| 19093 | 可选的 APK 下载和更新服务 | 手机使用独立下载直链时需要可达；配置中继转发时可仅供中继访问 |
+| 19093 | 旧版下载地址兼容入口 | 仅原先使用此端口的部署按需启用，由同一中继进程监听 |
 | 19094 | 可选的文件传输服务 | 仅电脑本机，通过中继转发给手机 |
 
 <details>
@@ -31,7 +31,7 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 从 Release 对应标签检出源码，并安装两个服务的 Node 依赖：
 
 ```bash
-git clone --branch v0.1.7-ws-fix153 https://github.com/qweznm23/xdd-remodex.git
+git clone --branch v0.1.7-ws-fix154 https://github.com/qweznm23/xdd-remodex.git
 cd xdd-remodex
 npm --prefix phodex-bridge ci --ignore-scripts
 npm --prefix relay ci --ignore-scripts
@@ -62,8 +62,7 @@ cp ops/build.env.example .local/config/build.env
 | --- | --- |
 | `android/` | Android 客户端；版本号在 `app/build.gradle.kts` |
 | `phodex-bridge/` | Codex 桥接、会话、文件传输、授权管理和自动维护 |
-| `relay/` | 手机连接中继、更新转发和加密文件转发 |
-| `tools/` | APK 更新下载服务及测试 |
+| `relay/` | 手机连接中继、APK 更新分发和加密文件转发 |
 | `scripts/` | 本机统一构建、测试、发布、启动和服务管理入口 |
 | `ops/` | 可复用配置示例与 systemd 模板 |
 | `.local/` | 本机配置、密钥、缓存、运行状态、安装包和历史归档；不进 Git |
@@ -75,12 +74,12 @@ cp ops/build.env.example .local/config/build.env
 在仓库根目录执行：
 
 ```bash
-make status                       # 桥接、中继、更新下载服务状态
+make status                       # 桥接和中继状态
 make test-server                  # 桥接、授权管理、中继和下载服务测试
 make android-check                # Android 单元测试及发布必要 lint
 make android-release              # 测试、发布检查、签名和压缩打包；不自动发布
 ./scripts/remodexctl restart-bridge
-./scripts/remodexctl restart       # 重启三个 Remodex 服务，不重启 Codex
+./scripts/remodexctl restart       # 重启中继和桥接
 ```
 
 Android 配置放在 `.local/config/build.env`，参考 `ops/build.env.example`。
@@ -101,7 +100,7 @@ Android 配置放在 `.local/config/build.env`，参考 `ops/build.env.example`�
 
 ## 本机部署与数据
 
-三个现有 systemd 单元保持原服务名，由 `scripts/remodexctl` 统一管理。
+中继和桥接分别使用独立的 systemd 单元，由 `scripts/remodexctl` 统一管理。
 实际配置在 `.local/config/`；模板在 `ops/systemd/`，替换占位路径后才能部署。
 Node 运行时在 `.local/toolchains/node/`，与其他项目的临时工具目录分离。
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-services=(remodex-test-relay.service remodex-test-download.service remodex-test-bridge.service)
+services=(remodex-test-relay.service remodex-test-bridge.service)
 case "${1:-status}" in
   status) systemctl show "${services[@]}" --property=Id,ActiveState,SubState,MainPID,UnitFileState ;;
   restart) systemctl restart "${services[@]}" ;;
+  restart-relay) systemctl restart remodex-test-relay.service ;;
   restart-bridge) systemctl restart remodex-test-bridge.service ;;
-  *) echo 'Usage: scripts/remodexctl [status|restart|restart-bridge]' >&2; exit 2 ;;
+  *) echo 'Usage: scripts/remodexctl [status|restart|restart-bridge|restart-relay]' >&2; exit 2 ;;
 esac

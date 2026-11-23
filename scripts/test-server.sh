@@ -9,5 +9,3 @@ cd "$project_dir/phodex-bridge"
 "$python_bin" test/auth-profiles-test.py
 cd "$project_dir/relay"
 "$node_bin" --test ./*.test.js
-cd "$project_dir/tools"
-"$python_bin" test_app_update_server.py

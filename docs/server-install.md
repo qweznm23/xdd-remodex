@@ -4,7 +4,7 @@
 
 ## 准备电脑
 
-1. 从 [fix153 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix153) 下载 `xdd-remodex-server-0.1.7-ws-fix153.tar.gz`，解压到长期使用的目录。中继和桥接所需的 Node 依赖已包含在包里。
+1. 从 [fix154 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix154) 下载 `xdd-remodex-server-0.1.7-ws-fix154.tar.gz`，解压到长期使用的目录。中继和桥接所需的 Node 依赖已包含在包里。
 2. 安装适合电脑芯片的 [Node.js 24](https://nodejs.org/en/download)。用平时使用 Codex 的账户打开终端，运行 `node -v` 确认显示 v24，再运行 `codex` 确认能正常进入已登录的会话，然后退出 Codex。
 3. 查电脑的局域网 IPv4 地址。Linux 可以用 `ip -brief -4 address` 查看当前网卡，Mac 可以在「系统设置 → 网络 → 当前连接 → 详细信息 → TCP/IP」查看。下面所有 `192.168.1.20` 都换成这个地址。
 
@@ -47,3 +47,9 @@ fix77 在手机「设置 → 组件」中提供「保持 Mac 唤醒」。远程�
 - 升级时，下载同一个 Release 的服务端包和 APK。先停止旧服务，把新包解压到新目录。沿用原运行账户、环境配置、配对状态路径和工作目录；使用包内默认路径的 Linux 用户应先将旧目录的 `.local` 保留到新目录。启动新服务并确认连接后，再安装新版 APK。
 - 桥接默认启动当前账户的 `codex app-server`。要连接已有 Codex 桌面服务，可在启动桥接前设置 `REMODEX_CODEX_ENDPOINT`。地址格式见包内 `ops/runtime.env.example`。
 - Linux 的 systemd 自启模板位于 `ops/systemd/`。图片处理和账号管理所需的 Python 依赖列在 `phodex-bridge/requirements.txt`。授权管理调用 `/usr/bin/python3`。
+
+### 从中继分发 Android 更新
+
+从 fix154 起，启动中继前设置 `REMODEX_UPDATE_DIR` 为发布目录的绝对路径。目录里放 `update.json` 和其中 `apkUrl` 指定的同目录 `remodex-*.apk`。手机沿用中继的主机和端口，请求 `/updates/update.json`。发布新包后会直接生效。
+
+从独立下载服务迁移时，保留原目录、`UPDATE_BIND` 和 `UPDATE_PORT`，停止旧下载单元，再重启中继。原下载端口继续提供根路径下的更新清单、APK 和下载页。两个端口均验证成功后，禁用旧单元的开机自启。新部署只需开放中继端口。分开托管更新文件的部署可继续仅设置 `REMODEX_UPDATE_ORIGIN` 指向原更新源；同时设置时优先读取本地发布目录。
