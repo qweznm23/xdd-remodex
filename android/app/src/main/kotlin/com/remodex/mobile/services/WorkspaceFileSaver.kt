@@ -10,20 +10,24 @@ import android.provider.MediaStore
 import android.util.Log
 import com.remodex.mobile.core.error.CodexServiceError
 import java.io.File
+import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
-internal suspend fun saveWorkspaceFile(context: Context, transfer: WorkspaceFileTransferService, info: WorkspaceFileInfo, cwd: String?, selectedUri: Uri?, onProgress: (Long) -> Unit): Uri {
+internal suspend fun saveWorkspaceFile(context: Context, transfer: WorkspaceFileTransferService, info: WorkspaceFileInfo, cwd: String?, selectedUri: Uri?, onProgress: (Long) -> Unit): Uri =
+    savePreviewFile(context, info.fileName, info.mimeType, selectedUri) { transfer.copyTo(info, cwd, it, onProgress) }
+
+internal suspend fun savePreviewFile(context: Context, name: String, mime: String, selectedUri: Uri?, write: suspend (OutputStream) -> Unit): Uri {
     val resolver = context.contentResolver
     val mediaStore = selectedUri == null && Build.VERSION.SDK_INT >= 29
     val uri = withContext(NonCancellable + Dispatchers.IO) {
         selectedUri ?: if (Build.VERSION.SDK_INT >= 29) {
             resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, info.fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, info.mimeType)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Remodex")
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }) ?: throw FileTransferFailure("save", "create_failed", "Cannot create file in Downloads")
@@ -34,7 +38,7 @@ internal suspend fun saveWorkspaceFile(context: Context, transfer: WorkspaceFile
         val output = withContext(NonCancellable + Dispatchers.IO) {
             resolver.openOutputStream(uri, "w") ?: throw FileTransferFailure("save", "open_failed", "Cannot open download destination")
         }
-        output.use { transfer.copyTo(info, cwd, it, onProgress) }
+        output.use { write(it) }
         currentCoroutineContext().ensureActive()
         if (mediaStore) withContext(Dispatchers.IO) {
             if (resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) != 1) {

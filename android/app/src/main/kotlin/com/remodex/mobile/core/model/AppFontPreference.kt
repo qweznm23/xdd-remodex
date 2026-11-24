@@ -7,7 +7,8 @@ package com.remodex.mobile.core.model
 enum class AppFontStyle {
     system,
     geist,
-    jetBrainsMono;
+    jetBrainsMono,
+    bundled;
 
     val title: String
         get() =
@@ -15,6 +16,7 @@ enum class AppFontStyle {
                 system -> "System"
                 geist -> "Geist"
                 jetBrainsMono -> "JetBrains Mono"
+                bundled -> "Built-in"
             }
 
     val subtitle: String
@@ -23,6 +25,7 @@ enum class AppFontStyle {
                 system -> "Use the system font for regular text. Code stays monospaced."
                 geist -> "Use Geist for regular text. Code stays monospaced."
                 jetBrainsMono -> "Use JetBrains Mono for regular text and code."
+                bundled -> ""
             }
 
     companion object {

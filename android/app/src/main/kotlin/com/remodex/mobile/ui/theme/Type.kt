@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.theme
 
+import android.content.res.AssetManager
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.material3.Typography
@@ -30,6 +31,19 @@ internal val CodeFontFamily = FontFamily(
 
 internal val LocalReplyFont = staticCompositionLocalOf<FontFamily?> { null }
 
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+internal fun bundledFontFamily(assets: AssetManager, name: String): FontFamily =
+    FontFamily(
+        listOf(FontWeight.Normal, FontWeight.Medium, FontWeight.SemiBold, FontWeight.Bold).map { weight ->
+            Font(
+                path = "remodex-fonts/$name.ttf",
+                assetManager = assets,
+                weight = weight,
+                variationSettings = FontVariation.Settings(FontVariation.weight(weight.weight)),
+            )
+        },
+    )
+
 // The reference editor uses its regular sans body token with a font-relative line height.
 internal val Typography.composerInput: TextStyle
     get() = bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Normal,
@@ -37,7 +51,7 @@ internal val Typography.composerInput: TextStyle
 
 private fun proseFontFamily(style: AppFontStyle): FontFamily =
     when (style) {
-        AppFontStyle.system -> FontFamily.SansSerif
+        AppFontStyle.system, AppFontStyle.bundled -> FontFamily.SansSerif
         AppFontStyle.geist -> GeistFamily
         AppFontStyle.jetBrainsMono -> CodeFontFamily
     }

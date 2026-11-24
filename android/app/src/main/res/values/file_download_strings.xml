@@ -1,6 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="file_download_action">Download file</string>
+    <string name="file_share_action">Share file</string>
+    <string name="file_download_thumbnail">Download thumbnail</string>
+    <string name="file_share_thumbnail">Share thumbnail</string>
     <string name="file_download_size">File size: %1$.2f MiB</string>
     <string name="file_download_progress">Downloaded %1$.2f / %2$.2f MiB</string>
     <string name="file_download_keep_open">Keep this window open until the download completes. Closing it cancels the download.</string>

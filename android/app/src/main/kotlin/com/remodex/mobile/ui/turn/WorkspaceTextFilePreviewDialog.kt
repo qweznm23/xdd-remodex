@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.webkit.MimeTypeMap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,7 +26,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.R
 import com.remodex.mobile.services.*
@@ -40,6 +43,11 @@ data class WorkspaceTextFilePreviewRequest(val path: String, val cwd: String?, v
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, service: WorkspaceTextFileService, onDismiss: () -> Unit) {
+    if (!request.downloadOnly && (request.path.endsWith(".html", true) || request.path.endsWith(".htm", true))) {
+        val title = request.path.substringAfterLast('/').substringAfterLast('\\')
+        FileHtmlPreview(InteractivePageReference(request.path, title), request.cwd, service.transfers, visualize = false, onDismiss = onDismiss)
+        return
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var reloadKey by remember(request) { mutableStateOf(0) }
@@ -151,38 +159,82 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
         ConversationVideoPlayer(request.path,request.cwd,onDismiss)
         return
     }
+    val fileActions: @Composable (WorkspaceFileInfo) -> Unit = { file ->
+        IconButton(onClick = ::download, enabled = !downloading && savedUri == null) {
+            Icon(Icons.Outlined.Download, stringResource(R.string.file_download_action))
+        }
+        key(request, file.revision) {
+            PreviewFileActions(
+                resolve = { PreviewOriginal(file.fileName, file.mimeType) { service.transfers.copyTo(file, request.cwd, it) {} } },
+                existingDownload = savedUri, shareOnly = true, enabled = !downloading,
+            )
+        }
+    }
+    val transferStatus: @Composable (WorkspaceFileInfo) -> Unit = { file ->
+        if (downloading) {
+            LinearProgressIndicator(progress = { (downloadedBytes.toFloat() / file.byteLength.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+            Text(stringResource(R.string.file_download_progress, downloadedBytes / 1048576.0, file.byteLength / 1048576.0))
+            Text(stringResource(R.string.file_download_keep_open), style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { cancelled = true; downloadJob?.cancel() }) { Text(stringResource(R.string.app_update_cancel)) }
+        } else if (savedUri != null) {
+            Text(stringResource(if (Build.VERSION.SDK_INT >= 29) R.string.file_download_saved else R.string.file_download_saved_selected))
+            Button(onClick = {
+                if (file.mimeType == "application/vnd.android.package-archive" && !context.packageManager.canRequestPackageInstalls()) {
+                    try { installPermission.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))) }
+                    catch (error: Exception) { fail("install_permission", error) }
+                } else openSaved()
+            }) { Text(stringResource(R.string.file_download_open)) }
+        } else {
+            if (file.previewKind == "none") Text(stringResource(R.string.file_download_no_preview))
+            if (cancelled) Text(stringResource(R.string.file_download_cancelled))
+        }
+    }
+    val previewError: @Composable () -> Unit = {
+        errorMessage?.let { error ->
+            Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.heightIn(max = 130.dp).verticalScroll(rememberScrollState()))
+            TextButton(enabled = !downloading, onClick = { autoDownload = true; reloadKey++ }) { Text(stringResource(R.string.workspace_text_preview_retry)) }
+        }
+    }
+
+    val file = info
+    // Keep an image link in the same window while the bridge resolves its metadata.
+    val imageLink = remember(request.path) {
+        MimeTypeMap.getSingleton().getMimeTypeFromExtension(request.path.substringAfterLast('.', "").lowercase())?.startsWith("image/") == true
+    }
+    if (!request.downloadOnly && (file?.previewKind == "image" || (file == null && imageLink))) {
+        ImagePreviewDialog(file?.fileName ?: request.path.substringAfterLast('/'), onDismiss, actions = { file?.let { fileActions(it) } }) {
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                file?.let { transferStatus(it) }
+                previewError()
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (loading) CircularProgressIndicator()
+                    image?.let { bitmap ->
+                        ZoomablePreviewImage(
+                            painter = remember(bitmap) { BitmapPainter(bitmap) },
+                            sourceKey = "${request.cwd}:${request.path}",
+                            modifier = Modifier.fillMaxSize(),
+                            contentDescription = file?.fileName,
+                            onDismiss = onDismiss,
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
     RemodexModalBottomSheet(onDismissRequest = onDismiss, sheetGesturesEnabled = true) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f).padding(horizontal = 18.dp).padding(bottom = 26.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(info?.fileName ?: request.path.substringAfterLast('/'), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                Text(info?.fileName ?: request.path.substringAfterLast('/'), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                info?.let { fileActions(it) }
                 TextButton(onClick = LocalSheetClose.current) { Text(stringResource(R.string.turn_preview_close)) }
             }
             info?.let { file ->
                 Text(file.path, style = MaterialTheme.typography.labelSmall.copy(fontFamily = CodeFontFamily))
                 Text(stringResource(R.string.file_download_size, file.byteLength / 1048576.0), style = MaterialTheme.typography.labelSmall)
-                if (downloading) {
-                    LinearProgressIndicator(progress = { (downloadedBytes.toFloat() / file.byteLength.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                    Text(stringResource(R.string.file_download_progress, downloadedBytes / 1048576.0, file.byteLength / 1048576.0))
-                    Text(stringResource(R.string.file_download_keep_open), style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = { cancelled = true; downloadJob?.cancel() }) { Text(stringResource(R.string.app_update_cancel)) }
-                } else if (savedUri != null) {
-                    Text(stringResource(if (Build.VERSION.SDK_INT >= 29) R.string.file_download_saved else R.string.file_download_saved_selected))
-                    Button(onClick = {
-                        if (file.mimeType == "application/vnd.android.package-archive" && !context.packageManager.canRequestPackageInstalls()) {
-                            try { installPermission.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))) }
-                            catch (error: Exception) { fail("install_permission", error) }
-                        } else openSaved()
-                    }) { Text(stringResource(R.string.file_download_open)) }
-                } else {
-                    if (file.previewKind == "none") Text(stringResource(R.string.file_download_no_preview))
-                    if (cancelled) Text(stringResource(R.string.file_download_cancelled))
-                    Button(onClick = ::download, enabled = !loading) { Text(stringResource(R.string.file_download_action)) }
-                }
+                transferStatus(file)
             }
-            errorMessage?.let { error ->
-                Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.heightIn(max = 130.dp).verticalScroll(rememberScrollState()))
-                TextButton(enabled = !downloading, onClick = { autoDownload = true; reloadKey++ }) { Text(stringResource(R.string.workspace_text_preview_retry)) }
-            }
+            previewError()
             if (loading) Box(Modifier.fillMaxWidth().heightIn(min = 80.dp), Alignment.Center) { CircularProgressIndicator() }
             text?.let { content ->
                 val file = info
@@ -209,15 +261,6 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
                         Text(content, modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall.copy(fontFamily = CodeFontFamily))
                     } }
                 }
-            }
-            image?.let { bitmap ->
-                ZoomablePreviewImage(
-                    onDismiss = onDismiss,
-                    painter = remember(bitmap) { BitmapPainter(bitmap) },
-                    sourceKey = "${request.cwd}:${request.path}",
-                    contentDescription = info?.fileName,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                )
             }
         }
     }

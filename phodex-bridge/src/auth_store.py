@@ -23,6 +23,19 @@ BEIJING = dt.timezone(dt.timedelta(hours=8))
 SCRIPT = Path(__file__).resolve()
 
 
+def parse_refresh_time(value):
+    # Older system Pythons require a numeric UTC offset and 3 or 6 fractional
+    # digits. Normalize Codex timestamps in memory to datetime's microseconds.
+    if value.endswith('Z'):
+        value = value[:-1] + '+00:00'
+    value = re.sub(r'([T ]\d{2}:\d{2}:\d{2})\.(\d+)(?=[+-])',
+                   lambda match: match[1] + '.' + match[2][:6].ljust(6, '0'), value)
+    parsed = dt.datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError('Missing timezone')
+    return parsed
+
+
 def read(path):
     import stat
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -44,9 +57,7 @@ def read(path):
         if not isinstance(refreshed, str):
             raise ValueError('Invalid last_refresh timestamp type')
         try:
-            parsed = dt.datetime.fromisoformat(refreshed)
-            if parsed.tzinfo is None:
-                raise ValueError('Missing timezone')
+            parse_refresh_time(refreshed)
         except ValueError as cause:
             raise ValueError('Invalid last_refresh timestamp') from cause
     return data, value
@@ -115,9 +126,7 @@ def credential_time(auth):
     last_refresh = auth.get('last_refresh')
     if isinstance(last_refresh, str):
         try:
-            parsed = dt.datetime.fromisoformat(last_refresh)
-            if parsed.tzinfo is not None:
-                return parsed.timestamp()
+            return parse_refresh_time(last_refresh).timestamp()
         except (ValueError, OverflowError):
             pass
     issued = access_claim(auth, 'iat')

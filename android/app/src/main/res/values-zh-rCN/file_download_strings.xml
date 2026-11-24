@@ -1,6 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="file_download_action">下载文件</string>
+    <string name="file_share_action">分享文件</string>
+    <string name="file_download_thumbnail">下载缩略图</string>
+    <string name="file_share_thumbnail">分享缩略图</string>
     <string name="file_download_size">文件大小：%1$.2f MiB</string>
     <string name="file_download_progress">已下载 %1$.2f / %2$.2f MiB</string>
     <string name="file_download_keep_open">请保持此窗口打开，直到下载完成。关闭窗口会取消下载。</string>

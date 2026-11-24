@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.outlined.WebAsset
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +55,13 @@ internal fun CodeBlockCard(raw: String, language: String?, expansionKey: String,
             Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (language.equals("html", ignoreCase = true) || language.equals("htm", ignoreCase = true)) {
+                    var previewHtml by remember(expansionKey) { mutableStateOf<String?>(null) }
+                    IconButton(onClick = { previewHtml = raw }) {
+                        Icon(Icons.Outlined.WebAsset, stringResource(R.string.interactive_page_open))
+                    }
+                    previewHtml?.let { InlineHtmlPreview(it) { previewHtml = null } }
+                }
                 copy()
                 IconButton(onClick = { open = true }) {
                     Icon(Icons.Default.OpenInFull, stringResource(R.string.turn_markdown_expand_code))

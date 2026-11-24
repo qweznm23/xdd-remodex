@@ -129,26 +129,45 @@ internal fun ConversationImageGalleryDialog(
     val pager = rememberPagerState(initialPage = images.indexOfFirst { attachmentImageSource(it, true) == selectedSource }.coerceAtLeast(0),
         pageCount = { images.size })
     var zoomedPage by remember { mutableStateOf<Int?>(null) }
+    ImagePreviewDialog(
+        title = if (images.size > 1) "${pager.currentPage + 1} / ${images.size}" else "",
+        onDismiss = onDismiss,
+        actions = {
+            val current = images[pager.currentPage]
+            val source = current.remotePath?.takeIf { it.isNotBlank() } ?: attachmentImageSource(current, true)
+            MediaFileActions(source, LocalThreadGitProjectRoot.current, current.mimeType,
+                thumbnailOnly = current.remotePath.isNullOrBlank() && current.sourceURL.isNullOrBlank() && current.payloadDataURL.isNullOrBlank())
+        },
+    ) {
+        HorizontalPager(state = pager, userScrollEnabled = zoomedPage != pager.currentPage,
+            beyondViewportPageCount = 1,
+            modifier = Modifier.fillMaxSize(), key = { attachmentImageSource(images[it], true) }) { index ->
+            GalleryImagePage(images[index], onDismiss, pagingEnabled = images.size > 1,
+                active = pager.currentPage == index,
+                onZoomChanged = { zoomed ->
+                    if (index == pager.currentPage) zoomedPage = if (zoomed) index else null
+                })
+        }
+    }
+}
+
+@Composable
+internal fun ImagePreviewDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    actions: @Composable () -> Unit,
+    content: @Composable () -> Unit,
+) {
     RemodexPreviewDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                HorizontalPager(state = pager, userScrollEnabled = zoomedPage != pager.currentPage,
-                    beyondViewportPageCount = 1,
-                    modifier = Modifier.fillMaxSize(), key = { attachmentImageSource(images[it], true) }) { index ->
-                        GalleryImagePage(images[index], onDismiss, pagingEnabled = images.size > 1,
-                            active = pager.currentPage == index,
-                            onZoomChanged = { zoomed ->
-                                if (index == pager.currentPage) zoomedPage = if (zoomed) index else null
-                            })
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    actions()
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.turn_preview_close)) }
                 }
-                if (images.size > 1) Text(
-                    "${pager.currentPage + 1} / ${images.size}",
-                    modifier = Modifier.align(Alignment.TopStart).padding(20.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                    Text(stringResource(R.string.turn_preview_close))
-                }
+                Box(Modifier.fillMaxSize().padding(bottom = 16.dp), contentAlignment = Alignment.Center) { content() }
             }
         }
     }
@@ -158,7 +177,7 @@ internal fun ConversationImageGalleryDialog(
 private fun GalleryImagePage(attachment: CodexImageAttachment, onDismiss: () -> Unit, pagingEnabled: Boolean, active: Boolean, onZoomChanged: (Boolean) -> Unit) {
     val image = rememberConversationImage(attachmentImageSource(attachment, true),
         fallbackDataUrl = attachment.thumbnailBase64JPEG.takeIf { it.isNotBlank() }?.let { "data:image/jpeg;base64,$it" })
-    Box(Modifier.fillMaxSize().padding(top = 56.dp, bottom = 16.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (!image.loading && image.error == null && image.hasImage) {
             ZoomablePreviewImage(image.painter, attachmentImageSource(attachment, true), Modifier.fillMaxSize(),
                 onDismiss = onDismiss, pagingEnabled = pagingEnabled, active = active, onZoomChanged = onZoomChanged)

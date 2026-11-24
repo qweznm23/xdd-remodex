@@ -114,6 +114,9 @@ internal fun ConversationVideoPlayer(source: String, cwd: String?, onDismiss: ()
                     if (localDownloadPath != null) IconButton(onClick = {player?.pause();showDownload = true}) {
                         Icon(Icons.Default.Download,stringResource(R.string.file_download_action),tint = Color.White)
                     }
+                    CompositionLocalProvider(LocalContentColor provides Color.White) {
+                        MediaFileActions(source, cwd, shareOnly = localDownloadPath != null, beforeAction = { player?.pause() })
+                    }
                     TextButton(onClick = onDismiss) {Text(stringResource(R.string.turn_preview_close),color = Color.White)}
                 }
                 Box(Modifier.fillMaxWidth().weight(1f),contentAlignment = Alignment.Center) {

@@ -27,13 +27,13 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 
-/** Morph one surface between the live toolbar icon and its measured menu, including interrupted returns. */
+/** Expand from an anchor, optionally carrying its existing badge into the transition. */
 @Composable
 internal fun QuotaAnchoredMenu(
     transition: Transition<Boolean>,
     onDismiss: () -> Unit,
     panelWidth: Dp? = null,
-    badge: @Composable () -> Unit,
+    badge: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val expanded = transition.targetState
@@ -77,6 +77,7 @@ internal fun QuotaAnchoredMenu(
             Surface(
                 modifier = Modifier.graphicsLayer {
                     val p = progress
+                    if (badge == null) alpha = p
                     val diameter = 36.dp.toPx()
                     scaleX = p + (1f - p) * diameter / size.width.coerceAtLeast(1f)
                     scaleY = p + (1f - p) * diameter / size.height.coerceAtLeast(1f)
@@ -90,13 +91,15 @@ internal fun QuotaAnchoredMenu(
             ) {
                 val width = if (panelWidth == null) Modifier.width(IntrinsicSize.Max) else Modifier.width(panelWidth)
                 Column(width.verticalScroll(rememberScrollState()).padding(vertical = 6.dp)
-                    .graphicsLayer { alpha = ((progress - .24f) / .76f).coerceIn(0f, 1f) }, content = content)
+                    .graphicsLayer { alpha = if (badge == null) 1f else ((progress - .24f) / .76f).coerceIn(0f, 1f) }, content = content)
             }
-            Box(Modifier.size(36.dp).graphicsLayer {
-                translationX = origin.x - size.width / 2
-                translationY = origin.y - size.height / 2
-                alpha = (1f - progress * 3f).coerceIn(0f, 1f)
-            }.clearAndSetSemantics {}, contentAlignment = Alignment.Center) { badge() }
+            if (badge != null) {
+                Box(Modifier.size(36.dp).graphicsLayer {
+                    translationX = origin.x - size.width / 2
+                    translationY = origin.y - size.height / 2
+                    alpha = (1f - progress * 3f).coerceIn(0f, 1f)
+                }.clearAndSetSemantics {}, contentAlignment = Alignment.Center) { badge() }
+            }
         }
     }
 }

@@ -33,6 +33,12 @@ val betaEnabled =
 val defaultRelayUrl = configValue("PHODEX_DEFAULT_RELAY_URL")
 val subscriptionEnabled = configValue("SUBSCRIPTION_ENABLED").equals("true", ignoreCase = true)
 val subscriptionManagementUrl = configValue("SUBSCRIPTION_MANAGEMENT_URL")
+val bundledFontAssets = configValue("REMODEX_BUNDLED_FONT_ASSETS").takeIf { it.isNotEmpty() }?.let(rootProject::file)
+bundledFontAssets?.let { directory ->
+    require(listOf("interface.ttf", "reply.ttf").all { directory.resolve("remodex-fonts/$it").isFile }) {
+        "REMODEX_BUNDLED_FONT_ASSETS must contain remodex-fonts/interface.ttf and remodex-fonts/reply.ttf"
+    }
+}
 
 android {
     namespace = "com.remodex.mobile"
@@ -43,8 +49,9 @@ android {
         minSdk = 26
         targetSdk = 36
 
-        versionCode = 170
+        versionCode = 173
         versionName = "0.1.7"
+        buildConfigField("boolean", "BUNDLED_FONT_PAIR", (bundledFontAssets != null).toString())
         buildConfigField("boolean", "BETA_ENABLED", betaEnabled.toString())
         buildConfigField("String", "BETA_API_BASE_URL", quotedBuildConfigString(betaApiBaseUrl))
         buildConfigField("String", "BETA_API_KEY", quotedBuildConfigString(betaApiKey))
@@ -52,6 +59,8 @@ android {
         buildConfigField("String", "SUBSCRIPTION_MANAGEMENT_URL", quotedBuildConfigString(subscriptionManagementUrl))
         manifestPlaceholders["PHODEX_DEFAULT_RELAY_URL"] = defaultRelayUrl
     }
+
+    bundledFontAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
 
     signingConfigs {
         if (hasReleaseSigning) {
@@ -66,10 +75,10 @@ android {
 
     buildTypes {
         debug {
-            versionNameSuffix = "-ws-fix153"
+            versionNameSuffix = "-ws-fix156"
         }
         release {
-            versionNameSuffix = "-ws-fix153"
+            versionNameSuffix = "-ws-fix156"
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true

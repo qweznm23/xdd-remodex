@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="attachment-capture" path="attachment-capture/" />
+    <cache-path name="shared-attachments" path="shared-attachments/" />
 </paths>

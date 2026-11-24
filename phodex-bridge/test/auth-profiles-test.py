@@ -77,6 +77,50 @@ class ProfileTests(unittest.TestCase):
         for forbidden in ('active-new', 'inactive-original', 'other-account', 'header.'):
             self.assertNotIn(forbidden, json.dumps(result))
 
+    def test_codex_refresh_timestamps_list_and_query_without_rewriting_current(self):
+        stamp = '2026-11-20T04:29:54.446202Z'
+        active_path = m.BASE / 'auth.json'
+        active = credential('active-account', 'active-new')
+        active['last_refresh'] = stamp
+        m.save_json(active_path, active)
+        original = active_path.read_bytes()
+        self.api.socket = str(m.BASE / 'fixture.sock')
+        listing = self.api.list()
+        self.assertEqual(listing['currentProfile']['lastRefresh'], stamp)
+        row, = listing['profiles']
+        with patch.object(m, 'RPC', self.rpc()):
+            result = self.api.query(row['id'], row['revision'])
+        self.assertEqual(result['quota']['rateLimits']['primary']['usedPercent'], 25)
+        self.assertEqual(active_path.read_bytes(), original)
+
+    def test_refresh_version_uses_timezone_and_fraction_instead_of_jwt_issue_time(self):
+        utc = m.dt.timezone.utc
+        for stamp, microseconds in [
+            ('2026-11-20T04:29:54Z', 0),
+            ('2026-11-20T04:29:54.4Z', 400000),
+            ('2026-11-20T04:29:54.446202Z', 446202),
+            ('2026-11-20T04:29:54.446202987Z', 446202),
+            ('2026-11-20T12:29:54.446202987+08:00', 446202),
+        ]:
+            with self.subTest(stamp=stamp):
+                auth = credential('one-account', 'fixture')
+                auth['last_refresh'] = stamp
+                expected = m.dt.datetime(2026, 11, 20, 4, 29, 54, microseconds, utc)
+                self.assertEqual(m.credential_time(auth), expected.timestamp())
+
+    def test_invalid_refresh_timestamp_keeps_list_stage_and_parse_cause(self):
+        for stamp in ('not-a-date', '2026-11-20T04:29:54.446202', '2026-02-30T04:29:54Z'):
+            with self.subTest(stamp=stamp):
+                auth = credential('active-account', 'active-new')
+                auth['last_refresh'] = stamp
+                m.save_json(m.BASE / 'auth.json', auth)
+                with self.assertRaisesRegex(ValueError, 'Invalid last_refresh timestamp') as caught:
+                    self.api.list()
+                report = self.api.error(caught.exception)
+                self.assertEqual(report['stage'], 'list_profiles')
+                self.assertEqual(report['cause']['type'], 'ValueError')
+                self.assertTrue(report['cause']['message'])
+
     def test_atomic_cleanup_error_does_not_replace_disk_failure(self):
         with patch.object(m.os, 'fsync', side_effect=OSError(28, 'No space left')):
             with patch.object(m.os, 'unlink', side_effect=PermissionError(13, 'Cleanup denied')):

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.PushPin
@@ -83,7 +84,6 @@ import com.remodex.mobile.data.WorktreeNewChatDefaults
 import com.remodex.mobile.data.loadGitBranchesWithStatus
 import com.remodex.mobile.ui.draft.NewChatDraftSource
 import com.remodex.mobile.ui.shared.ThreadRenameDialog
-import com.remodex.mobile.ui.theme.RemodexDropdownMenu
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -564,10 +564,9 @@ fun SidebarScreen(
                         deleteLocalTarget = thread
                         deleteLocalError = null
                     }
-                    Box {
+                    val menu = remember(pinDeviceId, thread.id) { SidebarContextMenuState() }
+                    Box(Modifier.observeMenuPress(menu)) {
                         val shortcut = searching || home
-                        // Keep the popup out of untouched rows. After opening it owns its exit animation.
-                        var menuExpanded by remember(pinDeviceId, thread.id) { mutableStateOf<Boolean?>(null) }
                         SidebarThreadRow(
                             thread = thread,
                             selected = isActive,
@@ -580,18 +579,25 @@ fun SidebarScreen(
                             activeMetadata = activeChatMetadata,
                             colors = sidebarColors,
                             onSelect = onSelectThread,
-                            onActionsRequest = { menuExpanded = true },
+                            onActionsRequest = menu::open,
                         )
-                        if (menuExpanded != null) RemodexDropdownMenu(
-                            expanded = menuExpanded == true,
-                            onDismissRequest = { menuExpanded = false },
-                        ) {
-                            DropdownMenuItem(text = { Text(stringResource(if (thread.id in pinnedIds) R.string.sidebar_unpin_thread else R.string.sidebar_pin_thread)) },
-                                enabled = pinsLoaded && !pinBusy, onClick = { menuExpanded = false; togglePin(thread) })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.sidebar_thread_rename)) },
-                                onClick = { menuExpanded = false; onRenameThread() })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.sidebar_thread_delete_local), color = MaterialTheme.colorScheme.error) },
-                                onClick = { menuExpanded = false; onDeleteThread() })
+                        SidebarContextMenu(menu) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(if (thread.id in pinnedIds) R.string.sidebar_unpin_thread else R.string.sidebar_pin_thread)) },
+                                leadingIcon = { Icon(Icons.Outlined.PushPin, null) },
+                                enabled = pinsLoaded && !pinBusy,
+                                onClick = { menu.close(); togglePin(thread) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.sidebar_thread_rename)) },
+                                leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                onClick = { menu.close(); onRenameThread() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.sidebar_thread_delete_local), color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                                onClick = { menu.close(); onDeleteThread() },
+                            )
                         }
                     }
                 }
@@ -999,7 +1005,7 @@ private fun RepoHeader(
     collapsed: Boolean = false,
     onToggleCollapse: (() -> Unit)? = null,
 ) {
-    var showProjectMenu by remember(group.id) { mutableStateOf<Boolean?>(null) }
+    val menu = remember(group.id) { SidebarContextMenuState() }
     val hasMenuActions =
         onNewChatInProject != null ||
             onNewWorktreeInProject != null ||
@@ -1008,7 +1014,7 @@ private fun RepoHeader(
     val canCollapse = !directory
     val disclosure = stringResource(if (collapsed) R.string.sidebar_state_collapsed else R.string.sidebar_state_expanded)
 
-    Box(modifier) {
+    Box(if (hasMenuActions) modifier.observeMenuPress(menu) else modifier) {
         Row(
             modifier =
                 Modifier
@@ -1025,7 +1031,7 @@ private fun RepoHeader(
                         .combinedClickable(
                             onClick = { if (onOpenArchivedChats != null) onOpenArchivedChats() else onToggleCollapse?.invoke() },
                             onLongClickLabel = stringResource(R.string.sidebar_project_actions_cd),
-                            onLongClick = if (hasMenuActions && !worktreeChatBusy) ({ showProjectMenu = true }) else null,
+                            onLongClick = if (hasMenuActions && !worktreeChatBusy) menu::open else null,
                         ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1067,16 +1073,14 @@ private fun RepoHeader(
             }
             if (worktreeChatBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
         }
-        if (hasMenuActions && showProjectMenu != null) {
-            RemodexDropdownMenu(
-                expanded = showProjectMenu == true,
-                onDismissRequest = { showProjectMenu = false },
-            ) {
+        if (hasMenuActions) {
+            SidebarContextMenu(menu) {
                 onNewChatInProject?.let { action ->
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.sidebar_new_chat_in_project)) },
+                        leadingIcon = { Icon(painterResource(LucideR.drawable.lucide_ic_plus), null) },
                         onClick = {
-                            showProjectMenu = false
+                            menu.close()
                             action()
                         },
                     )
@@ -1085,7 +1089,7 @@ private fun RepoHeader(
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.sidebar_new_managed_worktree_chat)) },
                         onClick = {
-                            showProjectMenu = false
+                            menu.close()
                             action()
                         },
                         leadingIcon = {
@@ -1100,7 +1104,7 @@ private fun RepoHeader(
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.sidebar_project_archive_menu)) },
                         onClick = {
-                            showProjectMenu = false
+                            menu.close()
                             action()
                         },
                         leadingIcon = {
@@ -1120,7 +1124,7 @@ private fun RepoHeader(
                             )
                         },
                         onClick = {
-                            showProjectMenu = false
+                            menu.close()
                             action()
                         },
                         leadingIcon = {

@@ -46,40 +46,71 @@ internal fun InteractivePageCard(reference: InteractivePageReference, onOpen: ()
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
+private const val MAX_HTML_BYTES = 8 * 1024 * 1024
+
 @Composable
 internal fun InteractivePageDialog(reference: InteractivePageReference, cwd: String?, onDismiss: () -> Unit) {
     val repository = LocalCodexRepository.current
+    val service = remember(repository) { WorkspaceFileTransferService(repository) }
+    val boundCwd = RepoMarkdownFileLink.previewWorkspaceCwd(reference.path) ?: cwd
+    FileHtmlPreview(reference, boundCwd, service, visualize = true, onDismiss = onDismiss)
+}
+
+@Composable
+internal fun FileHtmlPreview(reference: InteractivePageReference, cwd: String?, service: WorkspaceFileTransferService,
+    visualize: Boolean, onDismiss: () -> Unit) {
+    key(reference, cwd, service) {
+        HtmlPreviewDialog(reference.title, reference.path, onDismiss, actions = {
+            PreviewFileActions(resolve = {
+                val info = service.info(reference.path, cwd)
+                PreviewOriginal(info.fileName, "text/html") { service.copyTo(info, cwd, it) {} }
+            })
+        }) { progress ->
+            val info = service.info(reference.path, cwd)
+            if (info.byteLength > MAX_HTML_BYTES) throw FileTransferFailure("interactive_page", "page_too_large", "Interactive page exceeds 8 MiB")
+            val output = ByteArrayOutputStream()
+            progress(0, info.byteLength)
+            service.copyTo(info, cwd, output) { progress(it, info.byteLength) }
+            val text = try { Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(output.toByteArray())).toString() }
+            catch (cause: java.nio.charset.CharacterCodingException) { throw FileTransferFailure("interactive_decode", "invalid_utf8", "Invalid HTML encoding", cause) }
+            if (visualize) InteractivePagePolicy.document(text) else text
+        }
+    }
+}
+
+@Composable
+internal fun InlineHtmlPreview(html: String, onDismiss: () -> Unit) {
+    HtmlPreviewDialog("HTML", "conversation HTML block", onDismiss, actions = {
+        PreviewFileActions(resolve = { PreviewOriginal("preview.html", "text/html") { output ->
+            withContext(Dispatchers.IO) { output.write(html.toByteArray(Charsets.UTF_8)) }
+        } })
+    }) {
+        if (html.length > MAX_HTML_BYTES || html.toByteArray(Charsets.UTF_8).size > MAX_HTML_BYTES)
+            throw FileTransferFailure("interactive_page", "page_too_large", "Interactive page exceeds 8 MiB")
+        html
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun HtmlPreviewDialog(title: String, diagnosticPath: String, onDismiss: () -> Unit,
+    actions: @Composable () -> Unit, loadDocument: suspend ((Long, Long) -> Unit) -> String) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var attempt by remember(reference) { mutableIntStateOf(0) }
-    var pageRouter by remember(reference, attempt) { mutableStateOf<InteractivePageRequestRouter?>(null) }
-    var failure by remember(reference, attempt) { mutableStateOf<Throwable?>(null) }
-    var transferred by remember(reference, attempt) { mutableLongStateOf(0) }
-    var total by remember(reference, attempt) { mutableLongStateOf(0) }
+    var attempt by remember { mutableIntStateOf(0) }
+    var pageRouter by remember(attempt) { mutableStateOf<InteractivePageRequestRouter?>(null) }
+    var failure by remember(attempt) { mutableStateOf<Throwable?>(null) }
+    var transferred by remember(attempt) { mutableLongStateOf(0) }
+    var total by remember(attempt) { mutableLongStateOf(0) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     fun fail(error: Throwable) {
         failure = error
-        recordFileTransferError(context, "interactive_page", reference.path, transferred, error)
+        recordFileTransferError(context, "interactive_page", diagnosticPath, transferred, error)
     }
-    LaunchedEffect(reference, attempt) {
+    LaunchedEffect(attempt) {
         try {
-            val service = WorkspaceFileTransferService(repository)
-            val boundCwd = RepoMarkdownFileLink.previewWorkspaceCwd(reference.path) ?: cwd
-            val info = service.info(reference.path, boundCwd)
-            total = info.byteLength
-            if (info.byteLength > 8 * 1024 * 1024) throw FileTransferFailure("interactive_page", "page_too_large", "Interactive page exceeds 8 MiB")
-            val output = object : ByteArrayOutputStream() {
-                override fun write(bytes: ByteArray, offset: Int, length: Int) {
-                    if (size().toLong() + length > 8 * 1024 * 1024) throw FileTransferFailure("interactive_page", "page_too_large", "Interactive page exceeds 8 MiB")
-                    super.write(bytes, offset, length)
-                }
-            }
-            service.copyTo(info, boundCwd, output) { transferred = it }
             pageRouter = withContext(Dispatchers.Default) {
-                val fragment = try { Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(output.toByteArray())).toString() }
-                catch (cause: java.nio.charset.CharacterCodingException) { throw FileTransferFailure("interactive_decode", "invalid_utf8", "Invalid HTML encoding", cause) }
-                InteractivePageRequestRouter(InteractivePagePolicy.document(fragment))
+                InteractivePageRequestRouter(loadDocument { bytes, size -> transferred = bytes; total = size })
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { fail(error) }
@@ -97,7 +128,8 @@ internal fun InteractivePageDialog(reference: InteractivePageReference, cwd: Str
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(reference.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                    Text(title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                    actions()
                     IconButton(onClick = { attempt++ }) { Icon(Icons.Default.Refresh, stringResource(R.string.interactive_page_reload)) }
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, stringResource(R.string.turn_preview_close)) }
                 }
@@ -113,6 +145,12 @@ internal fun InteractivePageDialog(reference: InteractivePageReference, cwd: Str
                     } else key(router, attempt) {
                         AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                             WebView(ctx).apply {
+                                // Chromium resolves viewport-height units against the host's layout mode.
+                                // A wrap-content WebView can report 0svh even inside a full-size Compose box.
+                                layoutParams = android.view.ViewGroup.LayoutParams(
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                )
                                 webView = this
                                 settings.javaScriptEnabled = true
                                 settings.allowFileAccess = false
@@ -127,7 +165,7 @@ internal fun InteractivePageDialog(reference: InteractivePageReference, cwd: Str
                                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                                         val response = router.intercept(request.url.toString(), request.isForMainFrame, request.method) ?: return null
                                         return WebResourceResponse(response.mime, "UTF-8", response.status, response.reason,
-                                            mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"), ByteArrayInputStream(response.bytes))
+                                            mapOf("Content-Security-Policy" to InteractivePagePolicy.contentSecurityPolicy, "Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"), ByteArrayInputStream(response.bytes))
                                     }
                                     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                                         if (request.isForMainFrame) fail(FileTransferFailure("interactive_webview", "webview_${error.errorCode}", error.description.toString()))

@@ -322,10 +322,20 @@ private fun SettingsContent(
                                 SettingsPickerRow(stringResource(R.string.settings_language_title), AppLanguagePreference.entries, languagePreference,
                                     { stringResource(settingsLanguageTitleRes(it)) }) { languagePreference = it; LanguagePreferences.write(context, it) }
                                 val customFonts by com.remodex.mobile.data.CustomFonts.slots.collectAsStateWithLifecycle()
-                                if (customFonts[com.remodex.mobile.data.FontSlot.Interface]?.font == null)
-                                    SettingsPickerRow(stringResource(R.string.settings_font_title), AppFontStyle.entries, fontStyle,
-                                    { if (it == AppFontStyle.system) stringResource(R.string.settings_theme_system_title) else it.title },
-                                    { stringResource(when (it) { AppFontStyle.system -> R.string.font_system_subtitle; AppFontStyle.geist -> R.string.font_geist_subtitle; AppFontStyle.jetBrainsMono -> R.string.font_mono_subtitle }) }) {
+                                val hasBundledPair = AppFontStyle.bundled in AppFontPreferences.availableStyles
+                                if (hasBundledPair || customFonts[com.remodex.mobile.data.FontSlot.Interface]?.font == null)
+                                    SettingsPickerRow(stringResource(R.string.settings_font_title), AppFontPreferences.availableStyles, fontStyle,
+                                    { when (it) {
+                                        AppFontStyle.system -> stringResource(R.string.settings_theme_system_title)
+                                        AppFontStyle.bundled -> stringResource(R.string.font_builtin)
+                                        else -> it.title
+                                    } },
+                                    { when (it) {
+                                        AppFontStyle.system -> stringResource(R.string.font_system_subtitle)
+                                        AppFontStyle.geist -> stringResource(R.string.font_geist_subtitle)
+                                        AppFontStyle.jetBrainsMono -> stringResource(R.string.font_mono_subtitle)
+                                        AppFontStyle.bundled -> ""
+                                    } }) {
                                     fontStyle = it; AppFontPreferences.writeFontStyle(context, it)
                                 }
                                 CustomFontSetting(com.remodex.mobile.data.FontSlot.Interface)

@@ -124,10 +124,15 @@ private fun RemodexThemeContent(darkTheme: Boolean, appFontStyle: AppFontStyle, 
     LaunchedEffect(context) { CustomFonts.load(context.applicationContext) }
     val interfaceFace = fonts[FontSlot.Interface]?.font?.face
     val replyFace = fonts[FontSlot.Reply]?.font?.face
-    val typography = remember(appFontStyle, interfaceFace) {
-        remodexTypography(appFontStyle, interfaceFace?.let { FontFamily(it) })
+    val assets = context.assets
+    val useBundledPair = appFontStyle == AppFontStyle.bundled
+    val typography = remember(appFontStyle, interfaceFace, assets) {
+        val font = interfaceFace?.let { FontFamily(it) } ?: if (useBundledPair) bundledFontFamily(assets, "interface") else null
+        remodexTypography(appFontStyle, font)
     }
-    val replyFont = remember(replyFace) { replyFace?.let { FontFamily(it) } }
+    val replyFont = remember(replyFace, useBundledPair, assets) {
+        replyFace?.let { FontFamily(it) } ?: if (useBundledPair) bundledFontFamily(assets, "reply") else null
+    }
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
         typography = typography,
