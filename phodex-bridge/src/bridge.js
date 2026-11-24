@@ -112,6 +112,7 @@ const phoneProfileMethods = new Set([
   "account/profiles/list", "account/profiles/status", "account/profiles/check",
   "account/profiles/import", "account/profiles/export", "account/profiles/query",
   "account/profiles/rename", "account/profiles/remove",
+  "account/profiles/restart-progress", "account/profiles/runtime-quota", "account/profiles/adopt",
   "account/profiles/refreshToken", "account/profiles/switch", "account/profiles/restart",
 ]);
 const RELAY_THREAD_PAYLOAD_SOFT_LIMIT_BYTES = 4 * 1024 * 1024;
@@ -1060,6 +1061,49 @@ function startBridge({
     appPath: config.codexAppPath,
     logPrefix: "[remodex]",
   });
+  const ownedMacChild = process.platform === "darwin" && codex.mode === "spawn";
+  let restartingRuntime = false;
+  let ownedAuthPath = null;
+  let ownedLaunchError = null;
+  function disconnectForRuntimeRestart() {
+    restartingRuntime = true;
+    clearReconnectTimer();
+    socket?.terminate();
+    const interrupted = new Error("Codex restarted during this request");
+    failBridgeManagedCodexRequests(interrupted);
+    settlePhoneInitialize(interrupted);
+    forwardedInitializeRequestIds.clear();
+    forwardedRequestMethodsById.clear();
+    pendingLocalResumeThreadIds.clear();
+    pendingLocalThreadCreationRequestsById.clear();
+    activityStore.markSourceStale(APP_SERVER_SOURCE);
+    desktopRefresher.handleTransportReset();
+  }
+  codex.onRestarting?.(disconnectForRuntimeRestart);
+  async function controlOwnedChild(method, params, timeout) {
+    switch (method) {
+      case "child/identity": return codex.childIdentity();
+      case "getAuthStatus": return sendCodexRequest(method, { includeToken: true, refreshToken: false });
+      case "account/rateLimits/read": return sendCodexRequest(method, params, { timeoutMs: timeout * 1000 });
+      case "child/restart": {
+        if (restartingRuntime || codex.childIdentity() !== params.expected) throw new Error("Codex child changed before restart");
+        disconnectForRuntimeRestart();
+        ownedLaunchError = null;
+        try {
+          const next = await codex.restartOwned(params.expected);
+          if (ownedLaunchError) throw ownedLaunchError;
+          codexHandshakeState = "cold";
+          forwardedInitTimedOut = false;
+          await initializeForBridge();
+          return next;
+        } finally {
+          restartingRuntime = false;
+          if (!socket || socket.readyState === WebSocket.CLOSED) scheduleRelayReconnect();
+        }
+      }
+      default: throw new Error("Unknown private Codex control method");
+    }
+  }
   const openCodeRuntime = createOpenCodeRuntime({
     onNotification(message) {
       if (message.method === "thread/started" && message.params?.thread?.id) {
@@ -1100,6 +1144,11 @@ function startBridge({
   codex.onError(handleCodexTransportError);
 
   function handleCodexTransportError(error) {
+    if (ownedMacChild && restartingRuntime) {
+      ownedLaunchError = error;
+      failBridgeManagedCodexRequests(error);
+      return;
+    }
     codexLaunchState = "error";
     publishBridgeStatus({
       state: "error",
@@ -1119,9 +1168,19 @@ function startBridge({
   }
 
   // A stock endpoint initializes once per socket, independently of phone reconnects.
-  codex.onStarted(async () => {
+  codex.onStarted(async info => {
     if (isShuttingDown) return;
     signalTransportStarted();
+    if (info?.reconnected) {
+      codexHandshakeState = "cold";
+      forwardedInitTimedOut = false;
+      try {
+        await initializeForBridge();
+        restartingRuntime = false;
+        if (!socket || socket.readyState === WebSocket.CLOSED) scheduleRelayReconnect();
+      } catch (error) { if (!isShuttingDown) handleCodexTransportError(error); }
+      return;
+    }
     if (initializeEndpoint) {
       try {
         await initializeForBridge();
@@ -1232,7 +1291,7 @@ function startBridge({
 
   // Retries the relay socket while preserving the active Codex process and session id.
   function scheduleRelayReconnect(closeCode) {
-    if (isShuttingDown) {
+    if (isShuttingDown || restartingRuntime) {
       return;
     }
 
@@ -1382,6 +1441,11 @@ function startBridge({
   });
 
   codex.onClose(() => {
+    if (ownedMacChild && restartingRuntime && !isShuttingDown) {
+      ownedLaunchError ||= new Error("Replacement Codex closed during initialization");
+      failBridgeManagedCodexRequests(ownedLaunchError);
+      return;
+    }
     activityStore.markSourceStale(APP_SERVER_SOURCE);
     const wasShuttingDown = isShuttingDown;
     clearRelayWatchdog();
@@ -2043,13 +2107,32 @@ function startBridge({
 
   // Resolves bridge-owned account helpers like status reads and Mac-side browser opening.
   async function readBridgeManagedAccountResult(method, params) {
+    // Durable progress contains no credential material. Bind offline access to the configured
+    // canonical local endpoint, without asking the restarting runtime to resolve its config.
+    if (method === "account/profiles/restart-progress") {
+      if (ownedMacChild && ownedAuthPath) {
+        return manageAuthProfiles("restart-progress", {}, {status: "present", storage: "file", path: ownedAuthPath});
+      }
+      const home = resolveCodexHome();
+      if (config.codexEndpoint === `ws+unix://${path.join(home, "app-server-control/app-server-control.sock")}:/`) {
+        return manageAuthProfiles("restart-progress", {}, {status: "present", storage: "file", path: path.join(home, "auth.json")}, {endpoint: config.codexEndpoint});
+      }
+    }
     if (phoneProfileMethods.has(method) || method === "account/status/read" || method === "getAuthStatus") {
       await waitForAccountRuntime();
     }
     if (phoneProfileMethods.has(method)) {
       const authFile = await resolveAuthFile();
       const action = method.slice("account/profiles/".length);
-      const result = await manageAuthProfiles(action, params, authFile, { endpoint: config.codexEndpoint });
+      if (ownedMacChild && authFile.status === "present") ownedAuthPath = authFile.path;
+      const result = await manageAuthProfiles(action, params, authFile, {
+        endpoint: config.codexEndpoint, ownedControl: ownedMacChild ? controlOwnedChild : undefined,
+      });
+      if ((action === "switch" || action === "restart") && result.status === "restart_scheduled") {
+        codex.expectRestart?.();
+      } else if (action === "list" && result.restartStatus && result.restartStatus !== "restart_scheduled") {
+        codex.restartFinished?.();
+      }
       return action === "list" ? verifySwitchedRuntime(result, authFile, sendCodexRequest) : result;
     }
     switch (method) {

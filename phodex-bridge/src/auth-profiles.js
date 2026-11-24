@@ -7,12 +7,12 @@ const run = promisify(execFile);
 // Account maintenance runs outside the chat daemon and never blocks its router.
 async function manageAuthProfiles(action, params, authFile, {
   manager = path.join(__dirname, 'auth_store.py'),
-  execute = run, endpoint = "",
+  execute = run, endpoint = "", ownedControl,
 } = {}) {
   if (authFile?.status !== 'present' || authFile.storage !== 'file') {
     throw Object.assign(new Error('The connected Codex does not expose a managed local auth file'), { errorCode: 'AUTH_PROFILES_UNAVAILABLE' });
   }
-  const withoutProfile = ['list', 'status', 'maintenance', 'restart'].includes(action);
+  const withoutProfile = ['list', 'status', 'maintenance', 'restart', 'restart-progress', 'runtime-quota', 'adopt'].includes(action);
   if (!withoutProfile && !['check', 'import', 'rename', 'remove', 'export', 'query', 'refreshToken', 'switch'].includes(action)) throw new Error('Invalid auth profile action');
   // Validate the wire format here; the host manager authoritatively checks registration.
   const validProfile = typeof params.profile === 'string' && /^[1-9][0-9]*$/.test(params.profile) && params.profile.trim() === params.profile;
@@ -37,12 +37,23 @@ async function manageAuthProfiles(action, params, authFile, {
     args.push('--name=' + params.displayName);
     if (action === 'rename' && typeof params.expectedName === 'string') args.push('--expected-name=' + params.expectedName);
   }
+  if (action === 'adopt') {
+    if (typeof params.confirmation !== 'string' || !/^[a-f0-9]{64}$/.test(params.confirmation)) throw new Error('Listener confirmation required');
+    args.push('--confirmation', params.confirmation);
+  }
+  if (action === 'restart' && params.expectedRuntime !== undefined) {
+    if (typeof params.expectedRuntime !== 'string' || !/^[a-f0-9]{64}$/.test(params.expectedRuntime)) throw new Error('Invalid restart confirmation');
+    args.push('--confirmation', params.expectedRuntime);
+  }
+  if (action === 'restart' && params.startIfStopped === true) args.push('--start-if-stopped');
   if (action === 'maintenance' && params.dryRun === true) args.push('--dry-run');
   const socket = /^ws\+unix:\/\/(\/[^:]+):\/$/.exec(endpoint)?.[1];
-  if (socket && (withoutProfile || action === 'switch' || params.profile === 'current')) args.push('--socket', socket);
+  if (socket && (withoutProfile || action === 'switch' || action === 'query' || params.profile === 'current')) args.push('--socket', socket);
   let response;
   try {
-    const { stdout } = await execute('/usr/bin/python3', args, { timeout: action === "maintenance" ? 930_000 : 240_000, maxBuffer: 1024 * 1024 });
+    const { stdout } = ownedControl && !endpoint && ['list', 'switch', 'restart', 'runtime-quota'].includes(action)
+      ? await require('./auth-owned-child').executeOwnedWorker('/usr/bin/python3', args, ownedControl, action === 'switch' || action === 'restart')
+      : await execute('/usr/bin/python3', args, { timeout: action === "maintenance" ? 930_000 : 240_000, maxBuffer: 1024 * 1024 });
     response = JSON.parse(stdout);
   } catch (cause) {
     const error = new Error(`Authorization manager failed at process/response: ${cause.message}`, { cause });

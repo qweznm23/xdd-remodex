@@ -33,34 +33,42 @@ internal fun AuthSwitchProgress(state: AuthProfilesState, connected: Boolean) {
         }
     }
     val phase = state.progressPhase(connected)
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val profile = state.switchProfileId
-                Text(if (profile == null && state.restartHistory.firstOrNull()?.kind == "manual") stringResource(R.string.auth_restart_action)
-                    else if (profile == null) stringResource(R.string.auth_progress_title)
-                    else stringResource(R.string.auth_progress_target, profile),
-                    Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                if (started != null) {
-                    val seconds = (now - started).coerceAtLeast(0) / 1_000_000_000L
-                    Text(stringResource(R.string.auth_progress_elapsed, seconds), style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val profile = state.switchProfileId
+            Text(if (profile == null && state.restartHistory.firstOrNull()?.kind == "manual") stringResource(R.string.auth_restart_action)
+                else if (profile == null) stringResource(R.string.auth_progress_title)
+                else stringResource(R.string.auth_progress_target, profile),
+                Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            if (started != null) {
+                val seconds = (now - started).coerceAtLeast(0) / 1_000_000_000L
+                Text(stringResource(R.string.auth_progress_elapsed, seconds), style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (phase != SwitchPhase.Submit && state.restartHistory.isEmpty()) ProgressRow(stringResource(R.string.auth_progress_selected), done = true)
-            if (phase == SwitchPhase.Verify) ProgressRow(stringResource(R.string.auth_progress_restored), done = true)
-            val current = when (phase) {
-                SwitchPhase.Submit -> stringResource(R.string.auth_progress_submit)
-                SwitchPhase.Reconnect -> stringResource(R.string.auth_progress_reconnect)
-                SwitchPhase.Verify -> stringResource(R.string.auth_progress_verify)
-                SwitchPhase.AwaitRestart -> {
-                    val remaining = expected?.let { (it - now + 999_999_999L) / 1_000_000_000L }
-                    if (remaining != null && remaining > 0) stringResource(R.string.auth_progress_scheduled, remaining)
-                    else stringResource(R.string.auth_progress_waiting)
-                }
-            }
-            ProgressRow(current, done = false)
         }
+        if (phase != SwitchPhase.Submit && state.restartHistory.isEmpty()) ProgressRow(stringResource(R.string.auth_progress_selected), done = true)
+        if (phase == SwitchPhase.Verify) ProgressRow(stringResource(R.string.auth_progress_restored), done = true)
+        val current = when (phase) {
+            SwitchPhase.Submit -> stringResource(R.string.auth_progress_submit)
+            SwitchPhase.Reconnect -> stringResource(R.string.auth_progress_reconnect)
+            SwitchPhase.Verify -> stringResource(R.string.auth_progress_verify)
+            SwitchPhase.AwaitRestart -> {
+                val remaining = expected?.let { (it - now + 999_999_999L) / 1_000_000_000L }
+                if (remaining != null && remaining > 0) stringResource(R.string.auth_progress_scheduled, remaining)
+                else stringResource(R.string.auth_progress_waiting)
+            }
+        }
+        val stage = state.restartHistory.firstOrNull { it.operationId == state.pendingOperationId }
+            ?.detail?.objectValue?.get("stage")?.stringValue
+        val stageLabel = when (stage) {
+            "restart_preflight", "restart_selection" -> R.string.auth_stage_check
+            "handover_stop", "direct_stop" -> R.string.auth_stage_handover
+            "switch_write" -> R.string.auth_stage_write
+            "daemon_restart", "service_restart", "daemon_start", "direct_start" -> R.string.auth_stage_restart
+            "runtime_account_verification" -> R.string.auth_progress_verify
+            else -> null
+        }
+        ProgressRow(if (stageLabel == null || !connected) current else stringResource(stageLabel), done = false)
     }
 }
 

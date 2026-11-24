@@ -56,7 +56,7 @@ For a Linux systemd installation, the Android authorization page offers
 **Restart Codex** and **Restart history**.
 Manual restart uses the current authorization. Account switching and manual restart
 both verify the configured local Unix socket and the reported daemon management
-backend before scheduling a worker. The worker checks the same socket and owner
+backend before scheduling a worker with a three-second countdown. The worker checks the same socket and owner
 again under `manager.lock`, then checks that the selected credentials still match
 the queued revisions. Switching writes the target authorization only at this
 point. Restart success requires a passive account check against the connected
@@ -76,9 +76,27 @@ When the outcome is uncertain, the worker retains the previous authorization in
 the private `auth-profiles/maintenance/restart-recovery/<operationId>/` directory
 for operator recovery. History contains diagnostic evidence and recovery status.
 After a timeout or an interrupted worker, check history before retrying. A manual
-restart uses the authorization then on disk and creates a separate record. For
-a running instance that is unmanaged, have the host operator restore the intended
-Codex service manager before retrying.
+restart uses the authorization then on disk and creates a separate record. The phone shows the observed owner. For a dedicated systemd service, the Unix
+listener must be the service main PID in the exact control group. For a verified SSH or direct listener, **Restart Codex** relaunches the original
+installed executable, arguments and working directory with the same environment.
+The worker checks the same-user listener again before stopping it and confirms
+the new listener and on-disk account before reporting completion. For a direct
+listener that is still draining after three seconds, the worker sends a second
+shutdown signal through the same pidfd to request immediate Codex shutdown.
+If stopping timed out, a later list refresh can confirm recovery by verifying
+a replacement direct listener and the selected account. History retains the
+original failure. No daemon
+installation or boot registration is needed. A new direct process has a detached
+session and writes to the local Codex server log. For these instances, **Set up daemon management** requires separate confirmation
+for that listener and the selected authorization. The worker rechecks both before
+signalling that process and starting the official daemon. Unknown launchers require
+host-side verification.
+
+The phone polls persisted stages through `account/profiles/restart-progress`.
+After reconnecting it reloads the latest operation. When the live account differs
+from the selected file, the authorization page reads its weekly quota on entry,
+with a five-minute refresh interval while visible. The existing refresh action
+forces a read. Quota is attributed to the verified runtime identity.
 
 When the phone cannot reach the bridge, run these commands on the Codex host
 from the server checkout or release directory. Supply `--home` if the runtime uses
@@ -90,6 +108,18 @@ Codex when the local control socket is confirmed offline.
 /usr/bin/python3 phodex-bridge/src/auth-cli.py restart
 /usr/bin/python3 phodex-bridge/src/auth-cli.py restart --start-if-stopped
 ```
+
+## macOS restart ownership
+
+On macOS a bridge-owned stdio child can be restarted through the existing
+account operations. The worker uses inherited local pipes to check the live
+account and request replacement of the exact child generation. It retains the
+account lock across the countdown, file write, replacement and verification.
+No network listener or new persistent service is created. A shared canonical
+Unix endpoint is eligible when the Codex daemon manages it or when its peer is
+the main Codex executable of a verified user launchd job. A detached worker
+rechecks ownership before switching. An unmanaged external listener has no
+automatic restart action.
 
 ## Daily maintenance
 

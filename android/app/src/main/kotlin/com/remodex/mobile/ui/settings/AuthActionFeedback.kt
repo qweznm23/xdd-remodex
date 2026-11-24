@@ -6,6 +6,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.painterResource
+import com.composables.icons.lucide.R as LucideR
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -48,7 +51,7 @@ internal fun AuthActionFeedback(state: AuthProfilesState, slot: String, connecte
     val operation = (busy ?: result?.operation ?: return).substringBefore(':')
     val actionLabel = when (operation) {
         "refreshToken" -> R.string.auth_token_refresh
-        "query" -> R.string.auth_profiles_query
+        "query", "runtime-quota" -> R.string.auth_profiles_query
         "switch" -> R.string.auth_profiles_switch
         "restart" -> R.string.auth_restart_action
         "check" -> R.string.auth_manage_check
@@ -60,7 +63,7 @@ internal fun AuthActionFeedback(state: AuthProfilesState, slot: String, connecte
         else -> R.string.auth_profiles_refresh
     }
     if (busy != null) {
-        if (operation != "switch") {
+        if (operation !in setOf("switch", "list", "runtime-quota", "restart-progress")) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
             if (slot.startsWith("file:") || slot == "add") Text(stringResource(actionLabel), style = MaterialTheme.typography.labelMedium)
         }
@@ -74,35 +77,50 @@ internal fun AuthActionFeedback(state: AuthProfilesState, slot: String, connecte
         val profile = if (id == "current") state.currentProfile ?: state.management?.current
             else state.profiles.firstOrNull { it.id == id } ?: state.currentLibraryProfiles.firstOrNull { it.id == id }
         val action = recovery.action
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(stringResource(R.string.auth_action_reason, stringResource(actionLabel), remember(error) { authFailureSummary(error) }),
-                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-            Text(stringResource(recovery.hint), color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (action != null && (action == AuthRecoveryAction.Reload || profile != null)) {
-                    TextButton(enabled = connected && state.busy == null && !state.switching, onClick = {
-                        scope.launch {
-                            when (action) {
-                                AuthRecoveryAction.Reload -> state.refresh()
-                                AuthRecoveryAction.Query -> profile?.let { state.query(it) }
-                                AuthRecoveryAction.Check -> profile?.let { state.checkFile(it) }
-                            }
-                        }
-                    }) { Text(stringResource(when (action) {
-                        AuthRecoveryAction.Reload -> R.string.auth_profiles_refresh
-                        AuthRecoveryAction.Query -> R.string.auth_recovery_query
-                        AuthRecoveryAction.Check -> R.string.auth_manage_check
-                    })) }
+        val colors = MaterialTheme.colorScheme
+        Surface(Modifier.fillMaxWidth().padding(vertical = 4.dp), shape = MaterialTheme.shapes.medium,
+            color = colors.surfaceContainerLow, contentColor = colors.onSurface) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val switchError = error as? SwitchVerificationFailure
+                val summary = when {
+                    switchError?.unmanaged == true -> stringResource(R.string.auth_unmanaged_restart)
+                    switchError?.record != null -> listOfNotNull(switchError.field("stderr")?.trim()?.takeIf { it.isNotEmpty() },
+                        switchError.field("message"), switchError.field("stage")).firstOrNull() ?: stringResource(R.string.questions_error_details)
+                    else -> remember(error) { authFailureSummary(error) }
                 }
-                TextButton(onClick = { expanded = !expanded }) { Text(stringResource(
-                    if (expanded) R.string.auth_profiles_collapse else R.string.questions_error_details)) }
-            }
-            if (expanded) SelectionContainer {
-                Text(remember(error) { authProfileDiagnostic(error) }, Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(LucideR.drawable.lucide_ic_triangle_alert), null, Modifier.size(16.dp), tint = colors.error)
+                    Text(stringResource(R.string.auth_action_reason, stringResource(actionLabel), summary),
+                        maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleSmall)
+                }
+                Text(stringResource(recovery.hint), color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (action != null && (action == AuthRecoveryAction.Reload || profile != null)) {
+                        TextButton(enabled = connected && state.busy == null && !state.switching, onClick = {
+                            scope.launch {
+                                when (action) {
+                                    AuthRecoveryAction.Reload -> state.refresh()
+                                    AuthRecoveryAction.Query -> profile?.let { state.query(it) }
+                                    AuthRecoveryAction.Check -> profile?.let { state.checkFile(it) }
+                                }
+                            }
+                        }) { Text(stringResource(when (action) {
+                            AuthRecoveryAction.Reload -> R.string.auth_profiles_refresh
+                            AuthRecoveryAction.Query -> R.string.auth_recovery_query
+                            AuthRecoveryAction.Check -> R.string.auth_manage_check
+                        })) }
+                    }
+                    if (switchError != null) TextButton(onClick = { state.dismissSwitchFailure(slot, switchError) }) {
+                        Text(stringResource(R.string.auth_dismiss_status))
+                    }
+                    TextButton(onClick = { expanded = true }) { Text(stringResource(R.string.questions_error_details)) }
+                }
+                if (expanded) AuthDiagnosticSheet(stringResource(R.string.questions_error_details), remember(error) { authProfileDiagnostic(error) }) {
+                    expanded = false
+                }
             }
         }
         return
@@ -120,14 +138,31 @@ internal fun AuthActionFeedback(state: AuthProfilesState, slot: String, connecte
         }
         else -> return
     }
-    Text(if (operation == "remove") stringResource(message, result!!.operation.substringAfter(':')) else stringResource(message),
-        style = MaterialTheme.typography.bodySmall)
+    Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(LucideR.drawable.lucide_ic_check), null, Modifier.size(16.dp))
+        Text(if (operation == "remove") stringResource(message, result!!.operation.substringAfter(':')) else stringResource(message),
+            style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 @Composable
 internal fun AuthSwitchFeedback(state: AuthProfilesState, id: String, connected: Boolean, scope: kotlinx.coroutines.CoroutineScope) {
-    if (state.switchProfileId == id && state.restartHistory.isEmpty() && (state.switching || state.busy == "switch:$id")) {
-        AuthSwitchProgress(state, connected)
-    }
     AuthActionFeedback(state, "switch:$id", connected, scope)
+}
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AuthDiagnosticSheet(title: String, diagnostic: String, dismiss: () -> Unit) {
+    com.remodex.mobile.ui.theme.RemodexModalBottomSheet(onDismissRequest = dismiss, sheetGesturesEnabled = true) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            SelectionContainer {
+                Text(diagnostic, Modifier.verticalScroll(rememberScrollState()).padding(bottom = 12.dp),
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
 }

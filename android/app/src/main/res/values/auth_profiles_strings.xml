@@ -18,7 +18,7 @@
     <string name="auth_profiles_queried">Last query: %1$s</string>
     <string name="auth_profiles_switch">Switch</string>
     <string name="auth_profiles_switch_title">Switch to authorization %1$s?</string>
-    <string name="auth_profiles_switch_body">The server checks that it can restart Codex before applying this authorization. Restart is scheduled in 10 seconds and can interrupt active tasks.</string>
+    <string name="auth_profiles_switch_body">The server checks that it can restart Codex before applying this authorization. The countdown appears after confirmation. Restarting can interrupt active tasks.</string>
     <string name="auth_restart_action">Restart Codex</string>
     <string name="auth_restart_history">Restart history</string>
     <string name="auth_restart_confirm_body">The server will restart the local Codex daemon using the current authorization. Active tasks may be interrupted while Remodex reconnects.</string>

@@ -17,7 +17,7 @@
     <string name="auth_profiles_queried">查询时间：%1$s</string>
     <string name="auth_profiles_switch">切换</string>
     <string name="auth_profiles_switch_title">切换到 %1$s 号授权？</string>
-    <string name="auth_profiles_switch_body">服务端确认可以重启 Codex 后才会应用新授权。重启预计在 10 秒后开始，正在执行的任务可能中断。</string>
+    <string name="auth_profiles_switch_body">服务端确认可以重启 Codex 后才会应用新授权。确认后会显示重启倒计时。重启可能中断正在执行的任务。</string>
     <string name="auth_restart_action">重启 Codex</string>
     <string name="auth_restart_history">重启记录</string>
     <string name="auth_restart_confirm_body">服务端会用当前授权重启本机 Codex。正在执行的任务可能中断，Remodex 会重新连接。</string>

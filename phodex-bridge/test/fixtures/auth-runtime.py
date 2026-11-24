@@ -34,6 +34,8 @@ def serve(ws):
                     log.write('refresh\n')
             if request['params'].get('includeToken'):
                 result['authToken'] = auth['tokens']['access_token']
+        if request['method'] == 'account/rateLimits/read':
+            result = {'rateLimits': {'primary': {'usedPercent': 68, 'windowDurationMins': 10080}}}
         ws.send(json.dumps({'id': request['id'], 'result': result}))
 
 socket = home / ('app-server-control/app-server-control.sock' if restart_fixture else 'control.sock')

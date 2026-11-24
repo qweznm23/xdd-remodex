@@ -28,11 +28,19 @@ cd .local/runtime/workspace
 REMODEX_RELAY=ws://192.168.1.20:10004/relay node ../../../scripts/launch-bridge.cjs
 ```
 
-**macOS**：在第二个终端运行以下命令，二维码会直接显示在终端中。此方式用于连接和聊天。账号切换依赖 Linux 的 systemd-run，Mac 示例关闭了自动授权维护。macOS 真机配对尚未验证。
+**macOS**：在第二个终端运行以下命令，二维码会直接显示在终端中。示例关闭每日自动授权维护，仍可通过手机手动切换文件授权。
 
 ```sh
 REMODEX_AUTH_SCHEDULE_ENABLED=0 REMODEX_RELAY=ws://192.168.1.20:10004/relay node phodex-bridge/bin/remodex.js run
 ```
+
+在手机「设置 → 账户与授权」选择账号。桥接按当前连接识别运行方式，确认后倒计时 3 秒，切换完成时核对 Codex 实际使用的账号。重启可能中断当前任务。
+
+- 默认的 `run` 或 `up` 由桥接为手机启动独立 Codex。切换会替换这个子进程；Mac 桌面上已打开的其他 Codex 实例有各自的运行状态。
+- 通过 `REMODEX_CODEX_ENDPOINT` 共用本机 Codex 标准 Unix 套接字时，桥接可调用现有 Codex 守护进程，或重启已经核实由当前用户的 launchd 作业直接运行的 Codex。该模式需要桥接的 Python 环境已安装 `phodex-bridge/requirements.txt` 中的 websockets。
+- 如果外部进程由桌面或终端直接启动、桥接无法核实其重启方式，手机会保留当前授权。在原启动程序中完成切换并重新打开 Codex，再刷新手机上的账号信息。TCP 远端连接继续由运行 Codex 的主机管理。Mac 的 launchd 和系统套接字识别仍待真机验证。
+
+在 Mac 上验证账号切换与重启时，请按[真机验收步骤](macos-auth-restart-test.md)核对手机实际连接的 Codex。
 
 在 Android 手机上打开 **Remodex 的扫码配对**，扫描电脑上的二维码，连接后打开一个会话。使用期间保持这两个终端运行。局域网 IP 改变后，按新地址重新启动并扫码。
 

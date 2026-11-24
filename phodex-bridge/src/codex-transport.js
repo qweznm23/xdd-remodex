@@ -5,6 +5,7 @@
 // Depends on: child_process, fs, path, ws
 
 const { spawn } = require("child_process");
+const { randomUUID } = require("node:crypto");
 const fs = require("fs");
 const path = require("path");
 const WebSocket = require("ws");
@@ -19,10 +20,53 @@ function createCodexTransport({
   WebSocketImpl = WebSocket,
 } = {}) {
   if (endpoint) {
+    if (platform === "darwin" && endpoint.startsWith("ws+unix:")) {
+      return macUnixTransport(() => createWebSocketTransport({ endpoint, WebSocketImpl }));
+    }
     return createWebSocketTransport({ endpoint, WebSocketImpl });
   }
 
   return createSpawnTransport({ env, appPath, platform, spawnImpl });
+}
+
+// A confirmed account operation can close the shared socket for a few seconds.
+// Only that operation opens a reconnect window; ordinary failures keep their
+// existing error path. The foreground bridge does not depend on a LaunchAgent.
+function macUnixTransport(connect) {
+  const events = createListenerBag();
+  let active, deadline = 0, retry = null, restoring = false, stopped = false, onRestarting;
+  function attach() {
+    const link = active = connect();
+    link.onMessage(message => { if (active === link) events.emitMessage(message); });
+    link.onStarted(info => {
+      if (active !== link || stopped) return;
+      const reconnected = restoring;
+      if (restoring) deadline = 0;
+      restoring = false;
+      events.emitStarted({ ...info, reconnected });
+    });
+    link.onError(error => {
+      const transient = ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(error.code);
+      if (active === link && (!transient || stopped || Date.now() >= deadline)) events.emitError(error);
+    });
+    link.onClose((code, reason) => {
+      if (active !== link) return;
+      if (stopped || Date.now() >= deadline) { events.emitClose(code, reason); return; }
+      if (!restoring) onRestarting?.();
+      restoring = true;
+      retry = setTimeout(attach, 350);
+    });
+  }
+  attach();
+  return {
+    mode: "websocket", describe: () => active.describe(), send: message => active.send(message),
+    expectRestart: () => { deadline = Date.now() + 180_000; },
+    restartFinished: () => { if (!restoring) deadline = 0; },
+    onRestarting: handler => { onRestarting = handler; },
+    onStarted: handler => { events.onStarted = handler; }, onClose: handler => { events.onClose = handler; },
+    onMessage: handler => { events.onMessage = handler; }, onError: handler => { events.onError = handler; },
+    shutdown() { stopped = true; clearTimeout(retry); active.shutdown(); },
+  };
 }
 
 function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
@@ -34,12 +78,54 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
   let stderrBuffer = "";
   let didRequestShutdown = false;
   let didReportError = false;
+  let retiring = null;
+  let generation = null;
   const listeners = createListenerBag();
 
   spawnNextLaunch();
 
   return {
     mode: "spawn",
+    childIdentity() {
+      if (!generation || retiring || didRequestShutdown || codex.exitCode !== null || codex.signalCode) {
+        throw new Error("The bridge-owned Codex child is unavailable");
+      }
+      return generation;
+    },
+    async restartOwned(expected) {
+      if (this.childIdentity() !== expected) throw new Error("The bridge-owned Codex changed before restart");
+      const old = codex;
+      retiring = old;
+      let timeout, second;
+      let onClose;
+      try {
+        await new Promise((resolve, reject) => {
+          onClose = resolve;
+          old.once("close", onClose);
+          second = setTimeout(() => old.kill("SIGTERM"), 3000);
+          timeout = setTimeout(() => reject(new Error("Timed out stopping bridge-owned Codex")), 15000);
+          old.stdin.end();
+          old.kill("SIGTERM");
+        });
+        if (didRequestShutdown) throw new Error("Bridge stopped during Codex restart");
+        // Reuse the executable that actually launched, including a bundled binary.
+        launchIndex -= 1;
+        spawnNextLaunch();
+        const replacement = codex;
+        await new Promise((resolve, reject) => {
+          const started = () => { replacement.removeListener("error", failed); resolve(); };
+          const failed = error => { replacement.removeListener("spawn", started); reject(error); };
+          replacement.once("spawn", started);
+          replacement.once("error", failed);
+        });
+        return generation;
+      } finally {
+        clearTimeout(second);
+        clearTimeout(timeout);
+        old.removeListener("close", onClose);
+        retiring = null;
+      }
+    },
     describe() {
       return activeLaunch?.description || launchPlans[0]?.description || "`codex app-server`";
     },
@@ -80,6 +166,7 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
     stdoutBuffer = "";
     stderrBuffer = "";
     codex = spawnImpl(activeLaunch.command, activeLaunch.args, activeLaunch.options);
+    generation = null;
     attachChildListeners(codex, activeLaunch);
   }
 
@@ -89,6 +176,7 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
         return;
       }
 
+      generation = randomUUID();
       listeners.emitStarted({
         mode: "spawn",
         launchDescription: launch.description,
@@ -108,7 +196,7 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
       listeners.emitError(error);
     });
     child.on("close", (code, signal) => {
-      if (child !== codex) {
+      if (child !== codex || child === retiring) {
         return;
       }
 

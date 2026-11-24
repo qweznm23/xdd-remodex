@@ -152,6 +152,11 @@ subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, sta
     }
   });
   await Promise.race([once(child.stdout, 'data'), once(child, 'exit').then(() => { throw new Error('Restart fixture exited'); })]);
+  const liveQuota = await call('runtime-quota');
+  assert.equal(liveQuota.profile, '2');
+  assert.equal(liveQuota.quota.rateLimits.primary.usedPercent, 68);
+  assert.equal(await fs.readFile(path.join(home,'refresh-calls'),'utf8'),calls);
+  await assert.rejects(call('adopt', {confirmation: 'invalid'}), /confirmation required/);
   await save(path.join(home,'reject-schedule'),'1');
   const rejected = await call('switch',selection(await get('1')));
   assert.equal(rejected.status, 'failed');
@@ -187,10 +192,15 @@ subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, sta
   assert.equal(rolledBack.failure.exitCode, 18);
   assert.equal(rolledBack.failure.stage, 'daemon_restart');
   assert.equal(rolledBack.recovery.status, 'rolled_back');
+  const progress = (await call('restart-progress')).restartHistory[0];
+  assert.equal(progress.operationId, failed.operationId);
+  assert.ok(progress.steps.find(row => row.stage === 'switch_write' && row.status === 'running'));
+  assert.equal(progress.steps.at(-1).status, 'failed');
   assert.equal(await fs.readFile(current,'utf8'),activeBefore);
   await fs.unlink(path.join(home,'reject-restart'));
   const switched = await call('switch',selection(await get(next)));
   assert.equal(switched.status,'restart_scheduled');
+  assert.equal(switched.restartAfterSeconds, 3);
   assert.equal((await completed(switched.operationId)).status, 'ready');
   const scheduled = JSON.parse(await fs.readFile(path.join(home,'scheduled.json'),'utf8'));
   assert.ok(scheduled.some(s=>s.endsWith('/auth-profiles.py')));
@@ -199,6 +209,7 @@ subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, sta
   assert.equal((await get(next)).active,true);
   const authBeforeManual = await fs.readFile(current, 'utf8');
   const manual = await call('restart');
+  assert.equal(manual.restartAfterSeconds, 3);
   assert.equal((await completed(manual.operationId)).status, 'ready');
   assert.equal(await fs.readFile(current, 'utf8'), authBeforeManual);
   const history = (await call('list')).restartHistory;

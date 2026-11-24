@@ -53,6 +53,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -220,6 +222,7 @@ private fun SettingsContent(
         ?: stringResource(R.string.settings_current_account)
     val verification = when {
         authProfiles.switching -> stringResource(R.string.settings_checking_authorization)
+        authProfiles.failedSwitch != null -> stringResource(R.string.auth_disk_file)
         authProfiles.verifyingIdentity -> stringResource(R.string.settings_verifying_identity)
         else -> null
     }
@@ -233,9 +236,13 @@ private fun SettingsContent(
         RemodexPageHeader(stringResource(page.title), navigateBack, actions = {
             if (page == SettingsPage.HOME) SettingsPaletteButton()
             if (page == SettingsPage.ACCOUNT) {
-                androidx.compose.material3.IconButton(onClick = { authScope.launch { authProfiles.refresh() } },
+                androidx.compose.material3.IconButton(onClick = { authScope.launch { authProfiles.refresh(forceLiveQuota = true) } },
                     enabled = connected && authProfiles.busy == null) {
-                    Icon(painterResource(LucideR.drawable.lucide_ic_refresh_cw), stringResource(R.string.auth_profiles_refresh))
+                    if (authProfiles.busy == "list" || authProfiles.busy == "runtime-quota") {
+                        val label = stringResource(R.string.auth_profiles_refresh)
+                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(20.dp).semantics { contentDescription = label },
+                            strokeWidth = 2.dp)
+                    } else Icon(painterResource(LucideR.drawable.lucide_ic_refresh_cw), stringResource(R.string.auth_profiles_refresh))
                 }
             }
             if (page == SettingsPage.ACCOUNT && authProfiles.supportsManagement) {

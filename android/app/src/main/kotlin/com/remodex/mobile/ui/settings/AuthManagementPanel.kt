@@ -2,6 +2,7 @@ package com.remodex.mobile.ui.settings
 
 import com.remodex.mobile.ui.theme.RemodexDropdownMenu
 import com.remodex.mobile.ui.theme.RemodexAlertDialog
+import androidx.compose.foundation.clickable
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -195,36 +196,35 @@ internal fun AuthManagementPanel(state: AuthProfilesState, files: AuthFileAction
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             AuthActionFeedback(state, "add", enabled, scope)
             var showMaintenance by rememberSaveable { mutableStateOf(false) }
-            Surface(onClick = { showMaintenance = !showMaintenance }, modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.auth_manage_title), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                    Icon(if (showMaintenance) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                        stringResource(if (showMaintenance) R.string.auth_profiles_collapse else R.string.auth_manage_title))
-                }
-            }
-            if (showMaintenance) {
-                Text(stringResource(R.string.auth_manage_schedule), style = MaterialTheme.typography.bodySmall)
-                Text(stringResource(R.string.auth_manage_last_check, date(status?.lastCheck)), style = MaterialTheme.typography.bodySmall)
-                Text(stringResource(R.string.auth_manage_last_run, date(status?.lastRun)), style = MaterialTheme.typography.bodySmall)
-                Text(stringResource(R.string.auth_manage_next_check, date(status?.nextCheck)), style = MaterialTheme.typography.bodySmall)
-                if (status?.lastCheck == null || status.lastCheck.plusSeconds(180).isBefore(now)) {
-                    Text(stringResource(R.string.auth_manage_stale), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(stringResource(R.string.auth_manage_active_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(stringResource(when (status?.activeState) {
-                    "healthy" -> R.string.auth_manage_active_healthy
-                    "refreshed" -> R.string.auth_manage_active_refreshed
-                    "version_conflict" -> R.string.auth_manage_active_conflict
-                    "already_attempted_today" -> R.string.auth_manage_active_attempted
-                    "failed" -> R.string.auth_manage_active_failed
-                    else -> R.string.auth_manage_active_unknown
-                }), style = MaterialTheme.typography.bodySmall)
-                status?.activeReason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                status?.activeDiagnostic?.let { diagnostic ->
-                    TextButton(onClick = { showActiveFailure = !showActiveFailure }) { Text(stringResource(R.string.questions_error_details)) }
-                    if (showActiveFailure) SelectionContainer {
-                        Text(diagnostic, Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall)
+            Surface(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.onSurface) {
+                Column {
+                    ListItem(modifier = Modifier.clickable(role = Role.Button) { showMaintenance = !showMaintenance },
+                        headlineContent = { Text(stringResource(R.string.auth_manage_title), style = MaterialTheme.typography.titleSmall) },
+                        trailingContent = { Icon(if (showMaintenance) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, null) })
+                    if (showMaintenance) Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(stringResource(R.string.auth_manage_schedule), style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.auth_manage_last_check, date(status?.lastCheck)), style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.auth_manage_last_run, date(status?.lastRun)), style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.auth_manage_next_check, date(status?.nextCheck)), style = MaterialTheme.typography.bodySmall)
+                        if (status?.lastCheck == null || status.lastCheck.plusSeconds(180).isBefore(now)) {
+                            Text(stringResource(R.string.auth_manage_stale), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(stringResource(R.string.auth_manage_active_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(when (status?.activeState) {
+                            "healthy" -> R.string.auth_manage_active_healthy
+                            "refreshed" -> R.string.auth_manage_active_refreshed
+                            "version_conflict" -> R.string.auth_manage_active_conflict
+                            "already_attempted_today" -> R.string.auth_manage_active_attempted
+                            "failed" -> R.string.auth_manage_active_failed
+                            else -> R.string.auth_manage_active_unknown
+                        }), style = MaterialTheme.typography.bodySmall)
+                        status?.activeReason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                        status?.activeDiagnostic?.let { diagnostic ->
+                            TextButton(onClick = { showActiveFailure = !showActiveFailure }) { Text(stringResource(R.string.questions_error_details)) }
+                            if (showActiveFailure) AuthDiagnosticSheet(stringResource(R.string.questions_error_details), diagnostic) { showActiveFailure = false }
+                        }
                     }
                 }
             }
@@ -265,15 +265,13 @@ internal fun AuthManagementPanel(state: AuthProfilesState, files: AuthFileAction
 @Composable
 internal fun AuthMaintenanceFailure(entry: AuthManagedEntry?) {
     if (entry?.result != "failed") return
-    Text(stringResource(R.string.auth_recovery_maintenance), style = MaterialTheme.typography.bodySmall)
     var expanded by remember(entry) { mutableStateOf(false) }
-    entry.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-    TextButton(onClick = { expanded = !expanded }) {
-        Text(stringResource(R.string.auth_manage_auto_failed, entry.profile.id), color = MaterialTheme.colorScheme.error)
+    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        SettingsNavigationRow(stringResource(R.string.auth_manage_auto_failed, entry.profile.id),
+            entry.reason ?: stringResource(R.string.auth_recovery_maintenance), { expanded = true })
     }
-    if (expanded) SelectionContainer {
-        Text(entry.diagnostic ?: entry.result, Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()),
-            style = MaterialTheme.typography.bodySmall)
+    if (expanded) AuthDiagnosticSheet(stringResource(R.string.questions_error_details), entry.diagnostic ?: entry.result) {
+        expanded = false
     }
 }
 

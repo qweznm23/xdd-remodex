@@ -26,7 +26,33 @@ internal fun authProfileDiagnostic(error: Exception): String {
     return listOf(rpcData, error.stackTraceToString()).filter { it.isNotEmpty() }.joinToString("\n")
 }
 
-private class SwitchVerificationFailure(message: String) : IllegalStateException(message)
+internal class SwitchVerificationFailure(val operationId: String?, message: String) : IllegalStateException(message) {
+    val record = if (message.trimStart().startsWith("{")) try {
+        kotlinx.serialization.json.Json.parseToJsonElement(message) as? kotlinx.serialization.json.JsonObject
+    } catch (_: kotlinx.serialization.SerializationException) { null } else null
+
+    fun field(name: String) = (record?.get(name) as? kotlinx.serialization.json.JsonPrimitive)?.content
+    val unmanaged = field("stage") == "daemon_restart" && field("exit_code") == "1" &&
+        field("stderr")?.trim() == "Error: app server is running but is not managed by codex app-server daemon"
+}
+
+internal data class FailedAccountSwitch(val target: String, val runtime: String?, val restartFailed: Boolean) {
+    companion object {
+        fun fromList(fields: Map<String, JSONValue>, record: AuthRestartRecord?): FailedAccountSwitch? {
+            if (fields["restartStatus"]?.stringValue !in setOf("failed", "verification_failed")) return null
+            val target = fields["selectedProfile"]?.stringValue ?: return null
+            val id = fields["operationId"]?.stringValue
+            val latest = record?.takeIf { it.operationId == id && (it.profile == target || it.detail.objectValue?.get("expectedProfile")?.stringValue == target) }
+            val stage = latest?.detail?.objectValue?.get("failure")?.objectValue?.get("stage")?.stringValue
+                ?: latest?.detail?.objectValue?.get("stage")?.stringValue
+                ?: fields["restartError"]?.stringValue?.let { SwitchVerificationFailure(id, it).field("stage") }
+            val live = fields["runtimeVerification"]?.objectValue?.takeIf { id != null &&
+                it["operationId"]?.stringValue == id && it["profile"]?.stringValue == target &&
+                it["status"]?.stringValue == "unconfirmed" }
+            return FailedAccountSwitch(target, live?.get("runtimeProfile")?.stringValue, stage in setOf("daemon_restart", "daemon_start", "service_restart", "direct_start", "direct_stop", "handover_stop"))
+        }
+    }
+}
 
 internal data class AuthActionResult(val operation: String, val error: Exception?, val validity: String?)
 
@@ -80,9 +106,8 @@ internal data class ProfileQuota(val at: Instant, val email: String?, val plan: 
 internal class AuthProfilesState(private val repository: CodexRepository) {
     var initialListSettled by mutableStateOf(false); private set
     var switchProfileId by mutableStateOf<String?>(null); private set
-    var switchTarget by mutableStateOf<AuthProfile?>(null); private set
-    var switchTargetIndex by mutableStateOf(0); private set
-    val verifyingIdentity: Boolean get() = switching || if (restartHistory.isEmpty()) {
+    var failedSwitch by mutableStateOf<FailedAccountSwitch?>(null); private set
+    val verifyingIdentity: Boolean get() = switching || failedSwitch != null || if (restartHistory.isEmpty()) {
         restartStatus in setOf("failed", "verification_failed", "superseded_by_newer_switch")
     } else restartHistory.firstOrNull {
         it.status == "ready" || it.status == "recovered" || it.authorizationUnconfirmed
@@ -98,6 +123,11 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
     var supportsTokenRefresh by mutableStateOf(false); private set
     var supportsManagement by mutableStateOf(false); private set
     var supportsManualRestart by mutableStateOf(false); private set
+    var runtimeControl by mutableStateOf<Map<String, JSONValue>>(emptyMap()); private set
+    private var supportsProgress = false
+    var liveQuota by mutableStateOf<ProfileQuota?>(null); private set
+    var liveQuotaProfile by mutableStateOf<String?>(null); private set
+    private var observedOperation: String? = null
     var restartHistory by mutableStateOf<List<AuthRestartRecord>>(emptyList()); private set
     var management by mutableStateOf<AuthManagementStatus?>(null); private set
     var currentProfile by mutableStateOf<AuthProfile?>(null); private set
@@ -114,7 +144,16 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
     var quota by mutableStateOf<Map<String, ProfileQuota>>(emptyMap()); private set
 
     private val results = androidx.compose.runtime.mutableStateMapOf<String, AuthActionResult>()
-    fun result(slot: String): AuthActionResult? = results[slot]
+    private var dismissedSwitch by mutableStateOf<Triple<String, String?, String?>?>(null)
+
+    fun result(slot: String): AuthActionResult? = results[slot]?.takeUnless {
+        val error = it.error as? SwitchVerificationFailure
+        error != null && dismissedSwitch == Triple(slot, error.operationId, error.message)
+    }
+
+    fun dismissSwitchFailure(slot: String, error: SwitchVerificationFailure) {
+        if (results[slot]?.error === error) dismissedSwitch = Triple(slot, error.operationId, error.message)
+    }
 
     private fun rememberResult(operation: String, error: Exception? = null) {
         val slot = if (operation.startsWith("remove:") && error == null) "removed" else authActionSlot(operation)
@@ -173,7 +212,15 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         if (name == "list") initialListSettled = true
     }
 
-    suspend fun refresh() = operation("list") {
+    private var lastLiveRead = 0L
+
+    suspend fun refresh(forceLiveQuota: Boolean = false) {
+        loadList()
+        if (failedSwitch?.runtime != null && supportsProgress && !switching &&
+            (forceLiveQuota || lastLiveRead == 0L || System.nanoTime() - lastLiveRead >= 300_000_000_000L)) readLiveQuota()
+    }
+
+    private suspend fun loadList() = operation("list") {
         val p = request("list")
         val status = p["status"]?.stringValue
         require(status == "available" || status == "unavailable") { "Invalid profile list status" }
@@ -184,15 +231,33 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
             previous != null && updated.any { it.id == id && it.revision == previous.revision }
         }
         require(updated.map { it.id }.distinct().size == updated.size) { "Duplicate profile id" }
-        currentProfile = p["currentProfile"]?.takeUnless { it == JSONValue.Null }?.let(AuthProfile::decode)
+        val listedCurrent = p["currentProfile"]?.takeUnless { it == JSONValue.Null }?.let(AuthProfile::decode)
         supportsTokenRefresh = p["supportsTokenRefresh"]?.boolValue == true
         supportsManagement = p["supportsImportExport"]?.boolValue == true && p["managedBy"]?.stringValue == "remodex"
         supportsManualRestart = p["supportsManualRestart"]?.boolValue == true
+        runtimeControl = p["runtimeControl"]?.objectValue.orEmpty()
+        supportsProgress = p["supportsRestartProgress"]?.boolValue == true
         restartHistory = p["restartHistory"]?.arrayValue.orEmpty().map(AuthRestartRecord::decode)
-        profiles = updated
+        // Keep both groups from the last complete management snapshot until status returns.
+        if (!supportsManagement || management == null) {
+            currentProfile = listedCurrent
+            profiles = updated
+        }
         available = status == "available"
         restartStatus = p["restartStatus"]?.stringValue
         val operationId = p["operationId"]?.stringValue
+        val failureSnapshot = FailedAccountSwitch.fromList(p, restartHistory.firstOrNull())
+        if (observedOperation != operationId || failureSnapshot != failedSwitch) {
+            lastLiveRead = 0L
+            liveQuota = null
+            liveQuotaProfile = null
+        }
+        observedOperation = operationId
+        failedSwitch = failureSnapshot
+        results.filterValues { result ->
+            val error = result.error as? SwitchVerificationFailure
+            error?.operationId != null && operationId != null && error.operationId != operationId
+        }.keys.forEach(results::remove)
         if (restartStatus == "ready" && (pendingOperationId == null || operationId == pendingOperationId)) {
             val slot = "switch:${p["selectedProfile"]?.stringValue ?: switchProfileId}"
             if (results[slot]?.error is SwitchVerificationFailure) results.remove(slot)
@@ -205,7 +270,7 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
                 pendingOperationId = null
                 switchDeadline = null
             }
-            if (supportsManagement && !switching) loadManagement()
+            if (supportsManagement && !switching) loadManagement(listedCurrent != null)
             return@operation
         }
         if (pendingOperationId != null && operationId != pendingOperationId) {
@@ -224,9 +289,11 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         }
         if (restartStatus in setOf("failed", "verification_failed", "superseded_by_newer_switch")) {
             if (pendingOperationId == null) switchProfileId = p["selectedProfile"]?.stringValue
-            val failure = SwitchVerificationFailure(p["restartError"]?.stringValue ?: "stage=switch-verification: $restartStatus")
+            pendingOperationId = null
+            switchDeadline = null
+            val failure = SwitchVerificationFailure(operationId, p["restartError"]?.stringValue ?: "stage=switch-verification: $restartStatus")
             if (supportsManagement) {
-                try { loadManagement() }
+                try { loadManagement(listedCurrent != null) }
                 catch (cancel: CancellationException) { throw cancel }
                 catch (statusError: Exception) { failure.addSuppressed(statusError) }
             }
@@ -237,10 +304,10 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
             pendingOperationId = null
             switchDeadline = null
         }
-        if (supportsManagement && !switching) loadManagement()
+        if (supportsManagement && !switching) loadManagement(listedCurrent != null)
     }
 
-    private suspend fun loadManagement() {
+    private suspend fun loadManagement(includeCurrent: Boolean = currentProfile != null) {
         val updated = AuthManagementStatus.decode(request("status"))
         val previousCurrent = management?.current
         if (previousCurrent != null && previousCurrent.revision != updated.current.revision) {
@@ -254,7 +321,7 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         switchProfileId?.let(knownIds::add)
         results.keys.filter { ':' in it && it.substringAfter(':') !in knownIds }.forEach(results::remove)
         profiles = inactive
-        if (currentProfile != null) currentProfile = updated.current
+        currentProfile = updated.current.takeIf { includeCurrent }
     }
 
     // list and status are separate snapshots. Only attach library names to a matching current file.
@@ -354,6 +421,15 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
 
     suspend fun query(profile: AuthProfile) = operation("query:${profile.id}") {
         check(!switching) { "Account switch is still pending" }
+        if (failedSwitch?.runtime == profile.id && supportsProgress) {
+            val response = request("runtime-quota")
+            require(response["profile"]?.stringValue == profile.id) { "Live account changed; refresh the list" }
+            val result = ProfileQuota.decode(response)
+            liveQuota = result
+            liveQuotaProfile = profile.id
+            quota = quota + (profile.id to result)
+            return@operation
+        }
         val p = request("query", profile)
         require(p["profile"]?.stringValue == profile.id) { "Quota belongs to another profile" }
         val updated = AuthProfile.decode(p["profileInfo"] ?: error("profileInfo missing"))
@@ -379,8 +455,8 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
     suspend fun switch(profile: AuthProfile) = operation("switch:${profile.id}") {
         check(!switching) { "Account switch is still pending" }
         switchProfileId = profile.id
-        switchTargetIndex = profiles.indexOfFirst { it.id == profile.id }.coerceAtLeast(0)
-        switchTarget = profile
+        dismissedSwitch = null
+        failedSwitch = null
         switchStartedNanos = System.nanoTime()
         restartExpectedNanos = null
         sawSwitchDisconnect = false
@@ -399,20 +475,64 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         val operationId = p["operationId"]?.stringValue
             ?: throw IllegalStateException("stage=switch-acknowledgement: operationId missing; switch outcome unknown, refresh status")
         followRestart(operationId, p["restartAfterSeconds"]?.longValue)
-        profiles = profiles.filterNot { it.id == profile.id }
+        if (management == null) profiles = profiles.filterNot { it.id == profile.id }
         available = null // Re-read after the connection recovers.
     }
 
-    suspend fun restartCodex() = operation("restart") {
+    private suspend fun readLiveQuota() = operation("runtime-quota") {
+        lastLiveRead = System.nanoTime()
+        val response = request("runtime-quota")
+        liveQuota = ProfileQuota.decode(response)
+        liveQuotaProfile = response["profile"]?.stringValue
+        if (liveQuotaProfile == failedSwitch?.runtime) liveQuotaProfile?.let { id ->
+            liveQuota?.let { quota = quota + (id to it) }
+        }
+    }
+
+    suspend fun pollRestart() {
+        val expected = pendingOperationId
+        if (!supportsProgress || expected == null) { refresh(); return }
+        var refreshIdentity = false
+        operation("restart-progress") {
+            val records = request("restart-progress")["restartHistory"]?.arrayValue?.map(AuthRestartRecord::decode)
+                ?: error("Missing restart history")
+            if (pendingOperationId != expected) return@operation
+            restartHistory = records
+            refreshIdentity = records.firstOrNull()?.let {
+                it.operationId != expected || it.status !in setOf("restart_scheduled", "running")
+            } ?: true
+            // A delayed timer or interrupted worker needs the lock-owning reconciler.
+            if (records.firstOrNull()?.status == "restart_scheduled" &&
+                records.first().requestedAt?.isBefore(Instant.now().minusSeconds(75)) == true) refreshIdentity = true
+        }
+        if (refreshIdentity) refresh()
+    }
+
+    val listenerConfirmation get() = runtimeControl["listenerConfirmation"]?.stringValue
+        ?: runtimeControl["confirmation"]?.stringValue.takeIf { runtimeControl["action"]?.stringValue == "adopt" }
+
+    suspend fun adoptCodex(confirmation: String) = operation("restart") {
+        check(!switching && listenerConfirmation == confirmation)
+        acceptRestartRecord(request("adopt", extra = mapOf("confirmation" to JSONValue.Str(confirmation))))
+    }
+
+    suspend fun restartCodex(expectedRuntime: String? = listenerConfirmation) = operation("restart") {
         check(supportsManualRestart && !switching) { "Manual restart is unavailable" }
-        acceptRestartRecord(request("restart"))
+        val args = if (runtimeControl["action"]?.stringValue == "start")
+            mapOf("startIfStopped" to JSONValue.Bool(true))
+        else expectedRuntime?.let { mapOf("expectedRuntime" to JSONValue.Str(it)) }.orEmpty()
+        acceptRestartRecord(request("restart", extra = args))
     }
 
     private fun acceptRestartRecord(response: Map<String, JSONValue>) {
+        liveQuota = null
+        liveQuotaProfile = null
         val record = AuthRestartRecord.decode(JSONValue.Obj(response))
         restartHistory = listOf(record) + restartHistory.filterNot { it.operationId == record.operationId }.take(9)
         switchProfileId = record.profile
         restartStatus = record.status
+        failedSwitch = FailedAccountSwitch.fromList(mapOf("selectedProfile" to (response["profile"] ?: JSONValue.Null),
+            "operationId" to JSONValue.Str(record.operationId), "restartStatus" to JSONValue.Str(record.status)), record)
         if (record.status == "restart_scheduled") followRestart(record.operationId, response["restartAfterSeconds"]?.longValue)
     }
 

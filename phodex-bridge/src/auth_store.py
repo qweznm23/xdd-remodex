@@ -168,7 +168,21 @@ def sync_active_snapshot(profile, active_data, active, *, dry=False):
 def cli():
     # Use the daemon's own release so switching doesn't downgrade the service.
     managed = BASE / 'packages/app-server-daemon/current/bin/codex'
-    return os.environ.get('REMODEX_AUTH_CODEX_BIN') or str(managed if managed.is_file() else Path.home() / '.local/bin/codex')
+    configured = os.environ.get('REMODEX_AUTH_CODEX_BIN')
+    if configured or managed.is_file():
+        return configured or str(managed)
+    if os.uname().sysname == 'Darwin':
+        import shutil
+        command = shutil.which('codex')
+        if command:
+            return command
+        for directory in (Path('/Applications'), Path.home() / 'Applications'):
+            for app in ('ChatGPT.app', 'Codex.app'):
+                for binary in ('codex-cli/bin/codex', 'codex'):
+                    candidate = directory / app / 'Contents/Resources' / binary
+                    if candidate.is_file() and os.access(candidate, os.X_OK):
+                        return str(candidate)
+    return str(Path.home() / '.local/bin/codex')
 
 
 def state_read():

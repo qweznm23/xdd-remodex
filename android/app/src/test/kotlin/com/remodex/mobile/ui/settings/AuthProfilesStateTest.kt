@@ -10,6 +10,52 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class AuthProfilesStateTest {
+    @Test fun directRestartWithOptionalAdoptionSendsOnlyRestart() = runTest {
+        val proof = "a".repeat(64)
+        val calls = mutableListOf<String>()
+        val state = AuthProfilesState(repo { method, params -> when (val action = method.substringAfterLast('/')) {
+            "list" -> JSONValue.Obj(list().map + mapOf("supportsManualRestart" to JSONValue.Bool(true),
+                "runtimeControl" to JSONValue.Obj(mapOf("mode" to JSONValue.Str("ssh"), "action" to JSONValue.Str("restart"),
+                    "canAdopt" to JSONValue.Bool(true), "listenerConfirmation" to JSONValue.Str(proof)))))
+            else -> {
+                calls += action
+                assertEquals(proof, params?.objectValue?.get("expectedRuntime")?.stringValue)
+                JSONValue.Obj(ack().map + ("kind" to JSONValue.Str("manual")))
+            }
+        } })
+        state.refresh()
+        state.restartCodex()
+        assertEquals(listOf("restart"), calls)
+        assertTrue(state.switching)
+    }
+
+    @Test fun failedSwitchAutomaticallyReadsLiveQuotaAndToolbarCanRefreshIt() = runTest {
+        var reads = 0
+        val state = AuthProfilesState(repo { method, _ -> when (method.substringAfterLast('/')) {
+            "list" -> JSONValue.Obj(switchList("failed").map + mapOf(
+                "selectedProfile" to JSONValue.Str("2"), "restartHistory" to JSONValue.Arr(emptyList()),
+                "supportsRestartProgress" to JSONValue.Bool(true), "runtimeVerification" to JSONValue.Obj(mapOf(
+                    "status" to JSONValue.Str("unconfirmed"), "operationId" to JSONValue.Str("switch-1"),
+                    "profile" to JSONValue.Str("2"), "runtimeProfile" to JSONValue.Str("3")))))
+            "runtime-quota" -> {
+                reads++
+                val window = JSONValue.Obj(mapOf("usedPercent" to JSONValue.NumLong(68), "windowDurationMins" to JSONValue.NumLong(10080)))
+                val quota = JSONValue.Obj(mapOf("rateLimits" to JSONValue.Obj(mapOf("primary" to window))))
+                JSONValue.Obj(mapOf("profile" to JSONValue.Str("3"), "quota" to quota,
+                    "queriedAt" to JSONValue.Str("2026-11-24T07:00:00Z")))
+            }
+            else -> error(method)
+        } })
+        state.refresh()
+        assertEquals("3", state.liveQuotaProfile)
+        assertEquals(32, state.liveQuota?.weekly?.remainingPercent)
+        assertNull(state.quota["2"])
+        state.refresh()
+        assertEquals(1, reads)
+        state.refresh(forceLiveQuota = true)
+        assertEquals(2, reads)
+    }
+
     @Test fun quotaErrorStaysWithItsButtonAcrossOtherFileActionsAndListRefresh() = runTest {
         val report = JSONValue.Obj(mapOf("stage" to JSONValue.Str("query_rate_limits"),
             "rpc" to JSONValue.Obj(mapOf("code" to JSONValue.NumLong(-32603), "message" to JSONValue.Str("Access denied"))),
@@ -469,6 +515,79 @@ class AuthProfilesStateTest {
         assertFalse(state.verifyingIdentity)
         assertNull(state.result("switch:1"))
         assertNull(state.failure)
+    }
+
+    @Test fun legacySwitchDismissalKeepsDiagnosticAndOnlyHidesTheSameFailure() = runTest {
+        var id = "attempt-1"
+        var result = "failed"
+        val report = """{"stage":"daemon_restart","exit_code":1,"stderr":"Error: app server is running but is not managed by codex app-server daemon"}"""
+        val state = AuthProfilesState(repo { method, _ ->
+            assertEquals("account/profiles/list", method)
+            JSONValue.Obj(switchList(result, id).map + mapOf(
+                "selectedProfile" to JSONValue.Str("1"), "restartError" to JSONValue.Str(report)))
+        })
+        state.refresh()
+        val failure = state.result("switch:1")!!.error as SwitchVerificationFailure
+        assertTrue(failure.unmanaged)
+        assertTrue(authProfileDiagnostic(failure).contains(report))
+        state.dismissSwitchFailure("switch:1", failure)
+        state.refresh()
+        assertNull(state.result("switch:1"))
+        assertTrue(state.verifyingIdentity)
+        id = "attempt-2"
+        state.refresh()
+        assertNotNull(state.result("switch:1")?.error)
+        result = "ready"
+        state.refresh()
+        assertNull(state.result("switch:1"))
+        assertFalse(state.verifyingIdentity)
+    }
+
+    @Test fun waitingForCodexKeepsAccountGroupsFromOneManagementSnapshot() = runTest {
+        var selected = false
+        var ready = false
+        fun one(id: String, active: Boolean) = JSONValue.Obj(profile.map + mapOf(
+            "id" to JSONValue.Str(id), "active" to JSONValue.Bool(active)))
+        val state = AuthProfilesState(repo { method, _ -> when (method.substringAfterLast('/')) {
+            "list" -> if (!selected) managedList() else JSONValue.Obj(managedList().map +
+                switchList(if (ready) "ready" else "restart_scheduled").map +
+                mapOf("profiles" to JSONValue.Arr(listOf(one("2", false), one("3", false))),
+                    "selectedProfile" to JSONValue.Str("1")))
+            "status" -> JSONValue.Obj(managedStatus().map + ("profiles" to JSONValue.Arr(
+                listOf(one("1", ready), one("2", !ready), one("3", false)))))
+            "switch" -> ack().also { selected = true }
+            else -> error(method)
+        } })
+        state.refresh()
+        state.switch(state.profiles.first { it.id == "1" })
+        state.refresh()
+        assertEquals(listOf("2"), state.currentLibraryProfiles.map { it.id })
+        assertEquals(listOf("1", "3"), state.profiles.map { it.id })
+        ready = true
+        state.refresh()
+        assertEquals(listOf("1"), state.currentLibraryProfiles.map { it.id })
+        assertEquals(listOf("2", "3"), state.profiles.map { it.id })
+    }
+
+    @Test fun restartFailureSeparatesTargetFromVerifiedLiveAccountAndClearsOnRecovery() = runTest {
+        var operation = "op"
+        var status = "failed"
+        var stage = "daemon_restart"
+        val state = AuthProfilesState(repo { _, _ ->
+            JSONValue.Obj(switchList(status, operation).map + mapOf("selectedProfile" to JSONValue.Str("2"),
+                "restartError" to JSONValue.Str("""{"stage":"$stage","exit_code":1}"""),
+                "runtimeVerification" to JSONValue.Obj(mapOf("operationId" to JSONValue.Str("op"),
+                    "profile" to JSONValue.Str("2"), "status" to JSONValue.Str("unconfirmed"), "runtimeProfile" to JSONValue.Str("3")))))
+        })
+        state.refresh()
+        assertEquals(FailedAccountSwitch("2", "3", true), state.failedSwitch)
+        operation = "another"
+        stage = "runtime_account_verification"
+        state.refresh()
+        assertEquals(FailedAccountSwitch("2", null, false), state.failedSwitch)
+        status = "ready"
+        state.refresh()
+        assertNull(state.failedSwitch)
     }
 
     @Test fun anotherSwitchCannotCompleteThePendingOperation() = runTest {

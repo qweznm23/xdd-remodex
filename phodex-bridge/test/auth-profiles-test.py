@@ -52,13 +52,13 @@ class ProfileTests(unittest.TestCase):
         m.save_json(m.STATE / 'last-switch.json', selection)
         m.save_json(m.STATE / 'last-restart.json', report)
         history = (m.STATE / 'last-restart.json').read_bytes()
-        with patch('auth_runtime.matches_runtime', return_value=False):
+        with patch('auth_runtime.read_runtime_token', return_value=None):
             self.assertEqual(self.api.list()['restartStatus'], 'failed')
-        with patch('auth_runtime.matches_runtime', side_effect=TimeoutError('fixture runtime read timed out')):
+        with patch('auth_runtime.read_runtime_token', side_effect=TimeoutError('fixture runtime read timed out')):
             snapshot = self.api.list()
             self.assertEqual(snapshot['restartStatus'], 'failed')
             self.assertEqual(snapshot['runtimeVerification']['diagnostic']['stage'], 'runtime_account_reconciliation')
-        with patch('auth_runtime.matches_runtime', return_value=True):
+        with patch('auth_runtime.read_runtime_token', return_value=m.read(m.BASE/'auth.json')[1]['tokens']['access_token']):
             recovered = self.api.list()
             self.assertEqual(recovered['restartStatus'], 'ready')
             self.assertEqual(recovered['runtimeVerification']['previousStatus'], 'failed')
@@ -66,9 +66,63 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(recovered['restartHistory'][0]['status'], 'recovered')
         self.assertEqual((m.STATE / 'last-restart.json').read_bytes(), history)
         m.save_json(m.STATE / 'last-switch.json', dict(selection, profile='1'))
-        with patch('auth_runtime.matches_runtime') as probe:
+        with patch('auth_runtime.read_runtime_token') as probe:
             self.assertNotEqual(self.api.list()['restartStatus'], 'ready')
             probe.assert_not_called()
+
+    def test_failed_restart_reports_only_unique_live_library_profile(self):
+        self.api.socket = str(m.BASE / 'test.sock')
+        m.save_json(m.STATE / 'last-switch.json', {'profile': '2', 'unit': 'switch-id'})
+        m.save_json(m.STATE / 'last-restart.json', {'status': 'failed', 'operationId': 'switch-id',
+                    'stage': 'daemon_restart', 'exit_code': 1})
+        _, other = m.read(m.PROFILES/'1/auth.json')
+        other['tokens']['access_token'] += '-fixture-other-access'
+        m.save_json(m.PROFILES/'1/auth.json', other)
+        with patch('auth_runtime.read_runtime_token', return_value=other['tokens']['access_token']) as request:
+            result = self.api.list()
+            request.assert_called_once()
+            self.assertEqual(result['restartStatus'], 'failed')
+            self.assertEqual(result['runtimeVerification'], {'status': 'unconfirmed', 'operationId': 'switch-id',
+                             'profile': '2', 'runtimeProfile': '1'})
+            self.assertNotIn('fixture-other-access', json.dumps(result))
+            m.save_json(m.PROFILES/'3/auth.json', other)
+            self.assertNotIn('runtimeProfile', self.api.list()['runtimeVerification'])
+
+    def test_draining_listener_receives_second_shutdown_on_the_original_pidfd(self):
+        import auth_listener as direct
+        import signal
+        owner = {'mode': 'ssh', 'key': 'old', '_pid': 123}
+        with patch.object(direct, 'inspect_direct', return_value=owner), \
+             patch.object(direct.os, 'pidfd_open', return_value=77), patch.object(direct.os, 'close') as close, \
+             patch.object(direct.signal, 'pidfd_send_signal') as send, patch.object(direct.select, 'poll') as poll, \
+             patch.object(direct, 'listener', side_effect=ConnectionRefusedError):
+            poll.return_value.poll.side_effect = [[], [(77, direct.select.POLLIN)]]
+            direct.retire_direct('socket', m.BASE, 'old')
+            self.assertEqual([c.args for c in send.call_args_list], [(77, signal.SIGTERM)] * 2)
+            self.assertEqual([c.args for c in poll.return_value.poll.call_args_list], [(3000,), (12000,)])
+            close.assert_called_once_with(77)
+
+    def test_late_direct_restart_requires_both_stable_replacement_and_target_account(self):
+        self.api.socket = str(api.RestartOperations(self.api).canonical_socket)
+        ops = api.RestartOperations(self.api)
+        record = dict(operationId='codex-auth-restart-1', kind='manual', expectedProfile='2',
+                      status='failed', stage='direct_stop', _directKey='original',
+                      failure={'type': 'TimeoutError', 'stage': 'direct_stop', 'message': 'old listener took 15s'})
+        ops.save(record)
+        raw = ops.records()[0]
+        target = m.read(m.BASE/'auth.json')[1]['tokens']['access_token']
+        for before, after, token, expected in [
+                ('original', 'original', target, 'failed'), ('new', 'changed', target, 'failed'),
+                ('new', 'new', None, 'failed'), ('new', 'new', target, 'ready')]:
+            with self.subTest(before=before, after=after, token=bool(token)):
+                cap = dict(mode='ssh', action='restart', key=before)
+                with patch.object(api.RestartOperations, 'capability', return_value=cap), \
+                     patch.object(api.RestartOperations, 'direct', return_value=dict(cap, key=after)), \
+                     patch('auth_runtime.read_runtime_token', return_value=token):
+                    result = self.api.list()
+                self.assertEqual(result['restartStatus'], expected)
+                self.assertEqual(result['restartHistory'][0]['failure'], record['failure'])
+                self.assertEqual(ops.records()[0], raw)
 
     def test_filters_by_identity_not_token_bytes_and_returns_only_dates(self):
         result = self.api.list()
@@ -203,7 +257,8 @@ class ProfileTests(unittest.TestCase):
         with patch.object(api.RestartOperations, 'owner', return_value='restart'), patch.object(m.subprocess, 'run') as run:
             result = self.api.switch('1', self.revision)
         self.assertEqual(result['status'], 'restart_scheduled')
-        self.assertIn('--on-active=10s', run.call_args.args[0])
+        self.assertEqual(result['restartAfterSeconds'], 3)
+        self.assertIn('--on-active=3s', run.call_args.args[0])
         self.assertIn('--property=ExitType=cgroup', run.call_args.args[0])
         self.assertIn('--property=Type=exec', run.call_args.args[0])
         self.assertEqual(result['operationId'], self.api.list()['operationId'])
@@ -215,6 +270,18 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(ops.run(result['operationId'])['status'], 'ready')
         self.assertEqual((m.PROFILES/'2/auth.json').read_bytes(), self.active)
         self.assertEqual(self.api.list()['profiles'][0]['id'], '2')
+
+    def test_direct_restart_rechecks_listener_and_never_falls_through_to_daemon(self):
+        ops = api.RestartOperations(self.api)
+        self.api.socket = str(ops.canonical_socket)
+        original = (m.BASE/'auth.json').read_bytes()
+        with patch.object(ops, 'owner', return_value='direct'), patch.object(m.subprocess, 'run'), \
+                patch.object(ops, 'direct', side_effect=[{'key': 'one'}, {'key': 'two'}]), patch.object(ops, 'command') as daemon:
+            op = ops.schedule()
+            rejected = ops.run(op['operationId'])
+        self.assertEqual((rejected['status'], rejected['failure']['code']), ('failed', 'RESTART_RUNTIME_MISMATCH'))
+        self.assertEqual((m.BASE/'auth.json').read_bytes(), original)
+        daemon.assert_not_called()
 
     def test_stale_selection_and_active_account_are_rejected_without_writes(self):
         for number, revision, code in [('1', 'old', 'PROFILE_CHANGED'), ('2', self.revision, 'PROFILE_CHANGED'), ('../auth', self.revision, 'INVALID_PROFILE')]:
@@ -255,6 +322,61 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(result['failure']['stage'], 'restart_schedule')
         self.assertEqual(result['failure']['stderr'], 'scheduler failure 42')
         self.assertEqual((m.BASE/'auth.json').read_bytes(), self.active)
+
+    def test_mac_switch_rechecks_launchd_owner_before_writing_or_kickstarting(self):
+        ops = api.RestartOperations(self.api)
+        self.api.socket = str(ops.canonical_socket)
+        unit = {'mode': 'launchd', 'unit': 'gui/502/test.codex', 'key': 'old', 'action': 'restart'}
+        with patch.object(sys, 'platform', 'darwin'), patch.object(ops, 'owner', return_value='launchd'), \
+                patch.object(ops, 'direct', return_value=unit), patch.object(m.subprocess, 'Popen') as worker:
+            pending = ops.schedule('1', self.revision)
+            self.assertEqual(pending['restartAfterSeconds'], 3)
+            self.assertIn('--wait-for-restart', worker.call_args.args[0])
+            self.assertTrue(worker.call_args.kwargs['start_new_session'])
+            with patch.object(ops, 'direct', return_value=dict(unit, key='another')), patch.object(m.subprocess, 'run') as kick:
+                failed = ops.run(pending['operationId'])
+                self.assertEqual(failed['failure']['code'], 'RESTART_RUNTIME_MISMATCH')
+                self.assertEqual(failed['failure']['stage'], 'restart_preflight')
+                kick.assert_not_called()
+            self.assertEqual(ops.auth_path.read_bytes(), self.active)
+            second = ops.schedule('1', self.revision)
+            with patch.object(ops, 'runtime_matches', return_value=True), patch('auth_macos.wait_for_replacement') as verify, \
+                    patch.object(m.subprocess, 'run') as kick:
+                self.assertEqual(ops.run(second['operationId'])['status'], 'ready')
+                self.assertEqual(kick.call_args.args[0], ['/bin/launchctl', 'kickstart', '-k', unit['unit']])
+                verify.assert_called_once_with(ops.canonical_socket, {'unit': unit['unit'], 'key': 'old'})
+
+    def test_mac_launchd_identification_requires_peer_uid_binary_and_matching_job_pid(self):
+        import auth_macos as mac
+        from subprocess import CompletedProcess
+        for uid, name, listed_pid, printed_pid, expected in [
+                ('502', 'codex', 42, 42, 'launchd'), ('501', 'codex', 42, 42, 'unknown'),
+                ('502', 'Terminal', 42, 42, 'unknown'), ('502', 'codex', 77, 42, 'unknown'),
+                ('502', 'codex', 42, 77, 'unknown')]:
+            ps = f'{uid} Tue Nov 24 12:30:01 2026 /Applications/Test App/bin/{name}'
+            with self.subTest(uid=uid, name=name, listed=listed_pid, printed=printed_pid), \
+                    patch.object(mac, 'peer_pid', return_value=42), patch.object(mac.os, 'geteuid', return_value=502), \
+                    patch.object(mac, 'output', side_effect=[ps, f'{listed_pid} 0 test.codex']), \
+                    patch.object(mac.subprocess, 'run', return_value=CompletedProcess([], 0, f'\tpid = {printed_pid}\n', '')):
+                info = mac.launchd_owner('/test/socket')
+                self.assertEqual(info['mode'], expected)
+                if expected == 'launchd':
+                    self.assertEqual(info['unit'], 'gui/502/test.codex')
+                else:
+                    self.assertNotIn('action', info)
+
+    def test_mac_unmanaged_external_listener_has_no_restart_action(self):
+        ops = api.RestartOperations(self.api)
+        self.api.socket = str(ops.canonical_socket)
+        response = SimpleNamespace(stdout=json.dumps({'status': 'running', 'socketPath': self.api.socket, 'backend': None}))
+        unknown = {'mode': 'unknown', 'reason': 'external_unmanaged'}
+        with patch.object(sys, 'platform', 'darwin'), patch.object(ops, 'command', return_value=response), \
+                patch('auth_macos.launchd_owner', return_value=unknown), patch.object(m.subprocess, 'Popen') as worker:
+            self.assertEqual(ops.capability(), unknown)
+            failed = ops.schedule('1', self.revision)
+            self.assertEqual(failed['failure']['code'], 'RESTART_RUNTIME_UNMANAGED')
+            self.assertEqual(ops.auth_path.read_bytes(), self.active)
+            worker.assert_not_called()
 
     def test_host_manual_restart_can_start_a_stopped_daemon_without_writing_auth(self):
         ops = api.RestartOperations(self.api)

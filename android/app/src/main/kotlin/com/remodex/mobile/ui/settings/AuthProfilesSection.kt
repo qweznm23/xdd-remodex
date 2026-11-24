@@ -15,8 +15,6 @@ import androidx.compose.ui.unit.dp
 import com.remodex.mobile.R
 import com.remodex.mobile.ui.turn.AccountUsageDetailsContent
 import com.remodex.mobile.ui.turn.UsageRateLimitRowDetail
-import com.remodex.mobile.ui.turn.weeklyQuotaLabel
-import com.remodex.mobile.ui.turn.weeklyQuotaCountdown
 import com.remodex.mobile.ui.turn.formatUsageCalendarTime
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -34,7 +32,7 @@ internal fun ObserveAuthProfiles(state: AuthProfilesState, connected: Boolean) {
         while (state.switching) {
             delay(3_000)
             state.checkSwitchDeadline()
-            if (state.switching && currentlyConnected && state.busy == null) state.refresh()
+            if (state.switching && currentlyConnected && state.busy == null) state.pollRestart()
         }
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -67,11 +65,11 @@ internal fun AuthProfilesSection(state: AuthProfilesState, files: AuthFileAction
     fun date(value: Instant?) = value?.let { formatUsageCalendarTime(it, now, locale = locale) } ?: "—"
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val activeIds = currentFiles.map { it.id }.toSet()
-        val others = state.profiles.filterNot { it.id in activeIds }
-        val pending = state.switchTarget?.takeIf { state.verifyingIdentity && it.id == state.switchProfileId &&
-            it.id !in activeIds && others.none { row -> row.id == it.id } }
-        val rows = if (pending == null) others else others.toMutableList().apply { add(state.switchTargetIndex.coerceIn(0, size), pending) }
+        val rows = state.profiles.filterNot { it.id in activeIds }
         val currentWeekly = com.remodex.mobile.ui.turn.currentWeeklyQuota().takeUnless { state.verifyingIdentity }
+        val recoveryFirst = state.verifyingIdentity || state.failedSwitch != null
+        val verify = verifyCurrent.takeIf { verification != null && !state.switching }
+        if (recoveryFirst) AuthRestartSection(state, connected, scope, verify)
         if (connected && !state.initialListSettled && !state.verifyingIdentity) {
             CurrentAccountOverview("—", null, null, null, currentWeekly, null, now) { openCurrent("current") }
             return@Column
@@ -84,11 +82,6 @@ internal fun AuthProfilesSection(state: AuthProfilesState, files: AuthFileAction
                 currentFile ?: profile, currentWeekly, verification, now) { openCurrent(profile.id) }
             AuthSwitchFeedback(state, profile.id, connected, scope)
         } }
-        if (verification != null && !state.switching) {
-            TextButton(onClick = verifyCurrent, enabled = connected && state.busy == null) {
-                Text(stringResource(R.string.auth_recovery_verify))
-            }
-        }
         if (rows.isNotEmpty()) {
             Text(stringResource(R.string.account_saved_group), Modifier.padding(start = 12.dp),
                 style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -96,7 +89,7 @@ internal fun AuthProfilesSection(state: AuthProfilesState, files: AuthFileAction
                 contentColor = MaterialTheme.colorScheme.onSurface) {
                 Column {
                     rows.forEachIndexed { index, profile -> key(profile.id) {
-                        SavedAccountOverview(profile, state.quota[profile.id], now, pending?.id == profile.id,
+                        SavedAccountOverview(profile, state.quota[profile.id], now, state.switching && state.switchProfileId == profile.id,
                             connected && state.busy == null && !state.switching, state.busy == "query:${profile.id}",
                             open = { detailId = profile.id }, query = { scope.launch { state.query(profile) } })
                         if (detailId != profile.id) AuthActionFeedback(state, "query:${profile.id}", connected, scope)
@@ -112,7 +105,7 @@ internal fun AuthProfilesSection(state: AuthProfilesState, files: AuthFileAction
         if (currentFiles.isEmpty() && !hasCurrent) TextButton(onClick = { openCurrent("current") }) {
             Text(stringResource(R.string.settings_current_account))
         }
-        AuthRestartSection(state, connected, scope)
+        if (!recoveryFirst) AuthRestartSection(state, connected, scope, verify)
         state.profiles.firstOrNull { it.id == detailId }?.let { profile -> key(profile.id) {
             var expanded by rememberSaveable { mutableStateOf(false) }
             val result = state.quota[profile.id]
@@ -132,7 +125,8 @@ internal fun AuthProfilesSection(state: AuthProfilesState, files: AuthFileAction
                     }
                 }
                 AuthActionFeedback(state, "query:${profile.id}", connected, scope)
-                FilledTonalButton(onClick = { selection = profile; detailId = null }, enabled = enabled) {
+                FilledTonalButton(onClick = { selection = profile; detailId = null }, enabled = enabled &&
+                    (state.runtimeControl.isEmpty() || state.runtimeControl["action"]?.stringValue == "restart")) {
                     Text(stringResource(R.string.auth_profiles_switch))
                 }
                 result?.let {
@@ -161,9 +155,6 @@ internal fun AuthProfilesSection(state: AuthProfilesState, files: AuthFileAction
         // During a restart the target may temporarily be absent from both lists.
         state.switchProfileId?.takeIf { id -> id !in activeIds && rows.none { it.id == id } &&
             (state.verifyingIdentity || state.management?.entries.orEmpty().none { it.active && it.profile.id == id }) }?.let {
-            state.switchTarget?.takeIf { target -> target.id == it }?.let { target ->
-                Text(profileTitle(target), style = MaterialTheme.typography.titleSmall)
-            }
             AuthSwitchFeedback(state, it, connected, scope)
         }
         if (state.supportsManagement) AuthManagementPanel(state, files, connected, now, adding, dismissAdd, scope)

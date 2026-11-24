@@ -43,6 +43,7 @@ def bounded_diagnostic(report, max_bytes=256 * 1024):
 class Profiles:
     def __init__(self, manager, socket=None):
         self.socket = socket
+        self.owned = None
         self.m = manager
         self.secrets = set()
         self.stage = 'validate'
@@ -184,7 +185,8 @@ class Profiles:
             if self.m.identity(auth) != active:
                 rows.append(self.metadata(number, auth))
         restarts = RestartOperations(self)
-        history = restarts.history()
+        records = restarts.records()
+        history = restarts.history(records=records)
         latest = history[0] if history else None
         restart = self.legacy_restart(active, numbers)
         if restart:
@@ -195,14 +197,24 @@ class Profiles:
         restart_error = restart.get('failure') if restart else None
         result = {'status': 'available', 'profiles': rows, 'supportsTokenRefresh': True, 'managedBy': 'remodex', 'supportsImportExport': True,
                 'supportsManualRestart': restarts.supported(),
-                'currentProfile': self.metadata('current', active_auth) if self.socket else None,
+                'currentProfile': self.metadata('current', active_auth) if self.socket or self.owned else None,
                 'restartStatus': 'restart_scheduled' if restart_status in PENDING else 'ready' if restart_status == 'recovered' else restart_status,
                 'operationId': restart.get('operationId') if restart else None,
-                'selectedProfile': restart.get('profile') if restart else None,
+                'selectedProfile': (restart.get('profile') or restart.get('expectedProfile')) if restart else None,
                 'restartError': json.dumps(restart_error, ensure_ascii=False)[:16000] if restart_error else None,
                 'restartHistory': history}
+        self.stage = 'restart_capability'
+        try:
+            capability = restarts.capability()
+        except Exception as error:
+            capability = {'mode': 'unknown', 'diagnostic': restarts.diagnostic(error)}
+        result.update(runtimeControl=capability, supportsManualRestart=capability.get('action') in ('start', 'restart'),
+                      supportsRestartProgress=True)
         from auth_runtime import reconcile_failed_switch
-        return reconcile_failed_switch(self, result, active_auth, numbers)
+        stopped_key = None
+        if latest and latest.get('kind') == 'manual' and latest.get('status') == 'failed' and latest.get('stage') == 'direct_stop':
+            stopped_key = records[0].get('_directKey')
+        return reconcile_failed_switch(self, result, active_auth, numbers, stopped_key)
 
     def legacy_restart(self, active, numbers):
         switch = self.m.STATE / 'last-switch.json'
@@ -542,6 +554,21 @@ class Profiles:
         return {'profile': number, 'status': 'refreshed', 'profileInfo': self.metadata(number, updated), 'snapshots': snapshots}
 
     def query(self, number, revision):
+        if self.socket:
+            ops = RestartOperations(self)
+            records = ops.records()
+            latest = records[0] if records else self.legacy_restart(None, ())
+        else:
+            latest = None
+        if latest and latest['status'] in ('failed', 'verification_failed'):
+            from auth_runtime import read_runtime_token, token_matches_profile, runtime_quota
+            _, _, auth = self.target(number, revision)
+            self.stage = 'query_runtime_identity'
+            if token_matches_profile(self, read_runtime_token(self, self.socket), auth):
+                result = runtime_quota(self, auth)
+                if result['profile'] != number:
+                    raise ProfileError('PROFILE_CHANGED', 'Runtime quota cannot be attributed to a unique profile')
+                return dict(result, profileInfo=self.metadata(number, auth))
         return self.run_isolated(number, revision, refresh_token=False)
 
     def run_isolated(self, number, revision, *, refresh_token):
@@ -665,13 +692,16 @@ def main():
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--home', required=True)
     parser.add_argument('action', choices=('list', 'status', 'check', 'import', 'rename', 'remove', 'export', 'maintenance', 'query', 'refreshToken',
-                                           'switch', 'restart', 'restart-history', 'run-restart'))
+                                           'runtime-quota', 'switch', 'restart', 'restart-progress', 'adopt', 'restart-history', 'run-restart'))
     parser.add_argument('--name')
     parser.add_argument('--expected-name')
     parser.add_argument('--socket')
+    parser.add_argument('--bridge-child', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--wait-for-restart', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--profile')
     parser.add_argument('--revision')
     parser.add_argument('--operation-id')
+    parser.add_argument('--confirmation')
     parser.add_argument('--start-if-stopped', action='store_true')
     args = parser.parse_args()
     if args.action == 'run-restart' and not args.operation_id:
@@ -682,9 +712,34 @@ def main():
     manager.configure(args.home)
     api = Profiles(manager, args.socket)
     try:
+        if args.bridge_child:
+            from auth_owned_child import OwnedChild
+            api.owned = OwnedChild(manager)
+        if args.wait_for_restart:
+            if args.action != 'run-restart':
+                parser.error('--wait-for-restart requires run-restart')
+            from auth_restarts import DELAY
+            time.sleep(DELAY)
         if manager.BASE.resolve() != Path(args.home).resolve():
             raise ProfileError('RUNTIME_MISMATCH', 'Auth manager belongs to a different Codex home')
         manager.STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if args.action == 'runtime-quota':
+            if not api.socket and not api.owned:
+                raise ProfileError('RUNTIME_UNAVAILABLE', 'Live quota requires the local Codex control socket')
+            from auth_runtime import runtime_quota
+            print(json.dumps({'ok': True, 'result': runtime_quota(api)}))
+            return
+        if args.action == 'restart-progress':
+            ops = RestartOperations(api)
+            with (manager.STATE / 'manager.lock').open('a') as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    result = [ops.public(r) for r in ops.records()[:DISPLAY_LIMIT]]
+                else:
+                    result = ops.history()
+            print(json.dumps({'ok': True, 'result': {'restartHistory': result}}))
+            return
         with (manager.STATE / 'manager.lock').open('a') as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX if args.action == 'run-restart' else fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -692,8 +747,12 @@ def main():
                 raise ProfileError('MANAGER_BUSY', 'Account maintenance is running; try again later') from error
             if args.action in ('list', 'status'):
                 result = getattr(api, args.action)()
+            elif args.action == 'adopt':
+                if not args.confirmation or not re.fullmatch('[a-f0-9]{64}', args.confirmation):
+                    raise ProfileError('CONFIRMATION_REQUIRED', 'Review and confirm the running listener first')
+                result = RestartOperations(api).schedule(adoption=args.confirmation)
             elif args.action == 'restart':
-                result = RestartOperations(api).schedule(allow_stopped=args.start_if_stopped)
+                result = RestartOperations(api).schedule(allow_stopped=args.start_if_stopped, expected_runtime=args.confirmation)
             elif args.action == 'restart-history':
                 history = RestartOperations(api).history(HISTORY_LIMIT)
                 legacy = api.legacy_restart(None, ())
@@ -708,6 +767,14 @@ def main():
                 result = api.rename(args.profile, args.revision, args.name, args.expected_name)
             else:
                 result = getattr(api, args.action)(args.profile, args.revision)
+            if api.owned and args.action in ('switch', 'restart') and result['status'] == 'restart_scheduled':
+                from auth_restarts import DELAY
+                print(json.dumps({'ok': True, 'result': result}), flush=True)
+                time.sleep(DELAY)
+                # Same lock, same bridge connection. The original acknowledgement
+                # is already on the phone; progress and failures are durable.
+                RestartOperations(api).run(result['operationId'])
+                return
         print(json.dumps({'ok': True, 'result': result}))
         if args.action == 'run-restart' and result and result['status'] == 'failed':
             raise SystemExit(1)
