@@ -1,0 +1,7 @@
+<resources>
+    <string name="turn_activity_details_elapsed">%1$s · %2$s</string>
+    <string name="turn_elapsed_subsecond">Under 1s</string>
+    <string name="turn_elapsed_seconds">Elapsed %1$ds</string>
+    <string name="turn_elapsed_minutes">Elapsed %1$dm %2$ds</string>
+    <string name="turn_elapsed_hours">Elapsed %1$dh %2$dm %3$ds</string>
+</resources>

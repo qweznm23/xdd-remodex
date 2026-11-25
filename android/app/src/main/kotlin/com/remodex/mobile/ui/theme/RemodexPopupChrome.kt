@@ -11,10 +11,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.rememberTransition
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -25,9 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.PopupProperties
 
 object RemodexPopupChrome {
     val PopupShape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
@@ -79,26 +78,22 @@ fun RemodexPopupSurface(
     )
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun RemodexDropdownMenu(
+internal fun RemodexDropdownMenu(
     expanded: Boolean,
     onDismissRequest: () -> Unit,
-    modifier: Modifier = Modifier,
-    offset: DpOffset = DpOffset.Zero,
-    properties: PopupProperties = PopupProperties(focusable = true),
+    panelWidth: Dp? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    MaterialTheme(motionScheme = RemodexPopupMotion) {
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = onDismissRequest,
-            modifier = modifier,
-            offset = offset,
-            properties = properties,
-            content = content,
-        )
-    }
+    val visibility = remember { MutableTransitionState(false) }
+    visibility.targetState = expanded
+    if (!expanded && visibility.isIdle) return
+    RemodexAnchoredMenu(
+        transition = rememberTransition(visibility, label = "Action menu"),
+        onDismiss = onDismissRequest,
+        panelWidth = panelWidth,
+        content = content,
+    )
 }
 
 internal val LocalSheetClose = staticCompositionLocalOf<() -> Unit> { error("Close action requires a modal sheet") }

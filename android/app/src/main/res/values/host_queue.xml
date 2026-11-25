@@ -1,0 +1,9 @@
+<resources>
+    <string name="queue_attachment_count">Attachments: %1$d</string>
+    <string name="queue_waiting_sync">Waiting to sync</string>
+    <string name="queue_on_host">Queued on computer</string>
+    <string name="queue_steer_recovery">Check chat history before restoring</string>
+    <string name="queue_retry_sync">Retry sync</string>
+    <string name="queue_source_editor">Queued on computer · edit on original client</string>
+    <string name="queue_plan_hint">Codex queued messages use the current thread mode. Turn off Plan mode to queue, or send after the current turn.</string>
+</resources>

@@ -115,7 +115,10 @@ internal suspend fun CodexService.setActiveThreadIdImpl(threadId: String?) {
 }
 
 internal suspend fun CodexService.resetBridgeSession(preservePresentationState: Boolean = false) {
-    connectionGeneration++
+    synchronized(executionStates) {
+        connectionGeneration++
+        executionStates.value = emptyMap()
+    }
     predictionStore.disconnected()
     val oldSocket = webSocket
     webSocket = null
@@ -155,7 +158,6 @@ internal suspend fun CodexService.resetBridgeSession(preservePresentationState: 
             sessionPersistence.loadAssociatedManagedWorktreePaths()
         },
     )
-    turnDraftQueueStore.clear()
     testRpcRequestHandler = null
     loadingHistory.clear()
     liveFollowUps.clear()

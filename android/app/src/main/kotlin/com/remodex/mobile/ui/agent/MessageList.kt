@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.agent
 
+import androidx.lifecycle.repeatOnLifecycle
 import android.content.ClipData
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -84,6 +85,7 @@ internal fun MessageList(
     canApplyPlan: Boolean = true,
     isAssistantTurnActive: Boolean = false,
     activeTurnId: String? = null,
+    activityTimings: Map<String, TurnActivityTiming> = emptyMap(),
     predictionFooter: (@Composable () -> Unit)? = null,
     verticalItemSpacing: Dp = 10.dp,
     contentPadding: PaddingValues =
@@ -248,10 +250,15 @@ internal fun MessageList(
                     ) {
                         TimelineListItemContent(
                             item = item,
+                            groupDuration = if (item is TimelineListItem.AssistantWorkGroup)
+                                activityTimings[item.messages.firstNotNullOfOrNull { it.turnId }]?.finalDuration else null,
                             messageContent = messageContent,
                             commandExecutionDetailsByItemId = commandExecutionDetailsByItemId,
                             modifier = Modifier.fillMaxWidth(),
                         )
+                        presentation.elapsedFooterKeys[item.stableKey]?.takeUnless { it == activeTurnId }?.let { turn ->
+                            activityTimings[turn]?.finalDuration?.let { duration -> ActivityElapsedText(duration) }
+                        }
                         if (showTrailingActions && index == lastAssistantDisplayIndex) {
                             Row(
                                 modifier =
@@ -333,7 +340,7 @@ internal fun MessageList(
                 if (transientStatusText != null) {
                     item(key = "transient-activity-status") {
                         Column {
-                            TransientActivityStatusRow(transientStatusText, Modifier.fillMaxWidth())
+                            TransientActivityStatusRow(transientStatusText, activityTimings[activeTurnId], Modifier.fillMaxWidth())
                             if (presentation.activeSummary.isNotEmpty()) {
                                 ReasoningSummaryRow(presentation.activeSummary)
                             }
@@ -356,6 +363,7 @@ private fun TimelineListItemContent(
     messageContent: @Composable (CodexMessage) -> Unit,
     commandExecutionDetailsByItemId: Map<String, CommandExecutionDetails>,
     modifier: Modifier = Modifier,
+    groupDuration: Long? = null,
 ) {
     when (item) {
         is TimelineListItem.Single ->
@@ -369,6 +377,7 @@ private fun TimelineListItemContent(
         is TimelineListItem.AssistantWorkGroup ->
             AssistantWorkGroupRow(
                 group = item,
+                duration = groupDuration,
                 messageContent = messageContent,
                 commandExecutionDetailsByItemId = commandExecutionDetailsByItemId,
                 modifier = modifier,
@@ -433,12 +442,16 @@ internal fun TimelineListItem.MessageChunk.toRenderMessage(): CodexMessage =
 @Composable
 private fun AssistantWorkGroupRow(
     group: TimelineListItem.AssistantWorkGroup,
+    duration: Long?,
     messageContent: @Composable (CodexMessage) -> Unit,
     commandExecutionDetailsByItemId: Map<String, CommandExecutionDetails>,
     modifier: Modifier = Modifier,
 ) {
     var showDetails by rememberSaveable(group.stableKey) { mutableStateOf(false) }
-    val title = stringResource(R.string.turn_timeline_group_work_details)
+    val details = stringResource(R.string.turn_timeline_group_work_details)
+    val title = if (duration == null) details else stringResource(
+        R.string.turn_activity_details_elapsed, details, activityElapsedLabel(duration),
+    )
     TimelineActionRow(
         modifier = modifier,
         onClick = { showDetails = true },
@@ -457,6 +470,7 @@ private fun AssistantWorkGroupRow(
 @Composable
 private fun TransientActivityStatusRow(
     statusText: TimelineActivityLabel,
+    timing: TurnActivityTiming?,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -474,9 +488,45 @@ private fun TransientActivityStatusRow(
         TimelineActivityDots(color = colors.onSurfaceVariant)
         Text(
             text = statusText.filename?.let { stringResource(statusText.resource, it) } ?: stringResource(statusText.resource),
-            modifier = Modifier.padding(start = 8.dp),
+            modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.onSurfaceVariant.copy(alpha = 0.64f),
         )
+        if (timing?.start != null && timing.finalDuration == null) {
+            RunningActivityElapsed(timing.start)
+        }
+    }
+}
+
+@Composable
+private fun RunningActivityElapsed(start: Long) {
+    val visible = com.remodex.mobile.ui.turn.LocalTimelineRenderingEnabled.current
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val elapsed by androidx.compose.runtime.produceState(System.currentTimeMillis() - start, start, visible, lifecycle) {
+        if (!visible) return@produceState
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                value = System.currentTimeMillis() - start
+                kotlinx.coroutines.delay(1000L)
+            }
+        }
+    }
+    if (elapsed >= 0) ActivityElapsedText(elapsed, Modifier.padding(start = 8.dp))
+}
+
+@Composable
+private fun ActivityElapsedText(millis: Long, modifier: Modifier = Modifier) {
+    Text(activityElapsedLabel(millis), modifier, style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun activityElapsedLabel(millis: Long): String {
+    val seconds = millis / 1000
+    return when {
+        millis in 1..999 -> stringResource(R.string.turn_elapsed_subsecond)
+        seconds < 60 -> stringResource(R.string.turn_elapsed_seconds, seconds)
+        seconds < 3600 -> stringResource(R.string.turn_elapsed_minutes, seconds / 60, seconds % 60)
+        else -> stringResource(R.string.turn_elapsed_hours, seconds / 3600, seconds / 60 % 60, seconds % 60)
     }
 }

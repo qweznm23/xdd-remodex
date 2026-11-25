@@ -86,6 +86,7 @@ internal fun SavedAccountOverview(profile: AuthProfile, result: ProfileQuota?, n
                     result == null -> stringResource(R.string.account_quota_not_read)
                     else -> weeklyQuotaLabel(null)
                 }, style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
+                RemainingQuotaBar(weekly?.remainingPercent, Modifier.padding(end = 8.dp, top = 3.dp, bottom = 3.dp))
                 if (result != null) Text(stringResource(R.string.account_last_query,
                     formatUsageCalendarTime(result.at, now, locale = LocalConfiguration.current.locales[0])),
                     style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)

@@ -126,6 +126,17 @@ function createThreadRuntimeSettingsStore({
     observe,
     attachToConversation,
     attachToThread,
+    observeOwnerResponse(thread, result, request) {
+      if (thread.id !== request.threadId || thread.runtimeSettings || result.remodexDesktopIpcMirror) return;
+      const current = get(thread.id);
+      if (current?.epoch !== request.settingsEpoch || current?.revision !== request.settingsRevision) return;
+      // Loaded native threads report configured next-turn settings. Unloaded rows can be older than a Desktop edit.
+      const resumed = request.method === "thread/resume" && typeof result.model === "string";
+      if (!resumed && (request.method !== "thread/read" || !["idle", "active"].includes(thread.status?.type))) return;
+      const source = resumed ? result : thread;
+      if (!normalizeString(source.model)) return;
+      observe(thread.id, source);
+    },
     enrichResponse,
     observeConversation(threadId, conversation) {
       const patch = runtimeSettingsFromConversation(conversation);

@@ -12,6 +12,7 @@ internal class ThreadRuntimeSelection(var defaults: ThreadModelSelection) {
 
     private data class Revision(val epoch: String, val revision: Long, val timestamp: Long)
     private val revisions = mutableMapOf<String, Revision>()
+    private val reportedEfforts = mutableSetOf<String>()
     private val fastThreads = mutableSetOf<String>()
     @Synchronized fun fastTier(id: String?): Boolean = id in fastThreads
 
@@ -21,8 +22,10 @@ internal class ThreadRuntimeSelection(var defaults: ThreadModelSelection) {
         val prev = revisions[id]
         if (prev != null && (if (prev.epoch == next.epoch) next.revision <= prev.revision else next.timestamp <= prev.timestamp)) return false
         revisions[id] = next
-        overrides[id] = ThreadModelSelection(if ("model" in row) row["model"]?.stringValue else current.modelId,
-            if ("reasoningEffort" in row) row["reasoningEffort"]?.stringValue else current.reasoningEffort)
+        val previousSelection = overrides[id] ?: current
+        overrides[id] = ThreadModelSelection(if ("model" in row) row["model"]?.stringValue else previousSelection.modelId,
+            if ("reasoningEffort" in row) row["reasoningEffort"]?.stringValue else previousSelection.reasoningEffort)
+        if ("reasoningEffort" in row) reportedEfforts.add(id)
         if ("serviceTier" in row) {
             if (row["serviceTier"]?.stringValue in setOf("priority", "fast")) fastThreads.add(id) else fastThreads.remove(id)
         }
@@ -44,6 +47,7 @@ internal class ThreadRuntimeSelection(var defaults: ThreadModelSelection) {
         val supported = model?.supportedReasoningEfforts.orEmpty().map { it.reasoningEffort }
         val effort = selected.reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
         val resolvedEffort = when {
+            threadId in reportedEfforts -> effort
             supported.isEmpty() -> effort
             effort in supported -> effort
             model?.defaultReasoningEffort in supported -> model?.defaultReasoningEffort
@@ -64,6 +68,7 @@ internal class ThreadRuntimeSelection(var defaults: ThreadModelSelection) {
         overrides.clear()
         revisions.clear()
         fastThreads.clear()
+        reportedEfforts.clear()
         defaults = selection
     }
 }

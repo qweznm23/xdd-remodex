@@ -168,6 +168,7 @@ fun MainShell(
     val pendingShare = shareInbox?.first
     LaunchedEffect(pendingShare?.id, currentRoute != null) {
         if (pendingShare == null || currentRoute == null) return@LaunchedEffect
+        if (currentRoute == AppRoutes.NewChatDraft) return@LaunchedEffect
         if (currentRoute != AppRoutes.Home) navController.popBackStack(AppRoutes.Home, inclusive = false)
         if (activeThreadId == null || !ready) drawerState.moveToSessionDrawer(DrawerValue.Open)
     }

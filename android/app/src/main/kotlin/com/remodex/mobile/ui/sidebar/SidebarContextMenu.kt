@@ -21,7 +21,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
-import com.remodex.mobile.ui.theme.QuotaAnchoredMenu
+import com.remodex.mobile.ui.theme.RemodexAnchoredMenu
 
 /** The native row owns click, long-click and scroll arbitration. Only observe the anchor position. */
 internal class SidebarContextMenuState {
@@ -67,6 +67,6 @@ internal fun BoxScope.SidebarContextMenu(
     val anchor = if (origin == null) Modifier.align(Alignment.Center)
         else Modifier.align(AbsoluteAlignment.TopLeft).absoluteOffset { origin }
     Box(anchor) {
-        QuotaAnchoredMenu(transition, menu::close, panelWidth = 216.dp, content = content)
+        RemodexAnchoredMenu(transition, menu::close, panelWidth = 216.dp, content = content)
     }
 }

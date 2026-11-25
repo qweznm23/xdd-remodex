@@ -27,6 +27,10 @@ internal object EmptyTrustedDeviceRepositoryBindings {
 }
 
 internal interface EmptyTrustedDeviceCodexRepository : CodexRepository {
+    override val threadExecutionStates: StateFlow<Map<String, com.remodex.mobile.core.model.ThreadExecutionState>>
+        get() = MutableStateFlow(emptyMap())
+    override suspend fun refreshThreadExecution(threadId: String) = Unit
+    override suspend fun setThreadAccessMode(threadId: String, mode: com.remodex.mobile.core.model.CodexAccessMode) = Unit
     override val trustedDevices: StateFlow<List<CodexTrustedMacRecord>>
         get() = EmptyTrustedDeviceRepositoryBindings.trustedDevices
     override val switchingDeviceId: StateFlow<String?>

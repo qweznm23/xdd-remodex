@@ -22,7 +22,14 @@ private const val REMODEX_WIRE_LOG_TAG = "RemodexWire"
 internal suspend fun CodexService.sendRequestImpl(
     method: String,
     params: JSONValue?,
+): RPCMessage = sendGuardedRequest(method, params) {}
+
+internal suspend fun CodexService.sendGuardedRequest(
+    method: String,
+    params: JSONValue?,
+    checkDestination: () -> Unit,
 ): RPCMessage {
+    checkDestination()
     testRpcRequestHandler?.let { handler ->
         return handler(method, params)
     }
@@ -32,7 +39,10 @@ internal suspend fun CodexService.sendRequestImpl(
     val deferred = CompletableDeferred<RPCMessage>()
     pendingRpc[idKey(id)] = deferred
     try {
-        sendMessage(req)
+        synchronized(secureSessionLock) {
+            checkDestination()
+            sendMessage(req)
+        }
         return deferred.await()
     } finally {
         pendingRpc.remove(idKey(id))
@@ -174,11 +184,24 @@ internal fun CodexService.dispatchIncomingRpc(message: RPCMessage) {
                 }
             }
         }
+        if (method == "thread/queue/changed") refreshTurnQueue()
         if (method == "thread/status/changed") {
             val params = message.params?.objectValue
             val threadId = params?.get("threadId")?.stringValue
             val waiting = params?.get("status")?.objectValue?.get("activeFlags")?.arrayValue?.any { it.stringValue == "waitingOnUserInput" } == true
             if (threadId != null) _threads.value = _threads.value.map { if (it.id == threadId) it.copy(waitingOnUserInput = waiting) else it }
+        }
+        if (method == "thread/closed" || method == "thread/deleted" || method == "thread/archived") {
+            message.params?.objectValue?.get("threadId")?.stringValue?.let { id ->
+                resumedThreadIds.remove(id)
+                synchronized(executionStates) { executionStates.value = executionStates.value - id }
+            }
+        }
+        if (method == "thread/settings/updated" || method == "remodex/execution/updated") {
+            val params = message.params?.objectValue
+            val id = params?.get("threadId")?.stringValue
+            val settings = params?.get("threadSettings")?.objectValue
+            if (id != null && settings != null) observeExecution(id, settings)
         }
         if (supportsSettingsSync && method == "remodex/runtimeSettings/updated") {
             val p = message.params?.objectValue
@@ -186,7 +209,7 @@ internal fun CodexService.dispatchIncomingRpc(message: RPCMessage) {
             val settings = p?.get("runtimeSettings")?.objectValue
             if (id != null && settings != null) applyConfirmedSettings(id, settings)
         }
-        if (method == "thread/goal/updated" || method == "thread/goal/cleared") {
+        if (method == "thread/goal/updated" || method == "thread/goal/cleared" || method == "turn/started" || method == "turn/completed") {
             message.params?.objectValue?.let { _conversationEvents.tryEmit(method to it) }
         }
         if (method in setOf("turn/started", "turn/completed", "item/autoApprovalReview/started", "item/autoApprovalReview/completed")) {

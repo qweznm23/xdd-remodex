@@ -14,4 +14,15 @@
     <string name="update_custom_source">Custom address</string>
     <string name="update_no_connection">Pair a device to use its update source.</string>
     <string name="update_invalid_source">Enter an HTTP or HTTPS address without credentials or a fragment.</string>
+    <string name="update_versions">%1$s → %2$s</string>
+    <string name="update_new_badge">New version</string>
+    <string name="update_download_install">Download and install</string>
+    <string name="update_installed_size">Installed %1$s · %2$s</string>
+    <string name="update_check_again">Check again</string>
+    <string name="update_transfer_hint">You can close this dialog while the download continues.</string>
+    <string name="update_permission_hint">Allow installation from Remodex to continue.</string>
+    <string name="update_transferred">Downloaded %1$s</string>
+    <string name="update_latest_title">Up to date</string>
+    <string name="update_hide_download">Hide</string>
+    <string name="update_transfer_summary">%1$s · %2$s / %3$s</string>
 </resources>

@@ -14,4 +14,15 @@
     <string name="update_custom_source">自定义地址</string>
     <string name="update_no_connection">配对设备后可使用其更新地址。</string>
     <string name="update_invalid_source">请输入不含账号、密码或片段的 HTTP 或 HTTPS 地址。</string>
+    <string name="update_versions">%1$s → %2$s</string>
+    <string name="update_new_badge">新版本</string>
+    <string name="update_download_install">下载并安装</string>
+    <string name="update_installed_size">已安装 %1$s · 安装包 %2$s</string>
+    <string name="update_check_again">再次检查</string>
+    <string name="update_transfer_hint">可关闭弹框，下载会继续。</string>
+    <string name="update_permission_hint">允许 Remodex 安装应用后将继续安装。</string>
+    <string name="update_transferred">已下载 %1$s</string>
+    <string name="update_latest_title">已是最新版本</string>
+    <string name="update_hide_download">收起</string>
+    <string name="update_transfer_summary">%1$s · %2$s / %3$s</string>
 </resources>

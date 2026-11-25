@@ -1,5 +1,6 @@
 package com.remodex.mobile.services
 
+import com.remodex.mobile.core.model.toRpcObject
 import com.remodex.mobile.core.model.CodexModelOption
 import com.remodex.mobile.core.model.CodexThread
 import com.remodex.mobile.core.model.CodexReasoningEffortOption
@@ -74,6 +75,23 @@ class ThreadRuntimeSelectionTest {
         ) }
         assertEquals("high", selection().resolve("a", listOf(merged), options).reasoningEffort)
         assertEquals("medium", selection().resolve("b", threads, options).reasoningEffort)
+    }
+
+    @Test fun confirmedOwnerEffortSurvivesAnOlderCatalogAndAPartialSpeedUpdate() {
+        val state = selection()
+        val choices = models.map { it.copy(supportedReasoningEfforts = listOf(CodexReasoningEffortOption("high", "")),
+            defaultReasoningEffort = "high") }
+        fun update(json: String) = Json.parseToJsonElement(json).jsonObject.toRpcObject()
+        val first = update("""{"epoch":"owner","revision":1,"updatedAt":1,"model":"gpt-6-astra","reasoningEffort":"ultra"}""")
+        val staleRow = ThreadModelSelection("sol-id", "high")
+        state.confirm("a", staleRow, first)
+        state.confirm("a", staleRow, update("""{"epoch":"owner","revision":2,"updatedAt":2,"serviceTier":"priority"}"""))
+        state.confirm("a", staleRow, first)
+        assertEquals(ThreadModelSelection("gpt-6-astra","ultra"), state.resolve("a", threads, choices))
+        assertEquals(true, state.fastTier("a"))
+        assertEquals(false, state.fastTier("b"))
+        state.confirm("a", staleRow, update("""{"epoch":"owner","revision":3,"updatedAt":3,"reasoningEffort":null}"""))
+        assertEquals(null, state.resolve("a", threads, choices).reasoningEffort)
     }
 
     @Test fun knownModelIdsResolveToWireModelNamesAndCompatibleEffort() {

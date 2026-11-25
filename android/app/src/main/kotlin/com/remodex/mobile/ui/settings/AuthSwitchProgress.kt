@@ -16,7 +16,7 @@ internal enum class SwitchPhase { Submit, AwaitRestart, Reconnect, Verify }
 
 internal fun AuthProfilesState.progressPhase(connected: Boolean): SwitchPhase = when {
     !switching -> SwitchPhase.Submit
-    !connected -> SwitchPhase.Reconnect
+    !connected || awaitingSwitchConnection -> SwitchPhase.Reconnect
     sawSwitchDisconnect -> SwitchPhase.Verify
     else -> SwitchPhase.AwaitRestart
 }
@@ -68,7 +68,7 @@ internal fun AuthSwitchProgress(state: AuthProfilesState, connected: Boolean) {
             "runtime_account_verification" -> R.string.auth_progress_verify
             else -> null
         }
-        ProgressRow(if (stageLabel == null || !connected) current else stringResource(stageLabel), done = false)
+        ProgressRow(if (stageLabel == null || phase == SwitchPhase.Reconnect || phase == SwitchPhase.Verify) current else stringResource(stageLabel), done = false)
     }
 }
 

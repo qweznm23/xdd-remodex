@@ -12,4 +12,6 @@
     <string name="session_info_connecting">正在连接…</string>
     <string name="session_info_reset_days">%1$d 天后重置</string>
     <string name="session_info_reset_days_hours">%1$d 天 %2$d 小时后重置</string>
+    <string name="session_info_unreported">服务端未报告</string>
+    <string name="session_info_no_environment">未选择环境</string>
 </resources>

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -43,69 +44,50 @@ internal fun QueuedDraftsCard(
     canRestore: Boolean,
     onRestore: (String) -> Unit,
     onRemove: (String) -> Unit,
+    error: String?, onRetry: () -> Unit, canSteer: Boolean, enabled: Boolean, onSteer: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val queueItemEmptyLabel = stringResource(R.string.turn_queue_item_empty)
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.turn_queue_pending_count, totalCount),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            previews.take(3).forEachIndexed { idx, draft ->
-                val line =
-                    draft.text.lines().firstOrNull()?.trim().orEmpty().ifBlank { queueItemEmptyLabel }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${idx + 1}. $line",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        val meta =
-                            buildList {
-                                if (draft.attachmentCount > 0) {
-                                    add(stringResource(R.string.turn_queue_item_attachments, draft.attachmentCount))
-                                }
-                                if (draft.collaborationMode == CodexCollaborationModeKind.plan) {
-                                    add(stringResource(R.string.turn_plan_mode_chip))
-                                }
-                            }.joinToString(" · ")
-                        if (meta.isNotEmpty()) {
-                            Text(
-                                text = meta,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+    val colors = MaterialTheme.colorScheme
+    Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium, color = colors.surfaceContainer) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+            if (totalCount > 0) {
+                androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 144.dp)) {
+                    items(previews.size, key = { previews[it].id }) { index ->
+                        val item = previews[index]
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.text.ifBlank { stringResource(R.string.turn_queue_item_empty) }, maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                                val status = stringResource(when {
+                                    item.recovery -> R.string.queue_steer_recovery
+                                    item.waiting -> R.string.queue_waiting_sync
+                                    !item.editable -> R.string.queue_source_editor
+                                    else -> R.string.queue_on_host
+                                })
+                                val detail = if (item.attachmentCount > 0) {
+                                    "$status · " + stringResource(R.string.queue_attachment_count, item.attachmentCount)
+                                } else status
+                                Text(detail, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                            }
+                            QueueIcon(com.composables.icons.lucide.R.drawable.lucide_ic_square_pen, R.string.turn_steer_edit_cd, canRestore && item.editable) { onRestore(item.id) }
+                            if (canSteer && !item.waiting && item.editable) QueueIcon(com.composables.icons.lucide.R.drawable.lucide_ic_send_horizontal, R.string.turn_steer_cd, enabled) { onSteer(item.id) }
+                            QueueIcon(com.composables.icons.lucide.R.drawable.lucide_ic_trash_2, R.string.turn_steer_delete_cd, enabled) { onRemove(item.id) }
                         }
-                    }
-                    TextButton(onClick = { onRestore(draft.id) }, enabled = canRestore) {
-                        Text(stringResource(R.string.turn_queue_restore))
-                    }
-                    TextButton(onClick = { onRemove(draft.id) }) {
-                        Text(stringResource(R.string.turn_queue_remove))
                     }
                 }
             }
-            if (previews.size > 3) {
-                Text(
-                    text = stringResource(R.string.turn_queue_more_items, previews.size - 3),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (error != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(error, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = colors.error)
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.queue_retry_sync)) }
             }
         }
+    }
+}
+
+@Composable
+private fun QueueIcon(icon: Int, label: Int, enabled: Boolean, click: () -> Unit) {
+    androidx.compose.material3.IconButton(onClick = click, enabled = enabled) {
+        androidx.compose.material3.Icon(androidx.compose.ui.res.painterResource(icon), stringResource(label), Modifier.size(18.dp))
     }
 }
 

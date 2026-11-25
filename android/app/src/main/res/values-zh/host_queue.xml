@@ -1,0 +1,9 @@
+<resources>
+    <string name="queue_attachment_count">%1$d 个附件</string>
+    <string name="queue_waiting_sync">待同步</string>
+    <string name="queue_on_host">已在电脑排队</string>
+    <string name="queue_steer_recovery">请核对会话后再恢复</string>
+    <string name="queue_retry_sync">重试同步</string>
+    <string name="queue_source_editor">已在电脑排队 · 请在来源客户端编辑</string>
+    <string name="queue_plan_hint">Codex 队列沿用会话模式。可关闭计划模式后排队，或在本轮结束后发送计划。</string>
+</resources>

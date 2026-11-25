@@ -21,8 +21,10 @@ import com.remodex.mobile.update.updateHttpUrl
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
+import com.remodex.mobile.update.AppUpdateState
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
@@ -35,7 +37,6 @@ import com.remodex.mobile.update.UpdatePhase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import java.util.Locale
 
 /** Owned by the activity so closing the dialog does not interrupt a requested installation. */
 @Composable
@@ -88,7 +89,7 @@ internal fun AppUpdateDialog(onDismiss: () -> Unit) {
     var showSource by rememberSaveable { mutableStateOf(false) }
     val allowInstall = context.packageManager.canRequestPackageInstalls()
     val installing = state.launchInstaller
-    val candidate = state.update?.takeIf { it.versionCode > BuildConfig.VERSION_CODE }
+    val candidate = state.newerRelease
     val hasSource = updater.source.isNotBlank()
     LaunchedEffect(updater, updater.source, state.phase == UpdatePhase.IDLE) {
         if (updater.state.value.phase == UpdatePhase.IDLE && hasSource) updater.check(updater.source)
@@ -124,87 +125,108 @@ internal fun AppUpdateDialog(onDismiss: () -> Unit) {
         return
     }
     val downloading = phase == UpdatePhase.CONNECTING || phase == UpdatePhase.DOWNLOADING
-    val status = stringResource(updateTitle(phase, state.retry))
-    val bodyHeight = minOf(248.dp, androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * 0.42f)
+    val colors = MaterialTheme.colorScheme
+    val typography = MaterialTheme.typography
+    val error = state.error
+    var showError by rememberSaveable(error) { mutableStateOf(false) }
+    val bodyLimit = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * 0.45f
+    val title = when {
+        installing -> R.string.update_opening_installer
+        phase == UpdatePhase.LATEST -> R.string.update_latest_title
+        else -> updateTitle(phase, state.retry)
+    }
+
     RemodexAlertDialog(
-        modifier = Modifier.fillMaxWidth(),
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.app_update_title)) },
+        title = { Text(stringResource(title), style = typography.titleLarge) },
         text = {
-            Column(Modifier.fillMaxWidth().height(bodyHeight).verticalScroll(rememberScrollState()),
+            Column(Modifier.fillMaxWidth().heightIn(max = bodyLimit).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.app_update_current, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.bodyMedium)
-                candidate?.let { update ->
-                    Text(stringResource(R.string.app_update_new, update.versionName, String.format(Locale.ROOT, "%.1f", update.sizeBytes / 1048576.0)),
-                        style = MaterialTheme.typography.titleSmall)
-                }
-                // Only this element observes the download counter.
-                UpdateStatusLine(live, status)
-                Box(Modifier.fillMaxWidth().height(4.dp)) {
-                    if (downloading && state.total > 0) {
-                        LinearProgressIndicator(progress = { (live.value.bytes.toFloat() / state.total).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth())
-                    } else if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                }
-                if (!hasSource && phase == UpdatePhase.IDLE) Text(stringResource(R.string.update_no_connection))
-                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                if (state.permissionDenied && installStage) Text(stringResource(R.string.app_update_permission), style = MaterialTheme.typography.bodySmall)
-                candidate?.notes?.takeIf(String::isNotBlank)?.let { notes ->
-                    Text(stringResource(R.string.update_release_notes), style = MaterialTheme.typography.labelLarge)
-                    Text(notes, style = MaterialTheme.typography.bodyMedium)
-                }
-                if (hasSource) {
-                    TextButton(enabled = !state.busy && !installing, onClick = { showSource = true }) {
-                        Text(stringResource(R.string.app_update_source))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (candidate != null) {
+                            Text(candidate.versionName, style = typography.titleMedium, color = colors.onSurface)
+                            if (phase == UpdatePhase.DOWNLOADING && state.total > 0) {
+                                UpdateTransferLabel(live)
+                            } else {
+                                Text(stringResource(R.string.update_installed_size, BuildConfig.VERSION_NAME,
+                                    android.text.format.Formatter.formatShortFileSize(context, candidate.sizeBytes)),
+                                    style = typography.bodySmall)
+                            }
+                        } else {
+                            Text(stringResource(R.string.app_update_current, BuildConfig.VERSION_NAME),
+                                style = typography.bodyMedium)
+                        }
+                    }
+                    if (hasSource || candidate != null) {
+                        IconButton(enabled = !state.busy && !installing, onClick = { showSource = true }) {
+                            Icon(Icons.Outlined.Settings, stringResource(R.string.app_update_source), Modifier.size(20.dp))
+                        }
                     }
                 }
-                if (downloading) Text(stringResource(R.string.app_update_keep_app_open), style = MaterialTheme.typography.bodySmall)
+                if (candidate != null || state.busy) {
+                    // Replace the divider in place when downloading, without moving the release notes.
+                    Box(Modifier.fillMaxWidth().height(4.dp), contentAlignment = Alignment.Center) {
+                        when {
+                            phase == UpdatePhase.DOWNLOADING && state.total > 0 -> LinearProgressIndicator(
+                                progress = { (live.value.bytes.toFloat() / state.total).coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth())
+                            state.busy -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                            !candidate?.notes.isNullOrBlank() -> HorizontalDivider(color = colors.outlineVariant)
+                            else -> Unit
+                        }
+                    }
+                }
+                if (phase == UpdatePhase.IDLE && !hasSource) Text(stringResource(R.string.update_no_connection))
+                if (state.permissionDenied && installStage) Text(stringResource(R.string.update_permission_hint))
+                if (error != null) {
+                    TextButton(onClick = { showError = !showError }) {
+                        Text(stringResource(if (showError) R.string.turn_timeline_hide_details else R.string.questions_error_details))
+                    }
+                    if (showError) SelectionContainer { Text(error, style = typography.bodySmall, color = colors.error) }
+                }
+                candidate?.notes?.takeIf(String::isNotBlank)?.let { notes ->
+                    Text(stringResource(R.string.update_release_notes), style = typography.labelLarge, color = colors.onSurface)
+                    Text(notes, style = typography.bodyMedium)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(if (downloading) R.string.update_hide_download else R.string.turn_preview_close))
             }
         },
         confirmButton = {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.turn_preview_close)) }
-                val action = when {
-                    downloading -> R.string.app_update_cancel
-                    phase == UpdatePhase.CANCELLING -> R.string.app_update_cancelling
-                    phase == UpdatePhase.VERIFYING -> R.string.app_update_download
-                    phase == UpdatePhase.CHECKING -> R.string.app_update_check
-                    installStage -> if (allowInstall) R.string.app_update_install else R.string.update_authorize_install
-                    state.retry == UpdateRetry.DOWNLOAD -> R.string.update_retry_download
-                    phase == UpdatePhase.AVAILABLE -> R.string.app_update_download
-                    !hasSource -> R.string.update_setup
-                    phase == UpdatePhase.ERROR || phase == UpdatePhase.LATEST -> R.string.update_retry_check
-                    else -> R.string.app_update_check
-                }
-                Button(modifier = Modifier.weight(1.5f), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    enabled = !installing && (!state.busy || downloading), onClick = {
-                    when {
-                        downloading -> updater.cancel()
-                        installStage -> updater.requestInstaller()
-                        phase == UpdatePhase.AVAILABLE || state.retry == UpdateRetry.DOWNLOAD -> updater.download()
-                        hasSource -> updater.check(updater.source)
-                        else -> showSource = true
-                    }
-                }) {
-                    val labelHeight = with(LocalDensity.current) { MaterialTheme.typography.labelLarge.lineHeight.toDp() * 2 }
-                    Box(Modifier.heightIn(min = labelHeight), contentAlignment = Alignment.Center) {
-                        Text(stringResource(action), textAlign = TextAlign.Center)
-                    }
-                }
+            val check = { updater.check(updater.source) }
+            val action: Pair<Int, () -> Unit>? = when {
+                downloading -> R.string.app_update_cancel to updater::cancel
+                installing || state.busy -> null
+                installStage -> (if (allowInstall) R.string.app_update_install else R.string.update_authorize_install) to updater::requestInstaller
+                state.retry == UpdateRetry.DOWNLOAD -> R.string.update_retry_download to updater::download
+                phase == UpdatePhase.AVAILABLE -> R.string.update_download_install to updater::download
+                !hasSource -> R.string.update_setup to { showSource = true }
+                phase == UpdatePhase.LATEST -> R.string.update_check_again to check
+                phase == UpdatePhase.ERROR -> R.string.update_retry_check to check
+                else -> R.string.app_update_check to check
+            }
+            action?.let { (label, run) ->
+                TextButton(onClick = run, modifier = Modifier.widthIn(min = 100.dp)) { Text(stringResource(label)) }
             }
         },
     )
 }
 
 @Composable
-private fun UpdateStatusLine(live: State<com.remodex.mobile.update.AppUpdateState>, status: String) {
+private fun UpdateTransferLabel(live: State<AppUpdateState>) {
     val state = live.value
-    val label = if (state.phase == UpdatePhase.DOWNLOADING && state.total > 0) {
-        stringResource(R.string.app_update_progress, String.format(Locale.ROOT, "%.1f", state.bytes / 1048576.0),
-            String.format(Locale.ROOT, "%.1f", state.total / 1048576.0))
-    } else status
-    Text(label, style = MaterialTheme.typography.bodyMedium)
+    if (state.total <= 0) return
+    val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]
+    val format = remember(locale) { java.text.NumberFormat.getPercentInstance(locale) }
+    val fraction = (state.bytes.toDouble() / state.total).coerceIn(0.0, 1.0)
+    Text(stringResource(R.string.update_transfer_summary, format.format(fraction),
+        android.text.format.Formatter.formatShortFileSize(LocalContext.current, state.bytes),
+        android.text.format.Formatter.formatShortFileSize(LocalContext.current, state.total)),
+        style = MaterialTheme.typography.bodySmall)
 }
 
 internal fun updateTitle(phase: UpdatePhase, retry: UpdateRetry?): Int = when (phase) {

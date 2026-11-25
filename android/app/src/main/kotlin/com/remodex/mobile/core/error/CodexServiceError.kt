@@ -37,4 +37,9 @@ sealed class CodexServiceError(
     data object ThreadRemovedOnServer : CodexServiceError(
         "This conversation is no longer on the bridge. Choose another thread or start a new chat.",
     )
+
+    class MissingSendTargetAfterResume(threadId: String, failure: RpcFailure) :
+        CodexServiceError("thread/resume $threadId: ${failure.message}") {
+        init { initCause(failure) }
+    }
 }

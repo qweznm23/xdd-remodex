@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.R as LucideR
 import com.remodex.mobile.R
 import com.remodex.mobile.core.config.FeatureFlags
+import com.remodex.mobile.core.model.ThreadExecutionState
 import com.remodex.mobile.core.model.CodexAccessMode
 
 // The toolbar lives outside the NavHost. Only the matching mounted conversation supplies its controls.
@@ -53,7 +54,8 @@ internal fun SessionEnvironmentSections(
     worktreeHandoffEnabled: Boolean,
     isHandingOffWorktree: Boolean,
     onWorktreeHandoff: () -> Unit,
-    selectedAccessMode: CodexAccessMode,
+    execution: ThreadExecutionState?,
+    readError: String?,
     accessPickerEnabled: Boolean,
     accessError: String?,
     onSelectAccessMode: (CodexAccessMode) -> Unit,
@@ -66,11 +68,18 @@ internal fun SessionEnvironmentSections(
     onOpenBranchSelector: () -> Unit,
 ) = key(threadId) {
     val uriHandler = LocalUriHandler.current
-    val runtime = stringResource(if (FeatureFlags.gitIntegrationEnabled && isWorktreeProject)
-        R.string.composer_runtime_worktree else R.string.composer_runtime_local)
+    val unknown = stringResource(R.string.session_info_unreported)
+    val environments = execution?.environments
+    val local = stringResource(if (isWorktreeProject) R.string.composer_runtime_worktree else R.string.composer_runtime_local)
+    val runtime = when {
+        environments == null -> if (isWorktreeProject) stringResource(R.string.composer_runtime_worktree) else unknown
+        environments.isEmpty() -> stringResource(R.string.session_info_no_environment)
+        else -> environments.joinToString(" · ") { id -> if (id == "local") local else id.ifBlank { unknown } }
+    }
     val project = directory?.trimEnd('/', '\\')?.substringAfterLast('/')?.substringAfterLast('\\')?.takeIf { it.isNotBlank() }
     val location = project?.let { "$runtime · $it" } ?: runtime
     InfoDisclosure(stringResource(R.string.session_info_environment), location, LucideR.drawable.lucide_ic_laptop) {
+        readError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         val subdued = MaterialTheme.colorScheme.onSurfaceVariant
         if (!directory.isNullOrBlank()) {
             Text(stringResource(R.string.session_info_directory), style = MaterialTheme.typography.labelMedium, color = subdued)
@@ -103,7 +112,10 @@ internal fun SessionEnvironmentSections(
             }
         }
     }
-    InfoDisclosure(stringResource(R.string.turn_runtime_access_label), accessLabel(selectedAccessMode), LucideR.drawable.lucide_ic_shield) {
+    val selectedAccessMode = execution?.preset
+    val accessSummary = selectedAccessMode?.let { accessLabel(it) }
+        ?: listOfNotNull(execution?.profile, execution?.sandbox, execution?.approval).joinToString(" · ").ifBlank { unknown }
+    InfoDisclosure(stringResource(R.string.turn_runtime_access_label), accessSummary, LucideR.drawable.lucide_ic_shield) {
         accessError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         Column(Modifier.selectableGroup()) {
             CodexAccessMode.entries.forEach { mode ->

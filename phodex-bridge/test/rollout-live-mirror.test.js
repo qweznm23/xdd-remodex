@@ -107,6 +107,7 @@ test("desktop-origin active runs replay thinking and exec command activity on re
   }
   assert.equal(outbound[5].params.remodexRolloutBootstrapComplete, true);
   assert.equal(outbound[5].params.turnId, "turn-live");
+  assert.equal(outbound[0].params.startedAt, "2026-03-15T19:47:37.000Z");
   assert.equal(outbound[5].params.remodexRolloutBootstrapReplay, undefined);
 });
 
@@ -1474,6 +1475,7 @@ test("desktop-origin mirror promotes synthetic turn id when a real id appears", 
   const completed = outbound.find((message) => message.method === "turn/completed");
   assert.ok(completed);
   assert.equal(completed.params.turnId, "turn-real");
+  assert.equal(completed.params.completedAt, "2026-03-15T19:47:41.000Z");
 });
 
 test("desktop-origin live tail attaches pre-task user messages to the next turn", async (t) => {

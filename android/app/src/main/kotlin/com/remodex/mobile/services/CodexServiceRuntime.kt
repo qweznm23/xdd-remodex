@@ -1,6 +1,7 @@
 package com.remodex.mobile.services
 
 import com.remodex.mobile.core.error.CodexServiceError
+import com.remodex.mobile.core.model.ThreadExecutionState
 import com.remodex.mobile.core.model.CodexAccessMode
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CodexModelOption
@@ -153,4 +154,53 @@ internal fun CodexService.persistRuntimeSelection() {
             selectedServiceTier = _selectedServiceTier.value?.name,
         ),
     )
+}
+
+internal fun CodexService.observeExecution(
+    threadId: String,
+    fields: Map<String, JSONValue>,
+    before: ThreadExecutionState? = null,
+    compareSnapshot: Boolean = false,
+    generation: Long = connectionGeneration,
+) = synchronized(executionStates) {
+    if (generation != connectionGeneration) return@synchronized
+    val entries = executionStates.value
+    if (!compareSnapshot || entries[threadId] === before) {
+        val state = (entries[threadId] ?: ThreadExecutionState()).merge(fields)
+        val bounded = if (threadId !in entries && entries.size >= 512) entries - entries.keys.first() else entries
+        executionStates.value = bounded + (threadId to state)
+    }
+}
+
+internal suspend fun CodexService.refreshExecutionFromOwner(threadId: String, generation: Long = connectionGeneration) {
+    if (!sessionReady || generation != connectionGeneration) throw CodexServiceError.Disconnected
+    val before = executionStates.value[threadId]
+    val params = JSONValue.Obj(mapOf("threadId" to JSONValue.Str(threadId), "includeTurns" to JSONValue.Bool(false)))
+    val thread = sendRequestImpl("thread/read", params).result?.objectValue?.get("thread")?.objectValue
+        ?: throw CodexServiceError.InvalidResponse("thread/read missing thread")
+    if (thread["id"]?.stringValue != threadId) throw CodexServiceError.InvalidResponse("thread/read returned another thread")
+    if (generation == connectionGeneration && sessionReady) observeExecution(threadId, thread, before, compareSnapshot = true, generation = generation)
+}
+
+internal suspend fun CodexService.writeExecutionAccess(threadId: String, mode: CodexAccessMode) {
+    val generation = connectionGeneration
+    runtimeWriteMutex.withLock {
+        if (!sessionReady || generation != connectionGeneration) throw CodexServiceError.Disconnected
+        val before = executionStates.value[threadId]
+        val policy = mapOf(
+            "approvalPolicy" to JSONValue.Str(mode.approvalPolicyCandidates.first()),
+            "sandboxPolicy" to runtimeSandboxPolicyObject(mode),
+        )
+        val response = sendRequestImpl("thread/settings/update", JSONValue.Obj(policy + ("threadId" to JSONValue.Str(threadId))))
+        if (generation != connectionGeneration || !sessionReady) throw CodexServiceError.Disconnected
+        val confirmed = response.result?.objectValue?.get("threadSettings")?.objectValue
+        if (confirmed != null) {
+            observeExecution(threadId, confirmed, before, compareSnapshot = true, generation = generation)
+        } else if (executionStates.value[threadId] === before) {
+            // An acknowledgement can be empty. Only an owner snapshot can confirm the effective policy.
+            val unknown = mapOf("approvalPolicy" to JSONValue.Null, "sandboxPolicy" to JSONValue.Null, "activePermissionProfile" to JSONValue.Null)
+            observeExecution(threadId, unknown, before, compareSnapshot = true, generation = generation)
+            refreshExecutionFromOwner(threadId, generation)
+        }
+    }
 }

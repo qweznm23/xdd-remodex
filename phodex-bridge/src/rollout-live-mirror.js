@@ -999,6 +999,7 @@ function synthesizeNotificationsFromRolloutEntry(entry, state, { nowMs = Date.no
       };
       startedParams.turnId = turnId;
       startedParams.id = turnId;
+      startedParams.startedAt = payload.started_at ?? entry.timestamp;
       notifications.push(createNotification("turn/started", startedParams));
       notifications.push(...flushPendingUserMessageNotifications(state, turnId));
       notifications.push(...ensureThinkingNotifications(state));
@@ -1032,6 +1033,8 @@ function synthesizeNotificationsFromRolloutEntry(entry, state, { nowMs = Date.no
         threadId: state.threadId,
         turnId,
         id: turnId,
+        completedAt: payload.completed_at ?? entry.timestamp,
+        durationMs: payload.duration_ms,
       }));
       if (closesActiveRun) {
         resetRunState(state);
@@ -1054,6 +1057,7 @@ function synthesizeNotificationsFromRolloutEntry(entry, state, { nowMs = Date.no
         turnId,
         id: turnId,
         status: eventType === "error" ? "failed" : "aborted",
+        completedAt: payload.completed_at ?? entry.timestamp,
       };
       const errorMessage = readString(payload.message);
       if (eventType === "error" && errorMessage) {

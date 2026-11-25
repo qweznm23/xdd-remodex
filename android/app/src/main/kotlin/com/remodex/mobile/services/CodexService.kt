@@ -2,8 +2,11 @@ package com.remodex.mobile.services
 
 import com.remodex.mobile.core.config.FeatureFlags
 import android.content.Context
+import com.remodex.mobile.core.error.CodexServiceError
+import kotlinx.coroutines.isActive
 import android.util.Log
 import com.remodex.mobile.core.model.CodexBridgeUpdatePrompt
+import com.remodex.mobile.core.model.ThreadExecutionState
 import com.remodex.mobile.core.model.CodexAccessMode
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CommandExecutionDetails
@@ -43,7 +46,6 @@ import com.remodex.mobile.data.IncomingEventRouter
 import com.remodex.mobile.data.MessageTimelineStore
 import com.remodex.mobile.data.QueuedTurnDraft
 import com.remodex.mobile.data.QueuedTurnDraftPreview
-import com.remodex.mobile.data.TurnDraftQueueStore
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -256,6 +258,11 @@ class CodexService(
                 runtimeSelection.selectedAccessMode?.let { CodexAccessMode.valueOf(it) }
             }.getOrNull() ?: CodexAccessMode.onRequest,
         )
+    internal val executionStates = MutableStateFlow<Map<String, ThreadExecutionState>>(emptyMap())
+    override val threadExecutionStates = executionStates.asStateFlow()
+    override suspend fun refreshThreadExecution(threadId: String) = refreshExecutionFromOwner(threadId)
+    override suspend fun setThreadAccessMode(threadId: String, mode: CodexAccessMode) = writeExecutionAccess(threadId, mode)
+
     override val selectedAccessMode: StateFlow<CodexAccessMode> = _selectedAccessMode.asStateFlow()
 
     internal val _selectedServiceTier =
@@ -333,7 +340,15 @@ class CodexService(
     internal var suspendAutomaticMacScopedPersistence = false
     internal var isApplyingMacScopedState = false
 
-    internal val turnDraftQueueStore = TurnDraftQueueStore()
+    internal val hostQueue = RemoteTurnQueue(
+        QueueOutbox({ appContext.noBackupFilesDir.resolve("turn-queue") }, messagePersistence::messageHistoryKey),
+        { currentTrustedMacDeviceId.value }, { sessionReady }, { connectionGeneration }, { activeThreadId.value },
+        { method, fields, expected, epoch -> sendGuardedRequest(method, fields) {
+            if (!sessionReady || connectionGeneration != epoch || currentTrustedMacDeviceId.value != expected)
+                throw CodexServiceError.Disconnected
+        } },
+        { stage, failure -> Log.e("RemodexQueue", stage, failure) },
+    )
 
     internal val pendingApprovalQueue = linkedMapOf<String, PendingApprovalRequest>()
     internal val pendingApprovalResponders =
@@ -375,9 +390,9 @@ class CodexService(
         commandExecutionDetailsStore.detailsByItemId
 
     override val turnDraftQueueDepthByThread: StateFlow<Map<String, Int>> =
-        turnDraftQueueStore.depthByThread
+        hostQueue.depths
     override val turnDraftQueuePreviewByThread: StateFlow<Map<String, List<QueuedTurnDraftPreview>>> =
-        turnDraftQueueStore.previewByThread
+        hostQueue.previews
 
     internal val hydratedThreadIds = Collections.synchronizedSet(mutableSetOf<String>())
     internal val _threadHistoryPaginationByThread =
@@ -425,6 +440,20 @@ class CodexService(
             loadMacScopedDefaultsState(deviceId)
         }
         syncActiveThreadRuntimeSelection()
+        scope.launch {
+            combine(currentTrustedMacDeviceId, isSessionReady, activeThreadId) { _, _, _ -> Unit }
+                .collect { refreshTurnQueue() }
+        }
+        scope.launch {
+            for (signal in hostQueue.wake) {
+                try { hostQueue.sync() }
+                catch (cancel: kotlinx.coroutines.CancellationException) { if (!kotlinx.coroutines.currentCoroutineContext().isActive) throw cancel }
+                catch (failure: Exception) {
+                    Log.e("RemodexQueue", "restore queue", failure)
+                    activeThreadId.value?.let { hostQueue.errors.value += it to (failure.message ?: failure.javaClass.name) }
+                }
+            }
+        }
         scope.launch {
             currentTrustedMacDeviceId.collect { device ->
                 codexSidebar.reset(device)
@@ -510,7 +539,7 @@ class CodexService(
                             (activeTid == null && fb.contains(threadId))
                 }
             },
-            shouldAutoApproveRequests = { _selectedAccessMode.value == CodexAccessMode.fullAccess },
+            shouldAutoApproveRequests = { false },
             onApprovalRequest = { request, respond ->
                 enqueuePendingApprovalRequest(request, respond)
             },
@@ -795,35 +824,22 @@ class CodexService(
         skillMentions: List<CodexTurnSkillMention>,
         fileMentions: List<CodexTurnMention>,
         collaborationMode: CodexCollaborationModeKind?,
-        prepend: Boolean,
+        deviceId: String?,
+        requestId: String,
         composerText: String?,
         files: List<CodexFileAttachment>,
     ) = withContext(Dispatchers.IO) {
-        turnDraftQueueStore.enqueue(
-            threadId = threadId,
-            text = text,
-            attachments = attachments,
-            skillMentions = skillMentions,
-            fileMentions = fileMentions,
-            collaborationMode = collaborationMode,
-            prepend = prepend,
-            composerText = composerText,
-            files = files,
-        )
+        hostQueue.enqueue(requireNotNull(deviceId) { "No paired queue device" }, threadId,
+            QueuedTurnDraft(requestId, text, attachments, skillMentions,
+                fileMentions, collaborationMode, composerText, files))
     }
 
-    override suspend fun pollTurnDraft(threadId: String): QueuedTurnDraft? =
-        withContext(Dispatchers.IO) {
-            turnDraftQueueStore.poll(threadId)
-        }
-
-    override suspend fun removeQueuedTurnDraft(
-        threadId: String,
-        draftId: String,
-    ): QueuedTurnDraft? =
-        withContext(Dispatchers.IO) {
-            turnDraftQueueStore.remove(threadId, draftId)
-        }
+    override val queueErrors = hostQueue.errors.asStateFlow()
+    override fun refreshTurnQueue() { hostQueue.wake.trySend(Unit) }
+    override suspend fun removeQueuedTurnDraft(threadId: String, draftId: String, deviceId: String?, forEdit: Boolean) =
+        withContext(Dispatchers.IO) { hostQueue.take(requireNotNull(deviceId), threadId, draftId, forEdit) }
+    override suspend fun steerQueuedTurn(threadId: String, draftId: String, turnId: String, deviceId: String?) =
+        withContext(Dispatchers.IO) { hostQueue.steer(requireNotNull(deviceId), threadId, draftId, turnId) }
 
     override suspend fun startTurn(
         threadId: String,

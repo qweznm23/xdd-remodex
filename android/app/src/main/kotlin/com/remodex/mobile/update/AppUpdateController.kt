@@ -32,6 +32,7 @@ internal data class AppUpdateState(
     val launchInstaller: Boolean = false,
     val permissionDenied: Boolean = false,
 ) {
+    val newerRelease: AppUpdateManifest? get() = update?.takeIf { it.versionCode > BuildConfig.VERSION_CODE }
     val busy: Boolean get() = phase in setOf(UpdatePhase.CHECKING, UpdatePhase.CONNECTING, UpdatePhase.DOWNLOADING, UpdatePhase.CANCELLING, UpdatePhase.VERIFYING)
 }
 
@@ -121,10 +122,11 @@ internal class AppUpdateController(context: Context, private val client: OkHttpC
 
     fun check(url: String, saveSource: Boolean = false) {
         if (state.value.busy) return
+        val knownRelease = state.value.newerRelease.takeIf { url.trim() == lastCheckUrl }
         lastCheckUrl = url.trim()
         lastCheckStartedAt = SystemClock.elapsedRealtime()
         val previous = operation
-        mutableState.value = AppUpdateState(UpdatePhase.CHECKING)
+        mutableState.value = AppUpdateState(UpdatePhase.CHECKING, knownRelease)
         operation = scope.launch {
             previous?.cancelAndJoin()
             try {

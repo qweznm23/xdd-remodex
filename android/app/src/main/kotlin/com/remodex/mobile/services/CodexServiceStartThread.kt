@@ -79,6 +79,7 @@ internal suspend fun CodexService.createThreadInternal(
         }.getOrElse {
             throw CodexServiceError.InvalidResponse("thread/start thread decode failed").also { error -> error.initCause(it) }
         }
+    observeExecution(decoded.id, threadEl.map + resultObj.map, null, compareSnapshot = true, generation = generation)
     val patched = applyRequestedProjectPathForNewThread(decoded.copy(model = decoded.model ?: resolvedModel), normalizedCwd)
     CodexThread.normalizeProjectPath(normalizedCwd)?.let { projectPath ->
         beginAuthoritativeProjectPathTransition(patched.id, projectPath)

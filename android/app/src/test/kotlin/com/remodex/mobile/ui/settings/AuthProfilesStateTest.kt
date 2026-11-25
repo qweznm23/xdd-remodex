@@ -600,6 +600,61 @@ class AuthProfilesStateTest {
         assertTrue(state.failure!!.message!!.contains("superseded"))
     }
 
+    @Test fun restartProgressAndFinalAccountReadCanReconnectWithoutResendingSwitch() = runTest {
+        val closed = com.remodex.mobile.core.transport.RelaySocketClosed(4004, "bridge offline")
+        var phase = 0
+        var switches = 0
+        val state = AuthProfilesState(repo { method, _ -> when (method.substringAfterLast('/')) {
+            "switch" -> ack().also { switches++ }
+            "list" -> JSONValue.Obj(managedList().map + mapOf("supportsRestartProgress" to JSONValue.Bool(true),
+                "restartHistory" to JSONValue.Arr(emptyList())) + if (phase == 0) emptyMap() else mapOf(
+                "restartStatus" to JSONValue.Str("ready"), "operationId" to JSONValue.Str("switch-1"),
+                "selectedProfile" to JSONValue.Str("1")))
+            "restart-progress" -> if (phase == 1) throw closed else JSONValue.Obj(mapOf("restartHistory" to JSONValue.Arr(emptyList())))
+            "status" -> if (phase == 2) throw closed else if (phase == 0) managedStatus() else
+                JSONValue.Obj(managedStatus().map + ("profiles" to JSONValue.Arr(listOf(
+                    JSONValue.Obj(profile.map + ("active" to JSONValue.Bool(true)))))))
+            else -> error(method)
+        } })
+        state.refresh()
+        state.switch(state.profiles.single())
+        for (step in 1..2) {
+            phase = step
+            state.pollRestart()
+            assertNull(state.failure)
+            assertNull(state.result("restart-progress")?.error)
+            assertNull(state.result("list")?.error)
+            assertTrue(state.switching)
+        }
+        phase = 3
+        state.pollRestart()
+        assertNull(state.failure)
+        assertFalse(state.switching)
+        assertEquals("1", state.currentLibraryProfiles.single().id)
+        assertEquals(1, switches)
+    }
+
+    @Test fun aRejectedSwitchAndAPolicyCloseDuringVerificationRemainVisible() = runTest {
+        val unavailable = com.remodex.mobile.core.transport.RelaySocketClosed(4004, "bridge offline")
+        val rejected = com.remodex.mobile.core.transport.RelaySocketClosed(1008, "policy")
+        var rejectSubmit = true
+        val state = AuthProfilesState(repo { method, _ -> when {
+            method.endsWith("switch") -> if (rejectSubmit) throw unavailable else ack()
+            !rejectSubmit -> throw rejected
+            else -> list()
+        } })
+        state.refresh()
+        val profile = state.profiles.single()
+        state.switch(profile)
+        assertSame(unavailable, state.result("switch:1")?.error)
+        assertFalse(state.switching)
+        rejectSubmit = false
+        state.switch(profile)
+        state.refresh()
+        assertFalse(state.switching)
+        assertSame(rejected, state.result("switch:1")?.error)
+    }
+
     @Test fun disconnectedAndBusyWaitButDeadlineAndRealVerificationFailureRemainVisible() = runTest {
         var response = list()
         var failure: Exception? = null
@@ -611,7 +666,9 @@ class AuthProfilesStateTest {
         failure = com.remodex.mobile.core.transport.RelaySocketClosed(4004, "temporarily unavailable")
         state.refresh()
         assertTrue(state.switching)
-        assertEquals(4004, (state.failure as com.remodex.mobile.core.transport.RelaySocketClosed).code)
+        assertNull(state.failure)
+        assertNull(state.result("switch:1")?.error)
+        assertTrue(state.sawSwitchDisconnect)
         failure = CodexServiceError.Disconnected
         state.refresh()
         assertTrue(state.switching)
@@ -621,6 +678,7 @@ class AuthProfilesStateTest {
         state.checkSwitchDeadline(state.switchDeadline!!)
         assertEquals("verification_failed", state.restartStatus)
         assertTrue(state.failure is java.util.concurrent.TimeoutException)
+        assertSame(failure, state.failure?.cause)
         failure = null
         response = switchList("verification_failed")
         state.refresh()

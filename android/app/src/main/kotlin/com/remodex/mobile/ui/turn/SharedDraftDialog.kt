@@ -17,11 +17,46 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.remodex.mobile.LocalChooseShareThread
+import com.remodex.mobile.LocalShareInbox
+import com.remodex.mobile.data.CodexRepository
 import com.remodex.mobile.R
 import com.remodex.mobile.SharedContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+@Composable
+internal fun IncomingDraftShare(
+    repository: CodexRepository, deviceId: String?, targetId: String, title: String,
+    attachments: ComposerAttachmentActions, enabled: Boolean, isCurrentTarget: () -> Boolean = { true },
+    appendText: (String) -> Unit,
+) {
+    val inbox = LocalShareInbox.current ?: return
+    val item = inbox.first ?: return
+    if (!LocalConversationVisible.current) return
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val stage by lifecycle.currentStateFlow.collectAsState()
+    if (stage != Lifecycle.State.RESUMED) return
+
+    key(item.id, deviceId, targetId) {
+        val devices by repository.trustedDevices.collectAsStateWithLifecycle()
+        SharedDraftDialog(item, title, attachments.remainingSlots(),
+            deviceName = devices.firstOrNull { it.macDeviceId == deviceId }?.displayName,
+            enabled = enabled, onCancel = { inbox.take(item.id) }, onChooseThread = LocalChooseShareThread.current,
+            onAdd = { selected ->
+                if (enabled && lifecycle.currentState == Lifecycle.State.RESUMED && isCurrentTarget() &&
+                    repository.isSessionReady.value && repository.currentTrustedMacDeviceId.value == deviceId &&
+                    selected.size <= attachments.remainingSlots() && inbox.take(item.id) != null) {
+                    if (item.text.isNotBlank()) appendText(item.text)
+                    selected.forEach { attachments.addShared(Uri.parse(it), item.mime) }
+                }
+            })
+    }
+}
 
 @Composable
 internal fun SharedDraftDialog(item: SharedContent, threadTitle: String, slots: Int, deviceName: String?, enabled: Boolean,

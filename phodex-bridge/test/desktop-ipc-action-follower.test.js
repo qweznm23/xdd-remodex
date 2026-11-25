@@ -8591,3 +8591,13 @@ for (const method of ["turn/start", "turn/steer"]) {
     assert.deepEqual(input, original);
   });
 }
+
+test("metadata-only desktop pages retain timing and cursors without cloning item bodies", () => {
+  const turns = ["older", "newer"].map(id => ({ id, startedAt: 1700000000, durationMs: 1250, items: [{ id: "item" }] }));
+  const query = { limit: 1, itemsView: "notLoaded" };
+  const first = buildDesktopTurnsListResult(turns, query);
+  const older = buildDesktopTurnsListResult(turns, { ...query, cursor: first.nextCursor });
+  assert.deepEqual(first.data, [{ ...turns[1], itemsView: "notLoaded", items: [] }]);
+  assert.equal(older.data[0].id, "older");
+  assert.deepEqual(turns[1].items, [{ id: "item" }]);
+});

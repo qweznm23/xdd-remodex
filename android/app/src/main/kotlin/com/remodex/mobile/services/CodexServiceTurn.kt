@@ -31,6 +31,7 @@ internal suspend fun CodexService.startTurnInternal(
     fileMentions: List<CodexTurnMention> = emptyList(),
     collaborationMode: CodexCollaborationModeKind? = null,
 ) {
+    val generation = connectionGeneration
     if (!sessionReady) throw CodexServiceError.Disconnected
     if (supportsSettingsSync) runtimeWriteMutex.withLock { Unit } // Apply any preceding picker acknowledgement before reading the selection.
     val targetThreadId = threadId.trim()
@@ -48,8 +49,8 @@ internal suspend fun CodexService.startTurnInternal(
         ensureThreadResumedInternal(
             threadId = targetThreadId,
             force = false,
-            preferredProjectPath = row?.gitWorkingDirectory,
             modelIdentifierOverride = row?.model,
+            expectedGeneration = generation,
         )
     } catch (e: Exception) {
         if (!shouldAllowProjectRebindWithoutResume(e)) throw e
@@ -82,7 +83,9 @@ internal suspend fun CodexService.startTurnInternal(
                     effortWireMode = effortWireMode,
                 )
             try {
-                val response = sendRequestWithSandboxAndApprovalFallback("turn/start", params)
+                val response = sendGuardedRequest("turn/start", params) {
+                    if (!sessionReady || connectionGeneration != generation) throw CodexServiceError.Disconnected
+                }
                 if (didDowngradePlanModeForRuntime) {
                     messageTimelineStore.appendSystemLine(
                         threadId = threadId,
@@ -135,11 +138,18 @@ internal suspend fun CodexService.startTurnInternal(
 
     try {
         noteProtectedRunningFallback(targetThreadId, true)
-        val response = sendTurnStartWithImageFallback(targetThreadId)
+        val response = startWithThreadRecovery(targetThreadId, resume = {
+            if (connectionGeneration != generation) throw CodexServiceError.Disconnected
+            resumedThreadIds.remove(targetThreadId)
+            ensureThreadResumedInternal(targetThreadId, force = true, expectedGeneration = generation)
+        }) { sendTurnStartWithImageFallback(targetThreadId) }
+        if (connectionGeneration != generation) throw CodexServiceError.Disconnected
         markTurnStartAccepted(targetThreadId, pendingId, response)
         scheduleAutomaticThreadTitleGenerationIfNeeded(automaticTitleSeed, targetThreadId, readyAttachments)
     } catch (e: Throwable) {
-        noteTurnFinished(targetThreadId)
+        if (generation != connectionGeneration) throw e
+        // Roll back the optimistic indication. A desktop turn may have started during the request.
+        noteProtectedRunningFallback(targetThreadId, false)
         runCatching {
             messageTimelineStore.markUserMessageOutcome(
                 threadId = targetThreadId,
@@ -149,6 +159,41 @@ internal suspend fun CodexService.startTurnInternal(
             )
         }.exceptionOrNull()?.let(e::addSuppressed)
         throw e
+    }
+}
+
+/** A durable thread can outlive its runtime subscription. Only replay a rejected start. */
+internal suspend fun startWithThreadRecovery(
+    threadId: String,
+    resume: suspend () -> Unit,
+    start: suspend () -> RPCMessage,
+): RPCMessage {
+    val rejection = try {
+        return start()
+    } catch (error: CodexServiceError.RpcFailure) {
+        val rpc = error.rpcError
+        if (rpc.code != -32600 || (rpc.message != "thread not found: $threadId" &&
+                rpc.message != "thread not loaded: $threadId")) throw error
+        error
+    }
+    try {
+        resume()
+    } catch (cancel: kotlinx.coroutines.CancellationException) {
+        throw cancel
+    } catch (failure: Exception) {
+        if (failure is CodexServiceError.RpcFailure && failure.rpcError.code == -32600 &&
+            failure.rpcError.message in setOf("no rollout found for thread id $threadId",
+                "thread not found: $threadId")) {
+            throw CodexServiceError.MissingSendTargetAfterResume(threadId, failure).apply { addSuppressed(rejection) }
+        }
+        throw IllegalStateException("thread/resume: ${failure.message}", failure).apply { addSuppressed(rejection) }
+    }
+    try {
+        return start()
+    } catch (cancel: kotlinx.coroutines.CancellationException) {
+        throw cancel
+    } catch (failure: Exception) {
+        throw IllegalStateException("turn/start after thread/resume: ${failure.message}", failure).apply { addSuppressed(rejection) }
     }
 }
 

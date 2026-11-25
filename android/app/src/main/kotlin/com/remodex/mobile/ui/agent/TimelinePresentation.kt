@@ -22,6 +22,7 @@ internal data class TimelinePresentation(
     val statusText: TimelineActivityLabel? = null,
     val activeSummary: List<String> = emptyList(),
 ) {
+    val elapsedFooterKeys = completedTimingFooters(items)
     val hasActivityRow: Boolean get() = statusText != null
 
     fun lastListIndex(headerCount: Int): Int =

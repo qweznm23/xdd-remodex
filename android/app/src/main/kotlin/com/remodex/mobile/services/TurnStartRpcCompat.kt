@@ -103,8 +103,9 @@ internal fun shouldRetryTurnStartWithoutServiceTier(error: Throwable): Boolean {
 internal suspend fun CodexService.sendRequestWithApprovalPolicyFallback(
     method: String,
     baseParams: JSONValue.Obj,
+    accessMode: CodexAccessMode,
 ): RPCMessage {
-    val policies = _selectedAccessMode.value.approvalPolicyCandidates
+    val policies = accessMode.approvalPolicyCandidates
     var lastError: Throwable? = null
     for ((index, policy) in policies.withIndex()) {
         val params = mergeTurnStartParams(baseParams, mapOf("approvalPolicy" to JSONValue.Str(policy)))
@@ -127,30 +128,19 @@ internal suspend fun CodexService.sendRequestWithSandboxAndApprovalFallback(
     baseParams: JSONValue.Obj,
 ): RPCMessage {
     val accessMode = _selectedAccessMode.value
-
-    val withSandboxPolicy =
-        mergeTurnStartParams(
-            baseParams,
-            mapOf("sandboxPolicy" to runtimeSandboxPolicyObject(accessMode)),
-        )
-    try {
-        return sendRequestWithApprovalPolicyFallback(method, withSandboxPolicy)
-    } catch (e: Throwable) {
-        if (!shouldFallbackFromSandboxPolicy(e)) throw e
+    // thread/start accepts sandbox. Some servers silently ignore unknown sandboxPolicy.
+    val candidates = listOf(
+        "sandbox" to JSONValue.Str(accessMode.sandboxLegacyValue),
+        "sandboxPolicy" to runtimeSandboxPolicyObject(accessMode),
+    )
+    for ((key, value) in candidates) {
+        try {
+            return sendRequestWithApprovalPolicyFallback(method, mergeTurnStartParams(baseParams, mapOf(key to value)), accessMode)
+        } catch (e: CodexServiceError.RpcFailure) {
+            if (!shouldFallbackFromSandboxPolicy(e)) throw e
+        }
     }
-
-    val withSandboxLegacy =
-        mergeTurnStartParams(
-            baseParams,
-            mapOf("sandbox" to JSONValue.Str(accessMode.sandboxLegacyValue)),
-        )
-    try {
-        return sendRequestWithApprovalPolicyFallback(method, withSandboxLegacy)
-    } catch (e: Throwable) {
-        if (!shouldFallbackFromSandboxPolicy(e)) throw e
-    }
-
-    return sendRequestWithApprovalPolicyFallback(method, baseParams)
+    return sendRequestWithApprovalPolicyFallback(method, baseParams, accessMode)
 }
 
 internal fun shouldRetryTurnStartEffortKeyAlias(

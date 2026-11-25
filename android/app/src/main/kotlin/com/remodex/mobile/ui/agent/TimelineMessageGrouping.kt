@@ -393,3 +393,24 @@ private fun CodexMessage.isCollapsibleAssistantWork(): Boolean =
 
 private fun TimelineListItem.isAssistantWorkItem(): Boolean =
     timelineMessages().any { it.isCollapsibleAssistantWork() }
+
+/** For a plain reply, place the duration once after its final chunk. Groups carry their own label. */
+internal fun completedTimingFooters(items: List<TimelineListItem>): Map<String, String> {
+    val grouped = mutableSetOf<String>()
+    val lastReply = mutableMapOf<String, String>()
+    for (item in items) {
+        if (item is TimelineListItem.AssistantWorkGroup) {
+            item.messages.firstNotNullOfOrNull { it.turnId }?.let(grouped::add)
+            continue
+        }
+        val message = when (item) {
+            is TimelineListItem.Single -> item.message
+            is TimelineListItem.MessageChunk -> item.message
+            else -> continue
+        }
+        if (message.role == CodexMessageRole.assistant && !message.isStreaming && message.turnId != null) {
+            lastReply[message.turnId] = item.stableKey
+        }
+    }
+    return lastReply.filterKeys { it !in grouped }.entries.associate { (turn, key) -> key to turn }
+}

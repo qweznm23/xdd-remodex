@@ -12,6 +12,8 @@ const {
   sanitizeUserInputEntries: sanitizeSharedUserInputEntries,
 } = require("./desktop-ipc-shared");
 
+const { desktopExecution } = require("./thread-execution");
+
 const DESKTOP_IPC_ACTION_SOURCE = "desktop-ipc-action-follower";
 const MIRROR_TAG = {
   remodexDesktopMirror: true,
@@ -196,6 +198,7 @@ function projectConversationState(threadId, rawState, {
     createdAt: normalizeTimestamp(rawState?.createdAt ?? rawState?.created_at) || now(),
     updatedAt: normalizeTimestamp(rawState?.updatedAt ?? rawState?.updated_at) || now(),
     cwd: readString(rawState?.cwd) || readString(rawState?.current_working_directory) || "",
+    remodexExecution: desktopExecution(rawState),
     path: readString(rawState?.rolloutPath) || readString(rawState?.rollout_path) || null,
     modelProvider: readString(rawState?.modelProvider) || readString(rawState?.model_provider) || "",
     model: readString(runtimeSettings?.model)
@@ -326,7 +329,7 @@ function projectTurn(threadId, rawTurn, index, { itemCache = null } = {}) {
       ?? rawTurn.turnStartedAtMs
       ?? rawTurn.turn_started_at_ms
       ?? null,
-    completedAt: rawTurn.completedAt ?? rawTurn.completed_at ?? null,
+    completedAt: rawTurn.completedAt ?? rawTurn.completed_at ?? rawTurn.turnCompletedAtMs ?? rawTurn.turn_completed_at_ms ?? null,
     durationMs: rawTurn.durationMs ?? rawTurn.duration_ms ?? null,
     items,
   };
@@ -407,6 +410,19 @@ function diffThreadMetadata(previousThread, nextThread) {
   if (nextRuntimeRevision > previousRuntimeRevision) {
     notifications.push(threadStartedNotification(nextThread));
   }
+  const previousExecution = { ...previousThread.remodexExecution, cwd: previousThread.cwd };
+  const nextExecution = { ...nextThread.remodexExecution, cwd: nextThread.cwd };
+  const execution = {};
+  for (const key of ["approvalPolicy", "sandboxPolicy", "activePermissionProfile", "environments", "cwd"]) {
+    if (JSON.stringify(previousExecution[key]) !== JSON.stringify(nextExecution[key])) {
+      execution[key] = nextExecution[key] ?? null;
+    }
+  }
+  if (Object.keys(execution).length) notifications.push(tagNotification({
+    method: "remodex/execution/updated",
+    params: { threadId: nextThread.id, threadSettings: execution },
+  }));
+
   const previousTitle = readString(previousThread.title) || readString(previousThread.name);
   const nextTitle = readString(nextThread.title) || readString(nextThread.name);
   if (nextTitle && previousTitle !== nextTitle) {

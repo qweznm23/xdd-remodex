@@ -4,6 +4,7 @@ import com.remodex.mobile.core.model.CodexBridgeUpdatePrompt
 import com.remodex.mobile.core.model.CodexMessage
 import com.remodex.mobile.core.model.CodexImageAttachment
 import com.remodex.mobile.core.model.CodexFileAttachment
+import com.remodex.mobile.core.model.ThreadExecutionState
 import com.remodex.mobile.core.model.CodexAccessMode
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CommandExecutionDetails
@@ -78,7 +79,7 @@ interface CodexRepository {
     /** Live structured command metadata keyed by command item id; timeline text remains authoritative history. */
     val commandExecutionDetailsByItemId: StateFlow<Map<String, CommandExecutionDetails>>
 
-    /** Local queued draft count per thread (J22 foundation). */
+    /** Includes pending local submissions and the paired computer’s queue. */
     val turnDraftQueueDepthByThread: StateFlow<Map<String, Int>>
 
     val turnDraftQueuePreviewByThread: StateFlow<Map<String, List<QueuedTurnDraftPreview>>>
@@ -125,6 +126,10 @@ interface CodexRepository {
     val selectedModelId: StateFlow<String?>
 
     val selectedReasoningEffort: StateFlow<String?>
+
+    val threadExecutionStates: StateFlow<Map<String, ThreadExecutionState>>
+    suspend fun refreshThreadExecution(threadId: String)
+    suspend fun setThreadAccessMode(threadId: String, mode: CodexAccessMode)
 
     val selectedAccessMode: StateFlow<CodexAccessMode>
 
@@ -366,7 +371,7 @@ interface CodexRepository {
         baseBranch: String? = null,
     ): Unit = throw UnsupportedOperationException("review/start is not implemented by this repository")
 
-    /** Queue a local draft when a thread is already running (J22 foundation). */
+    /** Durably stage the message for submission to the paired host. */
     suspend fun enqueueTurnDraft(
         threadId: String,
         text: String,
@@ -374,16 +379,22 @@ interface CodexRepository {
         skillMentions: List<CodexTurnSkillMention> = emptyList(),
         fileMentions: List<CodexTurnMention> = emptyList(),
         collaborationMode: CodexCollaborationModeKind? = null,
-        prepend: Boolean = false,
+        deviceId: String? = currentTrustedMacDeviceId.value,
+        requestId: String = java.util.UUID.randomUUID().toString(),
         composerText: String? = null,
         files: List<CodexFileAttachment> = emptyList(),
     ) = Unit
 
-    /** Pops the next queued local draft for [threadId], or null if empty. */
-    suspend fun pollTurnDraft(threadId: String): QueuedTurnDraft? = null
+    val queueErrors: StateFlow<Map<String,String>> get() = EmptyQueueErrors
+    fun refreshTurnQueue() {}
+    suspend fun steerQueuedTurn(threadId: String, draftId: String, turnId: String, deviceId: String?) {
+        throw UnsupportedOperationException("Remote queue steering unavailable")
+    }
     suspend fun removeQueuedTurnDraft(
         threadId: String,
         draftId: String,
+        deviceId: String? = currentTrustedMacDeviceId.value,
+        forEdit: Boolean = false,
     ): QueuedTurnDraft? = null
 
     /** Interrompe il turno attivo (`turn/interrupt`). [turnId] opzionale se già noto. */
@@ -425,3 +436,5 @@ private val EmptyQuestionThreads = kotlinx.coroutines.flow.MutableStateFlow<Set<
 private val EmptyLoadingHistoryThreads = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
 
 private val EmptyConversationQuestions = kotlinx.coroutines.flow.MutableStateFlow<Map<String, List<com.remodex.mobile.core.model.CodexStructuredUserInputRequest>>>(emptyMap())
+
+private val EmptyQueueErrors = kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String,String>())

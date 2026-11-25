@@ -77,6 +77,7 @@ import com.remodex.mobile.AppContainer
 import com.remodex.mobile.R
 import com.remodex.mobile.BuildConfig
 import com.remodex.mobile.core.model.AIChangeSet
+import com.remodex.mobile.core.model.projectIconSystemNameFor
 import com.remodex.mobile.core.model.CodexAccessMode
 import com.remodex.mobile.core.model.CodexCollaborationModeKind
 import com.remodex.mobile.core.model.CodexFileAttachment
@@ -95,7 +96,6 @@ import com.remodex.mobile.core.transport.ConnectionState
 import com.remodex.mobile.data.CodexRepository
 import com.remodex.mobile.data.GitBranchDisplayMapper
 import com.remodex.mobile.data.GitBranchPickerRules
-import com.remodex.mobile.data.QueuedTurnDraftPreview
 import com.remodex.mobile.data.TurnWorktreePathRouting
 import com.remodex.mobile.data.WorktreeFlowCoordinator
 import com.remodex.mobile.data.WorktreeFlowHandoffOutcome
@@ -156,16 +156,6 @@ private fun parsePetSlashCommand(text: String): PetSlashCommand? {
 private fun normalizeManualPetId(value: String): String =
     if (value.contains(":")) value else "custom:$value"
 
-private data class PendingSteerDraft(
-    val id: String = UUID.randomUUID().toString(),
-    val draftText: String,
-    val wireText: String,
-    val attachments: List<CodexImageAttachment>,
-    val skillMentions: List<com.remodex.mobile.core.model.CodexTurnSkillMention>,
-    val fileMentions: List<com.remodex.mobile.core.model.CodexTurnMention>,
-    val mentionChips: List<ComposerMentionChipPayload>,
-    val composerAttachments: List<TurnComposerAttachment>,
-)
 /** Shaves a few dp off IME bottom padding so the composer sits slightly closer to the keyboard. */
 
 /**
@@ -220,6 +210,7 @@ fun TurnConversationPane(
     val connectionState by repository.connectionState.collectAsStateWithLifecycle()
     val runningTurnByThread by repository.runningTurnIdByThread.collectAsStateWithLifecycle()
     val protectedRunningFallback by repository.protectedRunningFallbackThreadIds.collectAsStateWithLifecycle()
+    val queueErrors by repository.queueErrors.collectAsStateWithLifecycle()
     val queuedDraftDepthByThread by repository.turnDraftQueueDepthByThread.collectAsStateWithLifecycle()
     val queuedDraftPreviewByThread by repository.turnDraftQueuePreviewByThread.collectAsStateWithLifecycle()
     val currentTrustedMacDeviceId by repository.currentTrustedMacDeviceId.collectAsStateWithLifecycle()
@@ -244,8 +235,6 @@ fun TurnConversationPane(
     var composerAttachments by attachmentState
 
     var mentionChips by remember(threadId) { mutableStateOf<List<ComposerMentionChipPayload>>(emptyList()) }
-    var pendingSteerDrafts by remember(threadId) { mutableStateOf<List<PendingSteerDraft>>(emptyList()) }
-    var sendingSteerDraftId by remember(threadId) { mutableStateOf<String?>(null) }
     var editFocusId by remember(threadId) { mutableStateOf<String?>(null) }
     var availableSkills by remember(threadId) { mutableStateOf<List<SkillAutocompleteSuggestion>>(emptyList()) }
     var availablePlugins by remember(threadId) { mutableStateOf<List<CodexPluginMetadata>>(emptyList()) }
@@ -365,7 +354,7 @@ fun TurnConversationPane(
         }
     val canRestoreQueuedDrafts =
         remember(isThreadRunning, sending, hasComposerDraftContent) {
-            !isThreadRunning && !sending && !hasComposerDraftContent
+            !sending && !hasComposerDraftContent
         }
     val branchPickerEnabled =
         remember(
@@ -398,7 +387,7 @@ fun TurnConversationPane(
 
     val attachmentOverflowMessage = stringResource(R.string.turn_attachment_overflow, MAX_COMPOSER_ATTACHMENTS)
     val attachmentFileBinarySummary = stringResource(R.string.turn_attachment_file_binary_summary)
-    val queuedDraftSendFailedMessage = stringResource(R.string.turn_queue_send_failed)
+    val queuePlanHint = stringResource(R.string.queue_plan_hint)
     val queuedDraftRestoreBlockedMessage = stringResource(R.string.turn_queue_restore_requires_empty)
     val planApplyRequiresEmptyMessage = stringResource(R.string.turn_plan_apply_requires_empty)
     val reviewRunningUnavailableMessage = stringResource(R.string.turn_review_unavailable_running)
@@ -535,26 +524,11 @@ fun TurnConversationPane(
             onError = { lastError = it })
     }
 
-    val shareInbox = com.remodex.mobile.LocalShareInbox.current
-    val sharedContent = shareInbox?.first
-    if (sharedContent != null && LocalConversationVisible.current && ready &&
-        loadedDraftKey == "${currentTrustedMacDeviceId.orEmpty()}|$threadId") {
-        key(sharedContent.id, currentTrustedMacDeviceId, threadId) {
-            val devices by repository.trustedDevices.collectAsStateWithLifecycle()
-            SharedDraftDialog(sharedContent, activeThread?.displayTitle ?: threadId, attachmentActions.remainingSlots(),
-                deviceName = devices.firstOrNull { it.macDeviceId == currentTrustedMacDeviceId }?.displayName,
-                enabled = !sending,
-                onCancel = { shareInbox.take(sharedContent.id) },
-                onChooseThread = com.remodex.mobile.LocalChooseShareThread.current,
-                onAdd = { selected ->
-                    if (repository.activeThreadId.value == threadId && repository.isSessionReady.value &&
-                        repository.currentTrustedMacDeviceId.value == currentTrustedMacDeviceId &&
-                        selected.size <= attachmentActions.remainingSlots() && shareInbox.take(sharedContent.id) != null) {
-                        if (sharedContent.text.isNotBlank()) draft = if (draft.isEmpty()) sharedContent.text else draft + "\n" + sharedContent.text
-                        selected.forEach { uri -> attachmentActions.addShared(android.net.Uri.parse(uri), sharedContent.mime) }
-                    }
-                })
-        }
+    if (ready && loadedDraftKey == "${currentTrustedMacDeviceId.orEmpty()}|$threadId") {
+        IncomingDraftShare(repository, currentTrustedMacDeviceId, threadId, activeThread?.displayTitle ?: threadId,
+            attachmentActions, enabled = !sending && reviewTarget == null,
+            isCurrentTarget = { repository.activeThreadId.value == threadId },
+            appendText = { draft = if (draft.isEmpty()) it else draft + "\n" + it })
     }
 
     if (showGoal) ThreadGoalDialog(repository, threadId, onUnsupported = { goalsSupported = false }) { showGoal = false }
@@ -808,6 +782,9 @@ fun TurnConversationPane(
         }
     val presentation = rememberTimelinePresentation(threadId, visibleMessages, isThreadRunning, activeTurnId, allMessages = messages)
     val historyRevision = historyPaginationState?.initialLoadRevision ?: 0L
+    val activityTimings = com.remodex.mobile.ui.agent.rememberActivityTimings(
+        repository, currentTrustedMacDeviceId, threadId, ready, activeTurnId, presentation.messages, historyRevision,
+    )
     val receivedHistory = remember(threadId, currentTrustedMacDeviceId, historyRevision) {
         repository.messagesByThread.value[threadId].orEmpty()
     }
@@ -1086,9 +1063,10 @@ fun TurnConversationPane(
         remember(mentionChips) {
             com.remodex.mobile.ui.turn.mentionChipsToFileMentions(mentionChips)
         }
+    val canStageOffline = !ready && currentTrustedMacDeviceId != null && reviewTarget == null && missingDraft == null
     val composerModel =
         remember(
-            ready,
+            ready, canStageOffline,
             sending,
             draftWithMentions,
             composerAttachments,
@@ -1114,7 +1092,7 @@ fun TurnConversationPane(
                     TurnComposerEvent.SetThreadRunning(isThreadRunning),
 
                 )
-                .fold(TurnComposerModel()) { state, evt ->
+                .fold(TurnComposerModel(allowOfflineQueue = canStageOffline)) { state, evt ->
                     TurnComposerReducer.reduce(state, evt)
                 }
         }
@@ -1128,7 +1106,6 @@ fun TurnConversationPane(
         skillMentions: List<com.remodex.mobile.core.model.CodexTurnSkillMention>,
         fileMentions: List<com.remodex.mobile.core.model.CodexTurnMention>,
         collaborationMode: CodexCollaborationModeKind?,
-        fromQueue: Boolean,
         requestId: String = UUID.randomUUID().toString(),
         attempt: Int = 1,
         composerText: String? = null,
@@ -1142,7 +1119,11 @@ fun TurnConversationPane(
             skillMentions.isEmpty() &&
             fileMentions.isEmpty()
         ) return
-        if (!fromQueue && isThreadRunning) {
+        if (isThreadRunning || !ready) {
+            if (collaborationMode == CodexCollaborationModeKind.plan) {
+                lastError = queuePlanHint
+                return
+            }
             sending = true
             scope.launch {
                 runCatching {
@@ -1155,6 +1136,7 @@ fun TurnConversationPane(
                         collaborationMode = collaborationMode,
                         composerText = composerText,
                         files = files,
+                        deviceId = currentTrustedMacDeviceId, requestId = requestId,
                     )
                 }.onSuccess {
                     AppContainer.betaEngagementRepository.recordMissionEvent(
@@ -1219,14 +1201,10 @@ fun TurnConversationPane(
                         )
                     }
                     sending = false
-                    if (!fromQueue) {
-                        draft = ""
-                        composerAttachments = emptyList()
-                        mentionChips = emptyList()
-                        if (collaborationMode == CodexCollaborationModeKind.plan) {
-                            setPlanModeEnabled(false)
-                        }
-                    }
+                    draft = ""
+                    composerAttachments = emptyList()
+                    mentionChips = emptyList()
+                    if (collaborationMode == CodexCollaborationModeKind.plan) setPlanModeEnabled(false)
                 }
                 .onFailure { e ->
                     sending = false
@@ -1238,120 +1216,11 @@ fun TurnConversationPane(
                             cwd = activeThread?.gitWorkingDirectory, model = activeThread?.model,
                             composerText = composerText, files = files)
                         retainMissingDraft(e, saved)
-                        if (fromQueue && draft.isBlank()) restoreUnsentDraft(saved)
                         return@onFailure
                     }
-                    if (fromQueue) {
-                        runCatching {
-                            repository.enqueueTurnDraft(
-                                threadId = threadId,
-                                text = text,
-                                attachments = attachments,
-                                skillMentions = skillMentions,
-                                fileMentions = fileMentions,
-                                collaborationMode = collaborationMode,
-                                prepend = true,
-                                composerText = composerText,
-                                files = files,
-                            )
-                        }.onFailure { restoreFailure ->
-                            if (restoreFailure is CancellationException) {
-                                restoreFailure.addSuppressed(e)
-                                throw restoreFailure
-                            }
-                            e.addSuppressed(restoreFailure)
-                            Log.e("RemodexSend", "Failed to restore queued message stage=enqueue-after-send-failure thread=$threadId request=$requestId attempt=$attempt", e)
-                        }
-                        lastError = "${queuedDraftSendFailedMessage}: ${com.remodex.mobile.ui.turn.formatTurnSendError(e)}"
-                    } else {
-                        lastError = com.remodex.mobile.ui.turn.formatTurnSendError(e)
-                        retryFailedSend = FailedTurnSend(text, attachments, skillMentions, fileMentions, collaborationMode, requestId, attempt, composerText, files)
-                    }
-                }
-        }
-    }
-
-    fun stageCurrentDraftForSteering() {
-        val draftText =
-            com.remodex.mobile.ui.turn.appendFileAttachmentsToDraft(
-                baseText = draftWithMentions,
-                files = readyComposerFileAttachments,
-                binarySummary = attachmentFileBinarySummary,
-            )
-        if (draftText.trim().isEmpty() &&
-            readyComposerImageAttachments.isEmpty() &&
-            structuredSkillMentions.isEmpty() &&
-            structuredFileMentions.isEmpty()
-        ) return
-        val next =
-            PendingSteerDraft(
-                draftText = draft,
-                wireText = draftText,
-                attachments = readyComposerImageAttachments,
-                skillMentions = structuredSkillMentions,
-                fileMentions = structuredFileMentions,
-                mentionChips = mentionChips,
-                composerAttachments = composerAttachments,
-            )
-        pendingSteerDrafts = pendingSteerDrafts + next
-        draft = ""
-        composerAttachments = emptyList()
-        mentionChips = emptyList()
-    }
-
-    fun sendPendingSteerDraft(pending: PendingSteerDraft) {
-        if (sending || sendingSteerDraftId != null || pendingSteerDrafts.none { it.id == pending.id }) return
-        val expectedTurnId = activeTurnId
-        val sendAsSteer = isThreadRunning && expectedTurnId != null
-        sendingSteerDraftId = pending.id
-        if (!sendAsSteer) sending = true
-        scope.launch {
-            try {
-                if (sendAsSteer) {
-                    repository.steerTurn(
-                        threadId = threadId,
-                        expectedTurnId = expectedTurnId,
-                        text = pending.wireText,
-                        attachments = pending.attachments,
-                        skillMentions = pending.skillMentions,
-                        fileMentions = pending.fileMentions,
-                    )
-                } else {
-                    repository.startTurn(
-                        threadId = threadId,
-                        text = pending.wireText,
-                        attachments = pending.attachments,
-                        skillMentions = pending.skillMentions,
-                        fileMentions = pending.fileMentions,
-                    )
-                }
-                pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
-                AppContainer.betaEngagementRepository.recordMissionEvent(
-                    eventType = "turn_steered",
-                    screen = "composer",
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (e: Exception) {
-                if (e.isMissingSendTarget()) {
-                    Log.e("RemodexSend", "Missing queued turn target thread=$threadId", e)
-                    val saved = MissingThreadDraft(pending.wireText, pending.attachments, pending.skillMentions, pending.fileMentions,
-                        cwd = activeThread?.gitWorkingDirectory, model = activeThread?.model,
-                        composerText = pending.draftText,
-                        files = pending.composerAttachments.mapNotNull { (it.state as? TurnComposerAttachmentState.ReadyFile)?.attachment })
-                    retainMissingDraft(e, saved)
-                    pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
-                    if (draft.isBlank()) restoreUnsentDraft(saved)
-                } else {
-                    Log.e("RemodexSend", "Queued message failed stage=send-pending thread=$threadId draft=${pending.id}", e)
                     lastError = com.remodex.mobile.ui.turn.formatTurnSendError(e)
+                    retryFailedSend = FailedTurnSend(text, attachments, skillMentions, fileMentions, collaborationMode, requestId, attempt, composerText, files)
                 }
-            } finally {
-                sendingSteerDraftId = null
-                if (!sendAsSteer) {
-                    sending = false
-                }
-            }
         }
     }
 
@@ -1366,40 +1235,6 @@ fun TurnConversationPane(
                 lastError = com.remodex.mobile.ui.turn.formatTurnSendError(e)
             }
         }
-    }
-
-    var wasThreadRunningForSteerQueue by remember(threadId) { mutableStateOf(false) }
-    LaunchedEffect(threadId, isThreadRunning, sending, sendingSteerDraftId) {
-        if (isThreadRunning) {
-            wasThreadRunningForSteerQueue = true
-        } else if (wasThreadRunningForSteerQueue && !sending && sendingSteerDraftId == null) {
-            wasThreadRunningForSteerQueue = false
-            pendingSteerDrafts.firstOrNull()?.let { pending ->
-                sendPendingSteerDraft(pending)
-            }
-        }
-    }
-
-    LaunchedEffect(threadId, isThreadRunning, sending, queuedDraftCount, hasComposerDraftContent, pendingSteerDrafts.size) {
-        if (
-            isThreadRunning ||
-            sending ||
-            pendingSteerDrafts.isNotEmpty() ||
-            missingDraft != null ||
-            queuedDraftCount <= 0 ||
-            hasComposerDraftContent
-        ) return@LaunchedEffect
-        val queued = runCatching { repository.pollTurnDraft(threadId) }.getOrNull() ?: return@LaunchedEffect
-        dispatchTurn(
-            text = queued.text,
-            attachments = queued.attachments,
-            skillMentions = queued.skillMentions,
-            fileMentions = queued.fileMentions,
-            collaborationMode = queued.collaborationMode,
-            fromQueue = true,
-            composerText = queued.composerText,
-            files = queued.files,
-        )
     }
 
     val imeBottomInset = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
@@ -1449,7 +1284,7 @@ fun TurnConversationPane(
     // The bridge returns only the latest successful turn for each conversation.
     val predictionThreadKey = "${currentTrustedMacDeviceId.orEmpty()}|$threadId"
     val prediction = currentSuggestion?.takeIf { repository.composerPredictions.value[threadId] == it }
-    val canFillPrediction = ready && !isThreadRunning && !sending && !hasComposerDraftContent &&
+    val canFillPrediction = ready && !sending && !hasComposerDraftContent &&
         !composerLocks.textInputLocked && draft.isEmpty() && loadedDraftKey == predictionThreadKey
     val dismissedPredictions = remember(context) { context.getSharedPreferences("composer_prediction_dismissals", android.content.Context.MODE_PRIVATE) }
     var predictionDismissed by remember(predictionThreadKey, prediction?.sourceTurnId) {
@@ -1494,6 +1329,7 @@ fun TurnConversationPane(
                     ConversationImageGalleryHost(threadId, messages) {
                     MessageList(
                         presentation = presentation,
+                        activityTimings = activityTimings,
                         showEmptyContent = initialHistoryPhase == HistoryLoadingPhase.Ready,
                         listState = listState,
                         predictionFooter = if (predictionArrival != null && prediction != null) {
@@ -1678,7 +1514,6 @@ fun TurnConversationPane(
                         skillMentions = retry.skillMentions,
                         fileMentions = retry.fileMentions,
                         collaborationMode = retry.collaborationMode,
-                        fromQueue = false,
                         requestId = retry.requestId,
                         attempt = retry.attempt + 1,
                         composerText = retry.composerText,
@@ -1728,19 +1563,36 @@ fun TurnConversationPane(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
-        if (queuedDraftCount > 0) {
+        if (queuedDraftCount > 0 || queueErrors[threadId] != null) {
+            fun queueAction(action: suspend () -> Unit) {
+                if (sending) return
+                sending = true
+                scope.launch {
+                    try { action() }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (failure: Exception) {
+                        Log.e("RemodexQueue", "queue action thread=$threadId", failure)
+                        lastError = formatTurnSendError(failure)
+                    } finally { sending = false }
+                }
+            }
             com.remodex.mobile.ui.turn.QueuedDraftsCard(
                 previews = queuedDraftPreviews,
                 totalCount = queuedDraftCount,
                 canRestore = canRestoreQueuedDrafts,
+                error = queueErrors[threadId], onRetry = repository::refreshTurnQueue,
+                canSteer = ready && activeTurnId != null && !sending, enabled = !sending,
+                onSteer = { id -> activeTurnId?.let { turn -> queueAction {
+                    repository.steerQueuedTurn(threadId, id, turn, currentTrustedMacDeviceId)
+                } } },
                 onRestore = { draftId ->
-                    scope.launch {
+                    queueAction {
                         if (!canRestoreQueuedDrafts) {
                             lastError = queuedDraftRestoreBlockedMessage
-                            return@launch
+                            return@queueAction
                         }
-                        val restored = runCatching { repository.removeQueuedTurnDraft(threadId, draftId) }.getOrNull()
-                        if (restored == null) return@launch
+                        val restored = repository.removeQueuedTurnDraft(threadId, draftId, currentTrustedMacDeviceId, forEdit = true)
+                        if (restored == null) return@queueAction
                         mentionChips =
                             com.remodex.mobile.ui.turn.restoreMentionChips(
                                 skillMentions = restored.skillMentions,
@@ -1763,8 +1615,8 @@ fun TurnConversationPane(
                     }
                 },
                 onRemove = { draftId ->
-                    scope.launch {
-                        runCatching { repository.removeQueuedTurnDraft(threadId, draftId) }
+                    queueAction {
+                        repository.removeQueuedTurnDraft(threadId, draftId, currentTrustedMacDeviceId)
                     }
                 },
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
@@ -1891,48 +1743,27 @@ fun TurnConversationPane(
                     isSwitchingGitBranch = false
                 }
             }
-        val pendingSteers = pendingSteerDrafts
         Box(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                if (pendingSteers.isNotEmpty()) {
-                    fun composerAvailableForEdit() = draft.isEmpty() && composerAttachments.isEmpty() &&
-                        mentionChips.isEmpty() && reviewTarget == null && !sending
-                    PendingSteerDraftQueue(
-                        pendingDrafts = pendingSteers,
-                        sendingId = sendingSteerDraftId,
-                        canEdit = composerAvailableForEdit(),
-                        onSteer = { pending -> sendPendingSteerDraft(pending) },
-                        onEdit = edit@{ pending ->
-                            if (!composerAvailableForEdit() || sendingSteerDraftId == pending.id ||
-                                pending !in pendingSteerDrafts) return@edit
-                            pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
-                            draft = pending.draftText
-                            mentionChips = pending.mentionChips
-                            composerAttachments = pending.composerAttachments
-                            compactComposer = false
-                            editFocusId = pending.id
-                        },
-                        onDelete = { pending ->
-                            if (sendingSteerDraftId != pending.id) {
-                                pendingSteerDrafts = pendingSteerDrafts.filterNot { it.id == pending.id }
-                            }
-                        },
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp),
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
                 var changingAccess by remember(threadId) { mutableStateOf(false) }
                 var accessError by remember(threadId) { mutableStateOf<String?>(null) }
                 BindSessionEnvironment(threadId) {
+                    val states by repository.threadExecutionStates.collectAsStateWithLifecycle()
+                    val connected = ready && connectionState is ConnectionState.Connected
+                    var readError by remember(threadId, connected) { mutableStateOf<String?>(null) }
+                    LaunchedEffect(repository, threadId, connected) {
+                        if (connected) reportSettingFailure({ readError = it }, "thread/read execution settings") { repository.refreshThreadExecution(threadId) }
+                    }
+                    val execution = states[threadId].takeIf { connected }
+                    val directory = execution?.primaryEnvironmentDirectory ?: execution?.cwd ?: activeThread?.cwd
                     SessionEnvironmentSections(
-                        directory = activeThread?.cwd,
+                        directory = directory,
+                        execution = execution,
+                        readError = readError,
                         threadId = threadId,
-                        isWorktreeProject = activeThread?.isManagedWorktreeProject == true,
+                        isWorktreeProject = projectIconSystemNameFor(directory) == "arrow.triangle.branch",
                         worktreeHandoffEnabled =
                             gitCwd != null &&
                                 gitBranchPaneState is GitBranchPaneState.Loaded &&
@@ -1946,7 +1777,6 @@ fun TurnConversationPane(
                             showWorktreeHandoffSheet = true
                             worktreeHandoffError = null
                         },
-                        selectedAccessMode = selectedAccessMode,
                         accessError = accessError,
                         accessPickerEnabled =
                             ready && !changingAccess &&
@@ -1958,7 +1788,7 @@ fun TurnConversationPane(
                             accessError = null
                             scope.launch {
                                 try {
-                                    repository.setSelectedAccessMode(mode)
+                                    repository.setThreadAccessMode(threadId, mode)
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                     throw cancelled
                                 } catch (failure: Exception) {
@@ -2030,7 +1860,7 @@ fun TurnConversationPane(
             },
             onSelectAccessMode = { option ->
                 CodexAccessMode.entries.firstOrNull { it.name == option.id }?.let { mode ->
-                    scope.launch { runCatching { repository.setSelectedAccessMode(mode) } }
+                    scope.launch { reportSettingFailure({ lastError = it }) { repository.setThreadAccessMode(threadId, mode) } }
                 }
             },
             onSelectServiceTier = { option ->
@@ -2147,10 +1977,6 @@ fun TurnConversationPane(
                     mentionChips = emptyList()
                     return@TurnComposerBar
                 }
-                if (isThreadRunning) {
-                    stageCurrentDraftForSteering()
-                    return@TurnComposerBar
-                }
                 val activeReviewTarget = reviewTarget
                 if (activeReviewTarget != null) {
                     if (isThreadRunning) {
@@ -2216,7 +2042,6 @@ fun TurnConversationPane(
                     skillMentions = structuredSkillMentions,
                     fileMentions = structuredFileMentions,
                     collaborationMode = collaborationMode,
-                    fromQueue = false,
                     composerText = draft,
                     files = readyComposerFileAttachments,
                 )
@@ -2328,129 +2153,6 @@ private fun FullTimelineMessageSheet(
                 modifier = Modifier.fillMaxWidth(),
                 keyPrefix = "full-${message.id}",
                 assistantProse = message.role == CodexMessageRole.assistant && message.kind == CodexMessageKind.chat,
-            )
-        }
-    }
-}
-
-@Composable
-private fun PendingSteerDraftQueue(
-    pendingDrafts: List<PendingSteerDraft>,
-    sendingId: String?,
-    canEdit: Boolean,
-    onSteer: (PendingSteerDraft) -> Unit,
-    onEdit: (PendingSteerDraft) -> Unit,
-    onDelete: (PendingSteerDraft) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = MaterialTheme.colorScheme
-    val lightChrome = isAgentLightChrome()
-    val shape = RoundedCornerShape(28.dp)
-    val surfaceColor = RemodexPopupChrome.surfaceColor()
-    val textTint =
-        colors.onSurfaceVariant
-    Surface(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .heightIn(
-                    min = if (pendingDrafts.size <= 1) 44.dp else 46.dp,
-                    max = if (pendingDrafts.size <= 1) 52.dp else 92.dp,
-                )
-                .shadow(
-                    elevation = if (lightChrome) 8.dp else 2.dp,
-                    shape = shape,
-                    ambientColor = Color.Black.copy(alpha = if (lightChrome) 0.05f else 0.10f),
-                    spotColor = Color.Black.copy(alpha = if (lightChrome) 0.05f else 0.10f),
-                ),
-        shape = shape,
-        color = surfaceColor,
-        border = RemodexPopupChrome.borderStroke(),
-        tonalElevation = 0.dp,
-    ) {
-        Column(
-            modifier =
-                Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(
-                        start = 20.dp,
-                        end = 14.dp,
-                        top = if (pendingDrafts.size <= 1) 6.dp else 8.dp,
-                        bottom = if (pendingDrafts.size <= 1) 6.dp else 8.dp,
-                    ),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            pendingDrafts.forEach { pending ->
-                PendingSteerDraftQueueRow(
-                    pending = pending,
-                    steerEnabled = sendingId == null,
-                    editEnabled = canEdit && sendingId != pending.id,
-                    deleteEnabled = sendingId != pending.id,
-                    textTint = textTint,
-                    onSteer = { onSteer(pending) },
-                    onEdit = { onEdit(pending) },
-                    onDelete = { onDelete(pending) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PendingSteerDraftQueueRow(
-    pending: PendingSteerDraft,
-    steerEnabled: Boolean,
-    editEnabled: Boolean,
-    deleteEnabled: Boolean,
-    textTint: Color,
-    onSteer: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .height(36.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            text = pending.draftText.ifBlank { stringResource(R.string.turn_queue_item_empty) },
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall,
-            color = textTint,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        IconButton(onClick = onEdit, enabled = editEnabled, modifier = Modifier.size(36.dp)) {
-            Icon(
-                painter = painterResource(LucideR.drawable.lucide_ic_square_pen),
-                contentDescription = stringResource(R.string.turn_steer_edit_cd),
-                modifier = Modifier.size(19.dp),
-            )
-        }
-        IconButton(
-            onClick = onSteer,
-            enabled = steerEnabled,
-            modifier = Modifier.size(28.dp),
-        ) {
-            Icon(
-                painter = painterResource(LucideR.drawable.lucide_ic_send_horizontal),
-                contentDescription = stringResource(R.string.turn_steer_cd),
-                modifier = Modifier.size(17.dp),
-            )
-        }
-        IconButton(
-            onClick = onDelete,
-            enabled = deleteEnabled,
-            modifier = Modifier.size(28.dp),
-        ) {
-            Icon(
-                painter = painterResource(LucideR.drawable.lucide_ic_trash_2),
-                contentDescription = stringResource(R.string.turn_steer_delete_cd),
-                modifier = Modifier.size(17.dp),
             )
         }
     }

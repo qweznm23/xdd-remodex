@@ -46,10 +46,10 @@ internal fun ComposerEffortSlider(
     onSelect: (TurnComposerRuntimeOption) -> Unit,
 ) {
     val options = remember(state.options) { sliderEfforts(state) }
-    val selected = options.indexOfFirst { it.id == (pendingEffort ?: state.selected.id) }.coerceAtLeast(0)
+    val selected = options.indexOfFirst { it.id == (pendingEffort ?: state.selected.id) }
     var drag by remember { mutableStateOf<Float?>(null) }
-    val value = drag ?: selected.toFloat()
-    val current = options.getOrNull(value.roundToInt())
+    val value = drag ?: selected.coerceAtLeast(0).toFloat()
+    val current = if (drag == null && selected < 0) state.selected else options.getOrNull(value.roundToInt())
     val label = stringResource(R.string.composer_effort_label)
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
@@ -74,6 +74,7 @@ internal fun ComposerEffortSlider(
                 val h = min(40.dp.toPx(), size.width)
                 val end = size.width - h / 2
                 fun x(fraction: Float) = h / 2 + (end - h / 2) * (if (rtl) 1f - fraction else fraction)
+                val hasSelection = selected >= 0 || drag != null
                 val thumb = x(position / last)
                 drawRoundRect(colors.surfaceContainerHighest, Offset(0f, center.y - h / 2),
                     Size(size.width, h), CornerRadius(h / 2))
@@ -85,13 +86,13 @@ internal fun ComposerEffortSlider(
                 val radius = h / 2 - 4.dp.toPx()
                 val start = x(0f)
                 val fillWidth = kotlin.math.abs(start - thumb) + radius * 2
-                drawRoundRect(foreground, Offset(min(start, thumb) - radius, center.y - radius),
+                if (hasSelection) drawRoundRect(foreground, Offset(min(start, thumb) - radius, center.y - radius),
                     Size(fillWidth, radius * 2), CornerRadius(radius))
                 for (i in 0..last) {
-                    drawCircle(if (i <= position) colors.onPrimary else colors.onSurfaceVariant,
+                    drawCircle(if (hasSelection && i <= position) colors.onPrimary else colors.onSurfaceVariant,
                         2.dp.toPx(), Offset(x(i.toFloat() / last), center.y))
                 }
-                drawCircle(colors.onPrimary, radius * .69f, Offset(thumb, center.y))
+                if (hasSelection) drawCircle(colors.onPrimary, radius * .69f, Offset(thumb, center.y))
             }
             Slider(
                 value = value,

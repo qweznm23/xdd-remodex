@@ -26,7 +26,6 @@ internal suspend fun CodexService.startReviewInternal(
     ensureThreadResumedInternal(
         threadId = targetThreadId,
         force = false,
-        preferredProjectPath = row?.gitWorkingDirectory,
         modelIdentifierOverride = row?.model,
     )
 
@@ -77,7 +76,7 @@ private suspend fun CodexService.sendReviewStart(
     target: CodexReviewTarget,
     baseBranch: String?,
 ): RPCMessage =
-    sendRequestWithSandboxAndApprovalFallback(
+    sendRequestImpl(
         "review/start",
         buildReviewStartRequestParams(threadId, target, baseBranch),
     )

@@ -50,7 +50,7 @@ internal fun SettingsPaletteButton() {
             Icon(painterResource(LucideR.drawable.lucide_ic_palette), stringResource(R.string.settings_palette),
                 tint = MaterialTheme.colorScheme.primary)
         }
-        QuotaAnchoredMenu(transition, { expanded = false }, panelWidth = 190.dp, badge = glyph) {
+        RemodexAnchoredMenu(transition, { expanded = false }, panelWidth = 190.dp, badge = glyph) {
             for (mode in PaletteMode.entries) {
                 DropdownMenuItem(text = { Text(stringResource(mode.label)) },
                     trailingIcon = { if (selected.mode == mode) Icon(painterResource(LucideR.drawable.lucide_ic_check),

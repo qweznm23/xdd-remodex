@@ -766,6 +766,11 @@ function startBridge({
     process.exit(1);
   }
   const runtimeKey = createHash("sha256").update(config.codexEndpoint || resolveCodexHome()).digest("hex");
+  const queueReceipts = require("./queue-receipts").createQueueReceipts(
+    path.join(resolveRemodexStateDir(), "queue-receipts", runtimeKey), sendCodexRequest,
+    async input => config.codexEndpoint && !config.codexEndpoint.startsWith("ws+unix:")
+      ? (await inlineUploadedTurnImages({ method: "turn/start", params: { input } })).params.input : input,
+  );
   const composerPredictions = createComposerPredictor(
     (method, params, timeoutMs) => sendCodexRequest(method, params, { timeoutMs }),
     path.join(resolveRemodexStateDir(), "composer-predictions", runtimeKey)
@@ -907,6 +912,8 @@ function startBridge({
   const jsonlTurnsListRolloutCacheByThread = new Map();
   const jsonlTurnsListRolloutMissCacheByThread = new Map();
   const threadTurnsListFastPageCoordinator = createThreadTurnsListFastPageCoordinator();
+  const observedAccessByThread = new Map();
+  const { accessFields } = require("./thread-execution");
   const threadRuntimeSettingsStore = createThreadRuntimeSettingsStore({
     onChange(threadId, runtimeSettings) {
       sendApplicationResponse(JSON.stringify({
@@ -1076,6 +1083,7 @@ function startBridge({
     forwardedRequestMethodsById.clear();
     pendingLocalResumeThreadIds.clear();
     pendingLocalThreadCreationRequestsById.clear();
+    observedAccessByThread.clear();
     activityStore.markSourceStale(APP_SERVER_SOURCE);
     desktopRefresher.handleTransportReset();
   }
@@ -1413,9 +1421,18 @@ function startBridge({
     const parsedMessage = parseBridgeMessage(message);
     if (parsedMessage?.method === "thread/settings/updated"
       && parsedMessage.params?.threadSettings) {
-      threadRuntimeSettingsStore.observe(parsedMessage.params.threadId, parsedMessage.params.threadSettings);
+      const { threadId, threadSettings } = parsedMessage.params;
+      const access = accessFields(threadSettings);
+      if (threadId && Object.keys(access).length) {
+        const previous = observedAccessByThread.get(threadId);
+        observedAccessByThread.delete(threadId);
+        observedAccessByThread.set(threadId, { ...previous, ...access });
+        if (observedAccessByThread.size > 512) observedAccessByThread.delete(observedAccessByThread.keys().next().value);
+      }
+      threadRuntimeSettingsStore.observe(threadId, threadSettings);
     }
-    if (parsedMessage?.method === "thread/closed" || parsedMessage?.method === "thread/archived") {
+    if (["thread/closed", "thread/archived", "thread/deleted"].includes(parsedMessage?.method)) {
+      observedAccessByThread.delete(parsedMessage.params?.threadId);
       desktopIpcActionFollower?.releaseLocallyAcquiredThread(parsedMessage.params?.threadId);
     }
     if (parsedMessage?.id != null) {
@@ -1446,6 +1463,7 @@ function startBridge({
       failBridgeManagedCodexRequests(ownedLaunchError);
       return;
     }
+    observedAccessByThread.clear();
     activityStore.markSourceStale(APP_SERVER_SOURCE);
     const wasShuttingDown = isShuttingDown;
     clearRelayWatchdog();
@@ -1525,6 +1543,15 @@ function startBridge({
           sendApplicationResponse(createJsonRpcErrorResponse(parsedMessage.id, error, "opencode_request_failed"));
         }
       });
+      return;
+    }
+    if (["remodex/queue/add", "remodex/queue/cancelPending"].includes(parsedMessage?.method) && parsedMessage.id != null) {
+      const action = parsedMessage.method === "remodex/queue/add" ? queueReceipts.add : queueReceipts.cancelPending;
+      action(parsedMessage.params).then(result => sendApplicationResponse(JSON.stringify({id: parsedMessage.id, result})))
+        .catch(error => sendApplicationResponse(JSON.stringify({id: parsedMessage.id, error: {
+          code: Number.isInteger(error.code) ? error.code : -32000, message: error.message,
+          data: { stage: parsedMessage.method, notSubmitted: error.notSubmitted === true, upstream: error.data, diagnostic: downloadErrorDiagnostic(error) },
+        }})));
       return;
     }
     if (activityStore.handleRequest(parsedMessage)) {
@@ -2275,6 +2302,11 @@ function startBridge({
         explicitResumeCwd: method === "thread/resume" && Boolean(normalizeNonEmptyString(parsed.params?.cwd)),
         createdAt: Date.now(),
       };
+      if (method === "thread/read" || method === "thread/resume") {
+        const settings = threadRuntimeSettingsStore.get(trackedRequest.threadId);
+        trackedRequest.settingsEpoch = settings?.epoch;
+        trackedRequest.settingsRevision = settings?.revision;
+      }
       if (method === "thread/turns/list") {
         trackedRequest.skipJsonlArtifactAugmentation = false;
       }
@@ -2358,6 +2390,10 @@ function startBridge({
         if (!config.codexEndpoint) {
           reconcileLegacyHomeThreadProject(thread, legacyProjectCwdByThreadId, trackedRequest.explicitResumeCwd);
         }
+        if (trackedRequest.method === "thread/read" && !thread.remodexExecution && observedAccessByThread.has(thread.id)) {
+          thread.remodexExecution = observedAccessByThread.get(thread.id);
+        }
+        threadRuntimeSettingsStore.observeOwnerResponse(thread, parsed.result, trackedRequest);
         threadRuntimeSettingsStore.attachToThread(thread);
         threadListProvenanceEnricher.attachToThread(thread);
         worktreeOriginEnricher.attachToThread(thread);

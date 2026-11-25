@@ -161,7 +161,9 @@ function buildDesktopTurnsListResult(turns, params = {}) {
       startIndex + page.length
     )
     : null;
-  const clonedPage = cloneJSON(page);
+  const clonedPage = params.itemsView === "notLoaded"
+    ? page.map((turn) => cloneJSON({ ...turn, itemsView: "notLoaded", items: [] }))
+    : cloneJSON(page);
   return {
     data: clonedPage,
     nextCursor,

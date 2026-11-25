@@ -107,7 +107,7 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
     var initialListSettled by mutableStateOf(false); private set
     var switchProfileId by mutableStateOf<String?>(null); private set
     var failedSwitch by mutableStateOf<FailedAccountSwitch?>(null); private set
-    val verifyingIdentity: Boolean get() = switching || failedSwitch != null || if (restartHistory.isEmpty()) {
+    val verifyingIdentity: Boolean get() = switching || restartStatus == "verification_failed" || failedSwitch != null || if (restartHistory.isEmpty()) {
         restartStatus in setOf("failed", "verification_failed", "superseded_by_newer_switch")
     } else restartHistory.firstOrNull {
         it.status == "ready" || it.status == "recovered" || it.authorizationUnconfirmed
@@ -116,8 +116,14 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
     var restartExpectedNanos by mutableStateOf<Long?>(null); private set
     var sawSwitchDisconnect by mutableStateOf(false); private set
 
+    var awaitingSwitchConnection by mutableStateOf(false); private set
+    private var lastVerificationWait: Exception? = null
+
     fun observeSwitchConnection(connected: Boolean) {
-        if (switching && !connected) sawSwitchDisconnect = true
+        if (switching) {
+            awaitingSwitchConnection = !connected
+            if (!connected) sawSwitchDisconnect = true
+        }
     }
 
     var supportsTokenRefresh by mutableStateOf(false); private set
@@ -178,7 +184,8 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
 
     private suspend fun operation(name: String, work: suspend () -> Unit) {
         if (busy != null) return
-        val verifyingSwitch = name == "list" && pendingOperationId != null
+        val verificationId = pendingOperationId?.takeIf { switching && name in setOf("list", "restart-progress") }
+        val verifyingSwitch = verificationId != null
         results.remove(authActionSlot(name))
         busy = name
         try {
@@ -193,20 +200,35 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            val code = (error as? com.remodex.mobile.core.error.CodexServiceError.RpcFailure)?.rpcError?.data?.objectValue?.get("errorCode")?.stringValue
-            if (verifyingSwitch && restartHistory.isNotEmpty() && code == "MANAGER_BUSY") return
+            if (verifyingSwitch && verificationId == pendingOperationId) {
+                val causes = generateSequence<Throwable>(error) { it.cause }.take(16)
+                val disconnected = causes.any {
+                    when (it) {
+                        com.remodex.mobile.core.error.CodexServiceError.Disconnected, is java.net.SocketException -> true
+                        is com.remodex.mobile.core.transport.RelaySocketClosed ->
+                            it.code in setOf(1000, 1001, 1006) || com.remodex.mobile.core.transport.isBridgeUnavailableClose(it.code)
+                        else -> false
+                    }
+                }
+                val locked = (error as? com.remodex.mobile.core.error.CodexServiceError.RpcFailure)
+                    ?.rpcError?.data?.objectValue?.get("errorCode")?.stringValue == "MANAGER_BUSY"
+                if (disconnected || locked) {
+                    lastVerificationWait = error
+                    if (disconnected) observeSwitchConnection(false)
+                    return
+                }
+                restartStatus = "verification_failed"
+                pendingOperationId = null
+                switchDeadline = null
+            }
+            if (verifyingSwitch && lastVerificationWait != null && lastVerificationWait !== error && error is SwitchVerificationFailure) {
+                error.addSuppressed(lastVerificationWait!!)
+            }
             failure = error
             val target = if (name == "list" && restartHistory.isEmpty() && switchProfileId != null &&
                 (verifyingSwitch || error is SwitchVerificationFailure)) "switch:$switchProfileId" else name
             failureOperation = target
             rememberResult(target, error)
-            if (switching && name == "list" && restartHistory.isEmpty()) {
-                val bridgeRestarting = error is com.remodex.mobile.core.transport.RelaySocketClosed &&
-                    com.remodex.mobile.core.transport.isBridgeUnavailableClose(error.code)
-                if (!bridgeRestarting && error !== com.remodex.mobile.core.error.CodexServiceError.Disconnected && code != "MANAGER_BUSY") {
-                    restartStatus = "verification_failed"
-                }
-            }
         }
         finally { busy = null }
         if (name == "list") initialListSettled = true
@@ -221,7 +243,10 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
     }
 
     private suspend fun loadList() = operation("list") {
+        val expected = pendingOperationId
         val p = request("list")
+        if (expected != null && expected != pendingOperationId) throw CancellationException("Account switch verification superseded")
+        awaitingSwitchConnection = false
         val status = p["status"]?.stringValue
         require(status == "available" || status == "unavailable") { "Invalid profile list status" }
         val rows = p["profiles"]?.arrayValue ?: error("profiles missing")
@@ -232,8 +257,24 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         }
         require(updated.map { it.id }.distinct().size == updated.size) { "Duplicate profile id" }
         val listedCurrent = p["currentProfile"]?.takeUnless { it == JSONValue.Null }?.let(AuthProfile::decode)
+        val operationId = p["operationId"]?.stringValue
+        val statusAfterRestart = p["restartStatus"]?.stringValue
+        if (expected != null && operationId != expected) {
+            throw SwitchVerificationFailure(expected, "stage=switch-verification: selection was superseded; refresh before selecting again")
+        }
+        val managed = p["supportsImportExport"]?.boolValue == true && p["managedBy"]?.stringValue == "remodex"
+        // Keep the acknowledged operation pending until its verified account snapshot is available.
+        val verifiedManagement = if (expected != null && managed && statusAfterRestart == "ready") {
+            val snapshot = AuthManagementStatus.decode(request("status"))
+            val selected = p["selectedProfile"]?.stringValue
+            if (selected != null && snapshot.entries.none { it.active && it.profile.id == selected }) {
+                throw SwitchVerificationFailure(expected, "stage=switch-verification: current authorization changed after the restart result")
+            }
+            snapshot
+        } else null
+        if (expected != null && expected != pendingOperationId) throw CancellationException("Account switch verification superseded")
         supportsTokenRefresh = p["supportsTokenRefresh"]?.boolValue == true
-        supportsManagement = p["supportsImportExport"]?.boolValue == true && p["managedBy"]?.stringValue == "remodex"
+        supportsManagement = managed
         supportsManualRestart = p["supportsManualRestart"]?.boolValue == true
         runtimeControl = p["runtimeControl"]?.objectValue.orEmpty()
         supportsProgress = p["supportsRestartProgress"]?.boolValue == true
@@ -244,8 +285,8 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
             profiles = updated
         }
         available = status == "available"
-        restartStatus = p["restartStatus"]?.stringValue
-        val operationId = p["operationId"]?.stringValue
+        restartStatus = statusAfterRestart
+        if (verifiedManagement != null) applyManagement(verifiedManagement, listedCurrent != null)
         val failureSnapshot = FailedAccountSwitch.fromList(p, restartHistory.firstOrNull())
         if (observedOperation != operationId || failureSnapshot != failedSwitch) {
             lastLiveRead = 0L
@@ -260,7 +301,8 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         }.keys.forEach(results::remove)
         if (restartStatus == "ready" && (pendingOperationId == null || operationId == pendingOperationId)) {
             val slot = "switch:${p["selectedProfile"]?.stringValue ?: switchProfileId}"
-            if (results[slot]?.error is SwitchVerificationFailure) results.remove(slot)
+            if (results[slot]?.error is SwitchVerificationFailure || results[slot]?.error is java.util.concurrent.TimeoutException) results.remove(slot)
+            if (results["restart"]?.error is java.util.concurrent.TimeoutException) results.remove("restart")
         }
         if (p["restartHistory"] != null) {
             switchProfileId = p["selectedProfile"]?.stringValue
@@ -270,14 +312,8 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
                 pendingOperationId = null
                 switchDeadline = null
             }
-            if (supportsManagement && !switching) loadManagement(listedCurrent != null)
+            if (verifiedManagement == null && supportsManagement && !switching) loadManagement(listedCurrent != null)
             return@operation
-        }
-        if (pendingOperationId != null && operationId != pendingOperationId) {
-            restartStatus = "verification_failed"
-            pendingOperationId = null
-            switchDeadline = null
-            error("stage=switch-verification: selection was superseded; refresh before selecting again")
         }
         if (restartStatus == "restart_scheduled" && pendingOperationId == null) {
             switchProfileId = p["selectedProfile"]?.stringValue
@@ -304,11 +340,14 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
             pendingOperationId = null
             switchDeadline = null
         }
-        if (supportsManagement && !switching) loadManagement(listedCurrent != null)
+        if (verifiedManagement == null && supportsManagement && !switching) loadManagement(listedCurrent != null)
     }
 
     private suspend fun loadManagement(includeCurrent: Boolean = currentProfile != null) {
-        val updated = AuthManagementStatus.decode(request("status"))
+        applyManagement(AuthManagementStatus.decode(request("status")), includeCurrent)
+    }
+
+    private fun applyManagement(updated: AuthManagementStatus, includeCurrent: Boolean) {
         val previousCurrent = management?.current
         if (previousCurrent != null && previousCurrent.revision != updated.current.revision) {
             results.remove("refreshToken:current")
@@ -497,6 +536,7 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
             val records = request("restart-progress")["restartHistory"]?.arrayValue?.map(AuthRestartRecord::decode)
                 ?: error("Missing restart history")
             if (pendingOperationId != expected) return@operation
+            awaitingSwitchConnection = false
             restartHistory = records
             refreshIdentity = records.firstOrNull()?.let {
                 it.operationId != expected || it.status !in setOf("restart_scheduled", "running")
@@ -538,6 +578,10 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
 
     private fun followRestart(operationId: String, delaySeconds: Long?) {
         if (pendingOperationId != operationId) {
+            lastVerificationWait = null
+            awaitingSwitchConnection = false
+            results.remove("restart-progress")
+            results.remove("restart")
             switchStartedNanos = System.nanoTime()
             sawSwitchDisconnect = false
         }
@@ -551,9 +595,10 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         if (switching && switchDeadline?.let { !now.isBefore(it) } == true) {
             restartStatus = "verification_failed"
             val timeout = java.util.concurrent.TimeoutException("stage=restart-status-poll operation=$pendingOperationId timeoutMs=180000; server outcome unknown; refresh status before retry")
+            lastVerificationWait?.let(timeout::initCause)
+            pendingOperationId = null
+            switchDeadline = null
             if (restartHistory.isNotEmpty()) {
-                pendingOperationId = null
-                switchDeadline = null
                 reportFileFailure(timeout, "restart")
             } else reportFileFailure(timeout, switchProfileId?.let { "switch:$it" } ?: "list")
         }

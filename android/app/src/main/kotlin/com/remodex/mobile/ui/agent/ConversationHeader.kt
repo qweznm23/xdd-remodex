@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.annotation.DrawableRes
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
@@ -332,7 +331,7 @@ private fun GitActionsDropdown(
     RemodexDropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
-        modifier = Modifier.widthIn(min = 272.dp),
+        panelWidth = 272.dp,
     ) {
         GitActionMenuSectionHeader(stringResource(R.string.git_action_section_changes))
         GitActionChangesMenuItem(

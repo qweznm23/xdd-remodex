@@ -865,3 +865,19 @@ test("desktop steering input remains in order in both history and live notificat
   assert.deepEqual(live.filter(n => n.method === "item/completed").map(n => n.params.item.id),
     items.map(item => item.id));
 });
+
+test("execution metadata mirrors the owner's current settings and clearing, independent of historical turns", () => {
+  const projector = createDesktopConversationProjector();
+  const initial = {cwd: "/repo", turns: [], currentPermissions: {
+    sandboxPolicy: {type:"readOnly"}, approvalPolicy:"on-request",
+    activePermissionProfile: {id:"reviewer"},
+  }, latestThreadSettings: {environments:[{environmentId:"remote",cwd:"/repo"}]}};
+  const before = projector.project("a", initial);
+  assert.equal(before.thread.remodexExecution.sandboxPolicy, "readOnly");
+  assert.equal(before.thread.remodexExecution.activePermissionProfile.id, "reviewer");
+  const next = projector.project("a", {cwd:"/next",turns:[],latestThreadSettings:{environments:[]}});
+  const changed = next.notifications.find(n => n.method === "remodex/execution/updated");
+  assert.equal(changed.params.threadId, "a");
+  assert.deepEqual(changed.params.threadSettings, {approvalPolicy:null,sandboxPolicy:null,
+    activePermissionProfile:null,environments:[],cwd:"/next"});
+});

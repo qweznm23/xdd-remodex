@@ -23,7 +23,7 @@ import com.remodex.mobile.core.model.CodexRateLimitWindow
 import com.remodex.mobile.core.model.accountWeeklyQuota
 import com.remodex.mobile.ui.LocalCodexRepository
 import com.remodex.mobile.ui.sidebar.RemodexCircleIconButton
-import com.remodex.mobile.ui.theme.QuotaAnchoredMenu
+import com.remodex.mobile.ui.theme.RemodexAnchoredMenu
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -133,7 +133,7 @@ internal fun WeeklyQuotaMoreMenu(
             val preferred = 286.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceIn(1f, 1.3f)
             available.coerceIn(48.dp, preferred)
         } else null
-        if (transition != null) QuotaAnchoredMenu(transition, onDismiss = { setExpanded(false) }, panelWidth = width, badge = badge) {
+        if (transition != null) RemodexAnchoredMenu(transition, onDismiss = { setExpanded(false) }, panelWidth = width, badge = badge) {
             val openUsage = {
                 setExpanded(false)
                 usageOpen = true

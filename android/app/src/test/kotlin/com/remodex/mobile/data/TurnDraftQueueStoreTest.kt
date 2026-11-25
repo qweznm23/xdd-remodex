@@ -1,78 +1,119 @@
 package com.remodex.mobile.data
 
-import com.remodex.mobile.core.model.CodexCollaborationModeKind
-import com.remodex.mobile.core.model.CodexImageAttachment
-import com.remodex.mobile.core.model.CodexTurnMention
-import com.remodex.mobile.core.model.CodexTurnSkillMention
+import com.remodex.mobile.core.model.*
+import com.remodex.mobile.services.QueueOutbox
+import com.remodex.mobile.services.RemoteTurnQueue
+import java.io.File
+import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.*
 
 class TurnDraftQueueStoreTest {
-    @Test
-    fun imageOnlyDraftQueuesTheUploadedPath() = runTest {
-        val store = TurnDraftQueueStore()
-        val image = CodexImageAttachment(thumbnailBase64JPEG = "", remotePath = "/computer/screen.png")
-        store.enqueue("t1", "", listOf(image), emptyList(), emptyList(), null)
-        assertEquals(listOf(image), store.poll("t1")?.attachments)
+    private val dir = Files.createTempDirectory("host-queue").toFile()
+    private val key = ByteArray(32) { 7 }
+    private var device = "host-a"
+    private var online = false
+    private val calls = mutableListOf<String>()
+    private val native = mutableMapOf<String, JSONValue>()
+    private var failAdd = false
+    private var failSteer = false
+
+    private fun service() = RemoteTurnQueue(QueueOutbox({dir}, {key}), { device }, { online }, { 1L }, { "thread" }, { method, body, _, _ ->
+        calls += method
+        val p = body.map
+        val result = when (method) {
+            "remodex/queue/add" -> {
+                val id = "host-" + p["clientUserMessageId"]!!.stringValue
+                native[id] = JSONValue.Obj(p + ("id" to JSONValue.Str(id)))
+                if (failAdd) throw java.net.SocketTimeoutException("lost reply")
+                mapOf("queuedSubmissionId" to JSONValue.Str(id))
+            }
+            "thread/queue/list" -> mapOf("data" to JSONValue.Arr(native.values.toList()))
+            "thread/queue/delete" -> mapOf("deleted" to JSONValue.Bool(native.remove(p["queuedSubmissionId"]?.stringValue) != null))
+            "turn/steer" -> {
+                if (failSteer) throw java.net.SocketTimeoutException("steer outcome unknown")
+                emptyMap()
+            }
+            else -> error("Unexpected method $method")
+        }
+        RPCMessage.success(JSONValue.NumLong(1), JSONValue.Obj(result))
+    }, { _, _ -> })
+    private val draft = QueuedTurnDraft("id", "queued text", listOf(CodexImageAttachment(thumbnailBase64JPEG="", remotePath="/upload/p.png")),
+        listOf(CodexTurnSkillMention("name","name","/skill")), listOf(CodexTurnMention("A","/a")), null, "editor text",
+        listOf(CodexFileAttachment(fileName="file", mimeType="text/plain",sizeBytes=1,textContent="x",remotePath="/file")))
+
+    @AfterTest fun cleanup() { dir.deleteRecursively() }
+
+    @Test fun offlineSurvivesProcessDeathAndOnlyFlushesOnItsOwnDevice() = runTest {
+        service().enqueue(device, "thread", draft)
+        assertTrue(dir.listFiles()!!.none { it.readText().contains("editor text") })
+        val restored = service()
+        device = "host-b"
+        online = true
+        restored.sync()
+        assertFalse("remodex/queue/add" in calls)
+        device = "host-a"
+        restored.sync()
+        val preview = restored.previews.value["thread"]!!.single()
+        assertFalse(preview.waiting)
+        assertEquals(2, preview.attachmentCount)
+        assertEquals("editor text", preview.text)
+        assertEquals(draft, restored.take(device,"thread",preview.id))
+        assertTrue(native.isEmpty())
     }
 
-    @Test
-    fun enqueue_updates_depth_and_preview() = runTest {
-        val store = TurnDraftQueueStore()
-        store.enqueue(
-            threadId = "t1",
-            text = "hello world",
-            attachments = listOf(imageAttachment()),
-            skillMentions = listOf(CodexTurnSkillMention(id = "code-review", name = "Code Review")),
-            fileMentions = listOf(CodexTurnMention(name = "B.kt", path = "src/a/B.kt")),
-            collaborationMode = CodexCollaborationModeKind.plan,
-        )
-
-        assertEquals(1, store.depthByThread.value["t1"])
-        val preview = store.previewByThread.value["t1"]?.single()
-        assertNotNull(preview)
-        assertEquals("hello world", preview?.text)
-        assertEquals(1, preview?.attachmentCount)
-        assertEquals(CodexCollaborationModeKind.plan, preview?.collaborationMode)
-        val queued = store.poll("t1")
-        assertEquals(listOf(CodexTurnSkillMention(id = "code-review", name = "Code Review")), queued?.skillMentions)
-        assertEquals(listOf(CodexTurnMention(name = "B.kt", path = "src/a/B.kt")), queued?.fileMentions)
+    @Test fun lostReplyRetriesStableIdAndCompletedRowsDoNotReappear() = runTest {
+        online = true
+        val app = service()
+        app.enqueue(device,"thread",draft)
+        failAdd = true
+        app.sync()
+        assertTrue(app.previews.value["thread"]!!.single().waiting)
+        assertContains(app.errors.value["thread"].orEmpty(),"lost reply")
+        failAdd = false
+        val next = service()
+        next.sync()
+        assertEquals(1, native.size)
+        native.clear()
+        next.sync()
+        assertTrue(next.depths.value.isEmpty())
+        assertEquals(2,calls.count { it == "remodex/queue/add" })
     }
 
-    @Test
-    fun remove_drops_specific_item_and_keeps_remaining_order() = runTest {
-        val store = TurnDraftQueueStore()
-        store.enqueue("t1", "first", emptyList(), emptyList(), emptyList(), null)
-        store.enqueue("t1", "second", emptyList(), emptyList(), emptyList(), null)
-        val previews = store.previewByThread.value["t1"].orEmpty()
-        val firstId = previews.first().id
-
-        val removed = store.remove("t1", firstId)
-        assertNotNull(removed)
-
-        val remaining = store.previewByThread.value["t1"].orEmpty()
-        assertEquals(1, remaining.size)
-        assertEquals("second", remaining.first().text)
-        assertEquals(1, store.depthByThread.value["t1"])
+    @Test fun offlineWithdrawalNeverCreatesARemoteTurn() = runTest {
+        val app = service()
+        app.enqueue(device,"thread",draft)
+        assertEquals(draft,app.take(device,"thread",draft.id))
+        assertTrue(calls.isEmpty())
     }
 
-    @Test
-    fun poll_returns_with_id_and_clears_state_when_empty() = runTest {
-        val store = TurnDraftQueueStore()
-        store.enqueue("t1", "only", emptyList(), emptyList(), emptyList(), null)
-        val polled = store.poll("t1")
-        assertTrue(!polled?.id.isNullOrBlank())
-        assertTrue(store.depthByThread.value["t1"] == null)
-        assertTrue(store.previewByThread.value["t1"] == null)
+    @Test fun unreadableDeviceQueueDoesNotDisplayPreviousDevicesMessages() = runTest {
+        val app = service()
+        device = "host-b"
+        app.enqueue(device, "thread", draft)
+        val corrupt = dir.listFiles()!!.single()
+        device = "host-a"
+        app.enqueue(device, "thread", draft)
+        corrupt.writeBytes(byteArrayOf(0))
+        device = "host-b"
+        assertFails { app.sync() }
+        assertTrue(app.previews.value.isEmpty())
+        assertTrue(app.depths.value.isEmpty())
     }
 
-    private fun imageAttachment(): CodexImageAttachment =
-        CodexImageAttachment(
-            thumbnailBase64JPEG = "abc",
-            payloadDataURL = "data:image/jpeg;base64,abc",
-        )
+    @Test fun failedSteerLeavesRecoverableContentWithoutAutomaticResubmission() = runTest {
+        val app = service()
+        online = true
+        app.enqueue(device,"thread",draft)
+        app.sync()
+        failSteer = true
+        assertFailsWith<java.net.SocketTimeoutException> { app.steer(device,"thread","host-id","active") }
+        val next = service()
+        next.sync()
+        val recovery = next.previews.value["thread"]!!.single()
+        assertTrue(recovery.recovery)
+        assertTrue(native.isEmpty())
+        assertEquals(draft.files, next.take(device,"thread",recovery.id)?.files)
+        assertEquals(1,calls.count { it == "remodex/queue/add" })
+    }
 }
-

@@ -289,7 +289,15 @@ internal suspend fun CodexService.refreshInFlightTurnStateInternal(threadId: Str
     val snapshot =
         try {
             fetchLatestTurnSnapshot(tid) { method, params ->
-                readInitialThreadRpc(tid, method, params, ::sendRequestImpl)
+                readInitialThreadRpc(tid, method, params, ::sendRequestImpl).also { reply ->
+                    requireHistoryConnection(generation)
+                    if (method == "thread/read" && supportsSettingsSync) {
+                        val row = reply.result?.objectValue?.get("thread")?.objectValue
+                        if (row?.get("id")?.stringValue == tid) {
+                            row["runtimeSettings"]?.objectValue?.let { applyConfirmedSettings(tid, it) }
+                        }
+                    }
+                }
             }.also { requireHistoryConnection(generation) }
         } catch (e: kotlinx.coroutines.CancellationException) {
             predictionCheck?.let { predictionStore.abandonCheck(tid, it) }

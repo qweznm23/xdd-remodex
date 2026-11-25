@@ -13,4 +13,6 @@
     <string name="session_info_token_counts">%1$s / %2$s tokens</string>
     <string name="session_info_reset_days">Resets in %1$d d</string>
     <string name="session_info_reset_days_hours">Resets in %1$d d %2$d h</string>
+    <string name="session_info_unreported">Not reported</string>
+    <string name="session_info_no_environment">No environment selected</string>
 </resources>

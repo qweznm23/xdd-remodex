@@ -137,3 +137,25 @@ for (const tier of ["priority", null]) {
     assert.equal(complete.serviceTier, tier);
   });
 }
+
+test("an owner read reconciles a cached choice, but a delayed read cannot undo a newer edit", (t) => {
+  const { store } = fixture(t);
+  const before = store.commit("one", { model: "old", effort: "medium", serviceTier: "priority" }, { source: "phone" });
+  const read = { method: "thread/read", threadId: "one", settingsEpoch: before.epoch, settingsRevision: before.revision };
+  const row = { id: "one", model: "owner", reasoningEffort: "ultra", status: { type: "active" } };
+  store.observeOwnerResponse({ ...row, status: { type: "notLoaded" } }, {}, read);
+  store.observeOwnerResponse({ ...row, id: "two" }, {}, read);
+  assert.deepEqual(store.get("one"), before);
+  store.observeOwnerResponse(row, {}, read);
+  store.attachToThread(row);
+  assert.equal(row.runtimeSettings.model, "owner");
+  assert.equal(row.runtimeSettings.reasoningEffort, "ultra");
+  assert.equal(row.runtimeSettings.serviceTier, "priority");
+  const resume = { ...read, method: "thread/resume", settingsRevision: row.runtimeSettings.revision };
+  store.observeOwnerResponse({ id: "one" }, { model: "new", reasoningEffort: null, serviceTier: null }, resume);
+  store.observeOwnerResponse({ id: "one", model: "late", status: { type: "idle" } }, {}, read);
+  assert.equal(store.get("one").model, "new");
+  assert.equal(store.get("one").reasoningEffort, null);
+  assert.equal(store.get("one").serviceTier, null);
+  assert.equal(store.get("two"), null);
+});

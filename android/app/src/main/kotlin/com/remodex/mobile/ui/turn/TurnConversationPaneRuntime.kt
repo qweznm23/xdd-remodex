@@ -95,14 +95,10 @@ internal fun buildRuntimeControlsState(
                 detail = detail,
             )
         }
-    val effectiveReasoning =
-        selectedReasoningEffort?.takeIf { selected -> reasoningOptions.any { it.id == selected } }
-            ?: selectedModel?.defaultReasoningEffort?.takeIf { default -> reasoningOptions.any { it.id == default } }
-            ?: reasoningOptions.firstOrNull()?.id
     val reasoningState =
         TurnComposerRuntimeSelectorState(
             selected =
-                reasoningOptions.firstOrNull { it.id == effectiveReasoning }
+                reasoningOptions.firstOrNull { it.id == selectedReasoningEffort }
                     ?: selectedReasoningEffort?.let {
                         TurnComposerRuntimeOption(it, reasoningEffortMenuLabel(it, reasoningEffortTitles, "").first)
                     }
@@ -169,10 +165,10 @@ internal fun formatVoiceTranscriptionError(
             e.message?.trim()?.takeIf { it.isNotEmpty() } ?: fallbackMessage
     }
 
-internal suspend fun reportSettingFailure(onError: (String) -> Unit, action: suspend () -> Unit) {
+internal suspend fun reportSettingFailure(onError: (String) -> Unit, stage: String = "thread/settings/update", action: suspend () -> Unit) {
     try { action() } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
     catch (failure: Exception) {
-        android.util.Log.e("RemodexRuntime", "thread/settings/update", failure)
+        android.util.Log.e("RemodexRuntime", stage, failure)
         onError(formatTurnSendError(failure))
     }
 }

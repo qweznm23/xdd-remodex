@@ -1,0 +1,7 @@
+<resources>
+    <string name="turn_activity_details_elapsed">%1$s · %2$s</string>
+    <string name="turn_elapsed_subsecond">用时不到 1 秒</string>
+    <string name="turn_elapsed_seconds">用时 %1$d 秒</string>
+    <string name="turn_elapsed_minutes">用时 %1$d 分 %2$d 秒</string>
+    <string name="turn_elapsed_hours">用时 %1$d 小时 %2$d 分 %3$d 秒</string>
+</resources>

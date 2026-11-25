@@ -8,6 +8,7 @@ package com.remodex.mobile.ui.turn
  */
 internal data class TurnComposerModel(
     val enabled: Boolean = true,
+    val allowOfflineQueue: Boolean = false,
     val sending: Boolean = false,
     val draftText: String = "",
     val readyAttachmentCount: Int = 0,
@@ -45,13 +46,13 @@ internal data class TurnComposerDerived(
                     draftText.trim().isNotEmpty() || readyAttachmentCount > 0
 
                 val canSend =
-                    enabled &&
+                    (enabled || allowOfflineQueue) &&
                         !sending &&
                         hasRenderablePayload &&
                         !hasBlockingAttachments
 
                 val canEditText =
-                    enabled &&
+                    (enabled || allowOfflineQueue) &&
                         !sending &&
                         !hasBlockingAttachments &&
                         voicePhase == TurnVoicePhase.Idle &&

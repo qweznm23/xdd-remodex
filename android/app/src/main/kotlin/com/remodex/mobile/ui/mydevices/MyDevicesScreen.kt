@@ -324,58 +324,58 @@ private fun PairedDeviceRow(
     onForget: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier = modifier.fillMaxWidth()) {
-        ListItem(
-            modifier = Modifier.clickable(enabled = enabled, onClick = onSwitch),
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            headlineContent = { Text(device.primaryName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            supportingContent = { DeviceStatusSubtitle(device = device) },
-            leadingContent = { DeviceAvatar(device = device, diameter = 40.dp) },
-            trailingContent = {
+    ListItem(
+        modifier = modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onSwitch),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        headlineContent = { Text(device.primaryName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { DeviceStatusSubtitle(device = device) },
+        leadingContent = { DeviceAvatar(device = device, diameter = 40.dp) },
+        trailingContent = {
+            Box {
                 IconButton(onClick = { onMenuExpandedChange(true) }, enabled = enabled) {
                     Icon(Icons.Outlined.MoreHoriz, stringResource(R.string.my_devices_device_actions_cd))
                 }
-            },
-        )
-        val showInMenu = MyDeviceMenuVisibilityStore.isVisible(device.deviceId)
-        RemodexDropdownMenu(
-            expanded = menuExpanded,
-            onDismissRequest = { onMenuExpandedChange(false) },
-        ) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.my_devices_scan_qr)) },
-                onClick = onScanQr,
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.my_devices_pair_code)) },
-                onClick = onPairWithCode,
-            )
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        if (showInMenu) {
-                            stringResource(R.string.my_devices_hide_from_menu)
-                        } else {
-                            stringResource(R.string.my_devices_show_in_menu)
+                val showInMenu = MyDeviceMenuVisibilityStore.isVisible(device.deviceId)
+                RemodexDropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { onMenuExpandedChange(false) },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.my_devices_scan_qr)) },
+                        onClick = onScanQr,
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.my_devices_pair_code)) },
+                        onClick = onPairWithCode,
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (showInMenu) {
+                                    stringResource(R.string.my_devices_hide_from_menu)
+                                } else {
+                                    stringResource(R.string.my_devices_show_in_menu)
+                                },
+                            )
+                        },
+                        onClick = {
+                            onToggleMenuVisibility(!showInMenu)
+                            onMenuExpandedChange(false)
                         },
                     )
-                },
-                onClick = {
-                    onToggleMenuVisibility(!showInMenu)
-                    onMenuExpandedChange(false)
-                },
-            )
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        text = stringResource(R.string.my_devices_forget),
-                        color = MaterialTheme.colorScheme.error,
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = stringResource(R.string.my_devices_forget),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                        onClick = onForget,
                     )
-                },
-                onClick = onForget,
-            )
-        }
-    }
+                }
+            }
+        },
+    )
 }
 
 @Composable

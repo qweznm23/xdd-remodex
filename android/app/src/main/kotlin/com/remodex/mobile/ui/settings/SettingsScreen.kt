@@ -39,7 +39,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Badge
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.Composable
@@ -66,7 +66,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remodex.mobile.AppContainer
-import com.remodex.mobile.BuildConfig
 import com.remodex.mobile.R
 import com.remodex.mobile.update.UpdatePhase
 import com.remodex.mobile.core.config.FeatureFlags
@@ -76,7 +75,7 @@ import com.remodex.mobile.core.model.AppThemePreference
 import com.remodex.mobile.core.model.RelayHealthSnapshot
 import com.remodex.mobile.core.model.UserBubbleColor
 import com.remodex.mobile.core.notification.LocalNotificationSettings
-import com.remodex.mobile.core.readRemodexAppVersionName
+import com.remodex.mobile.BuildConfig
 import com.remodex.mobile.core.transport.ConnectionState
 import com.remodex.mobile.data.AppFontPreferences
 import com.remodex.mobile.data.CodexRepository
@@ -171,7 +170,7 @@ private fun SettingsContent(
     LaunchedEffect(page, deviceId, ready, localRelayHostOverride) {
         if (page == SettingsPage.HOME) AppContainer.appUpdates.checkOnSettingsEntry()
     }
-    val versionName = remember { readRemodexAppVersionName(context) }
+    val versionName = BuildConfig.VERSION_NAME
     var host by remember(repository, deviceId) { mutableStateOf<SettingsHostStatus?>(null) }
     var hostError by remember(repository, deviceId) { mutableStateOf<Exception?>(null) }
     var hostLoading by remember(repository, deviceId) { mutableStateOf(false) }
@@ -269,7 +268,7 @@ private fun SettingsContent(
                         SettingsPage.HOME -> {
                             CurrentAccountCard(currentName, identity, verification, currentWeeklyQuota()?.remainingPercent?.takeUnless { authProfiles.verifyingIdentity }) { page = SettingsPage.ACCOUNT }
                             SettingsDestinationGroup(stringResource(R.string.settings_group_application)) {
-                                SettingsUpdateEntry { updateOpen = true }
+                                SettingsUpdateEntry(versionName) { updateOpen = true }
                                 SettingsDestination(LucideR.drawable.lucide_ic_info, stringResource(R.string.settings_app_hub),
                                     stringResource(R.string.settings_components), { page = SettingsPage.APP })
                             }
@@ -287,10 +286,9 @@ private fun SettingsContent(
                             }
                         }
                         SettingsPage.APP, SettingsPage.UPDATES -> {
-                            SettingsSummary(LucideR.drawable.lucide_ic_download, stringResource(R.string.settings_installed_version),
-                                versionName, actions = {
-                                    FilledTonalButton(onClick = { updateOpen = true }) { Text(stringResource(R.string.app_update_check)) }
-                                })
+                            SettingsDestinationGroup(stringResource(R.string.settings_installed_version)) {
+                                SettingsUpdateEntry(versionName) { updateOpen = true }
+                            }
                             SettingsDestinationGroup(stringResource(R.string.settings_help_tools)) {
                                 SettingsDestination(LucideR.drawable.lucide_ic_blocks, stringResource(R.string.settings_components), stringResource(R.string.settings_components_summary), { page = SettingsPage.COMPONENTS })
                             }
@@ -543,14 +541,27 @@ private fun SettingsDestinationGroup(title: String, content: @Composable android
 }
 
 @Composable
-private fun SettingsUpdateEntry(onOpen: () -> Unit) {
+private fun SettingsUpdateEntry(installed: String, onOpen: () -> Unit) {
     val state = AppContainer.appUpdates.state.collectAsStateWithLifecycle()
-    // The home row only tracks stages. Byte-by-byte progress belongs in the open dialog.
-    val status by remember { derivedStateOf { state.value.phase to state.value.retry } }
-    val subtitle = if (status.first == UpdatePhase.IDLE) {
-        stringResource(R.string.app_update_current, BuildConfig.VERSION_NAME)
-    } else stringResource(updateTitle(status.first, status.second))
-    SettingsDestination(LucideR.drawable.lucide_ic_download, stringResource(R.string.app_update_check), subtitle, onOpen)
+    val summary by remember(state) { derivedStateOf {
+        val update = state.value
+        Triple(update.phase, update.retry, update.newerRelease?.versionName)
+    } }
+    val (phase, retry, target) = summary
+    val versions = if (target == null) stringResource(R.string.app_update_current, installed)
+        else stringResource(R.string.update_versions, installed, target)
+    val subtitle = when (phase) {
+        UpdatePhase.IDLE, UpdatePhase.AVAILABLE -> versions
+        else -> versions + "\n" + stringResource(updateTitle(phase, retry))
+    }
+    SettingsDestination(LucideR.drawable.lucide_ic_download, stringResource(R.string.app_update_check), subtitle, onOpen) {
+        if (target != null) {
+            Badge(containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer) {
+                Text(stringResource(R.string.update_new_badge))
+            }
+        }
+    }
 }
 
 @Composable

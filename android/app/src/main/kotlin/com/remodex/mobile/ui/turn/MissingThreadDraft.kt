@@ -18,7 +18,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 internal fun Throwable.isMissingSendTarget(): Boolean =
-    this is CodexServiceError.RpcFailure && rpcError.isExplicitServerThreadMissing()
+    this is CodexServiceError.MissingSendTargetAfterResume ||
+        (this is CodexServiceError.RpcFailure && rpcError.isExplicitServerThreadMissing())
 
 /** Keep the prepared turn and, when available, the editable draft and file chips. */
 @Serializable

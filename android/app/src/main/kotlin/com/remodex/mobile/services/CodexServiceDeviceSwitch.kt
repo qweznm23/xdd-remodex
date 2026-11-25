@@ -249,8 +249,7 @@ internal suspend fun CodexService.clearInMemoryMacScopedState() {
             _runningTurnIdByThread.value = emptyMap()
             _protectedRunningFallbackThreadIds.value = emptySet()
         }
-        turnDraftQueueStore.clear()
-        messageTimelineStore.replaceAll(emptyMap())
+            messageTimelineStore.replaceAll(emptyMap())
     } finally {
         isApplyingMacScopedState = false
     }

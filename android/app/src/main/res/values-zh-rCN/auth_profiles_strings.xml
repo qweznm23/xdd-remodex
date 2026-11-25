@@ -43,7 +43,7 @@
     <string name="auth_progress_selected">已选中授权文件</string>
     <string name="auth_progress_scheduled">等待电脑重启，预计 %1$d 秒后开始</string>
     <string name="auth_progress_waiting">等待电脑返回重启结果</string>
-    <string name="auth_progress_reconnect">正在重新连接电脑</string>
+    <string name="auth_progress_reconnect">正在重新连接</string>
     <string name="auth_progress_restored">已重新连接电脑</string>
     <string name="auth_progress_verify">正在确认 Codex 使用的账号</string>
     <string name="auth_progress_confirmed">已确认 Codex 正在使用 %1$s 号授权</string>

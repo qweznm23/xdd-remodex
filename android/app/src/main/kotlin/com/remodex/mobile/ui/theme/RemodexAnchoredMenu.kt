@@ -29,7 +29,7 @@ import androidx.compose.ui.window.PopupProperties
 
 /** Expand from an anchor, optionally carrying its existing badge into the transition. */
 @Composable
-internal fun QuotaAnchoredMenu(
+internal fun RemodexAnchoredMenu(
     transition: Transition<Boolean>,
     onDismiss: () -> Unit,
     panelWidth: Dp? = null,

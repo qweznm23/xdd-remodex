@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.sidebar
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -140,22 +141,24 @@ fun SidebarNewWorktreeSheet(
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        OutlinedButton(onClick = { showBranchMenu = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                            Text(branch, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Icon(Icons.Filled.KeyboardArrowDown, null)
-                        }
-                        RemodexDropdownMenu(
-                            expanded = showBranchMenu,
-                            onDismissRequest = { showBranchMenu = false },
-                        ) {
-                            branchSummary.branches.forEach { option ->
-                                DropdownMenuItem(
-                                    text = { Text(option) },
-                                    onClick = {
-                                        selectedBranch = option
-                                        showBranchMenu = false
-                                    },
-                                )
+                        Box {
+                            OutlinedButton(onClick = { showBranchMenu = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                                Text(branch, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Icon(Icons.Filled.KeyboardArrowDown, null)
+                            }
+                            RemodexDropdownMenu(
+                                expanded = showBranchMenu,
+                                onDismissRequest = { showBranchMenu = false },
+                            ) {
+                                branchSummary.branches.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option) },
+                                        onClick = {
+                                            selectedBranch = option
+                                            showBranchMenu = false
+                                        },
+                                    )
+                                }
                             }
                         }
                     }

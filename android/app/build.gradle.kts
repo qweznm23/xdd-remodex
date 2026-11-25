@@ -49,7 +49,7 @@ android {
         minSdk = 26
         targetSdk = 36
 
-        versionCode = 178
+        versionCode = 183
         versionName = "0.1.7"
         buildConfigField("boolean", "BUNDLED_FONT_PAIR", (bundledFontAssets != null).toString())
         buildConfigField("boolean", "BETA_ENABLED", betaEnabled.toString())
@@ -75,10 +75,10 @@ android {
 
     buildTypes {
         debug {
-            versionNameSuffix = "-ws-fix161"
+            versionNameSuffix = "-ws-fix166"
         }
         release {
-            versionNameSuffix = "-ws-fix161"
+            versionNameSuffix = "-ws-fix166"
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true

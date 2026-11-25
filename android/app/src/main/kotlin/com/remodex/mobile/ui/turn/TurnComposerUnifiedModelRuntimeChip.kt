@@ -37,7 +37,7 @@ internal fun compactModelStickerForUnifiedChip(option: TurnComposerRuntimeOption
 
 internal fun reasoningOrSpeedCompactCaption(runtimeControls: TurnComposerRuntimeControlsState): String =
     when {
-        runtimeControls.reasoningEffort.enabled -> runtimeControls.reasoningEffort.selected.label
+        runtimeControls.reasoningEffort.enabled || runtimeControls.reasoningEffort.selected.id != TURN_COMPOSER_RUNTIME_AUTO_ID -> runtimeControls.reasoningEffort.selected.label
         else -> runtimeControls.serviceTier.selected.label
     }.trim()
 

@@ -44,7 +44,7 @@ internal suspend fun CodexService.forkThreadInternal(
 
     val response =
         try {
-            sendRequestWithApprovalPolicyFallback(
+            sendRequestImpl(
                 "thread/fork",
                 JSONValue.Obj(mapOf("threadId" to JSONValue.Str(sourceId))),
             )

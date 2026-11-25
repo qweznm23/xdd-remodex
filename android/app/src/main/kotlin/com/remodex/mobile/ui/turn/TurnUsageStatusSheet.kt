@@ -321,7 +321,7 @@ private fun ThreadRuntimeStatusBlock(
                     val meta =
                         buildList {
                             if (draft.attachmentCount > 0) {
-                                add(stringResource(R.string.turn_queue_item_attachments, draft.attachmentCount))
+                                add(stringResource(R.string.queue_attachment_count, draft.attachmentCount))
                             }
                             if (draft.collaborationMode == com.remodex.mobile.core.model.CodexCollaborationModeKind.plan) {
                                 add(stringResource(R.string.turn_plan_mode_chip))

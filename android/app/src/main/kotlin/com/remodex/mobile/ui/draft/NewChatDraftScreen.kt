@@ -65,6 +65,7 @@ import com.remodex.mobile.ui.theme.RemodexDropdownMenu
 import com.remodex.mobile.ui.theme.RemodexPageHeader
 import com.remodex.mobile.ui.theme.conversationColors
 import com.remodex.mobile.ui.turn.ComposerMentionChipPayload
+import com.remodex.mobile.ui.turn.IncomingDraftShare
 import com.remodex.mobile.ui.turn.MissingThreadDraft
 import com.remodex.mobile.ui.turn.MissingThreadDraftStore
 import com.remodex.mobile.ui.turn.ReasoningEffortTitleStrings
@@ -166,6 +167,12 @@ private fun NewChatDraftContent(
     val reviewNeedsWorkspace = stringResource(R.string.new_chat_review_needs_workspace)
     var recoveryError by remember { mutableStateOf<String?>(null) }
     val recoveryReady = !recovering || recovered != null
+
+    if (ready && recoveryReady) {
+        IncomingDraftShare(repository, deviceId, route.id, stringResource(R.string.new_chat_draft_title),
+            attachmentActions, enabled = !sending && reviewTarget == null,
+            appendText = { draft = if (draft.isEmpty()) it else draft + "\n" + it })
+    }
 
     val hasSelectedProject = !selectedProjectPath.isNullOrBlank()
     val isConnected = conn is ConnectionState.Connected
