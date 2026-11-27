@@ -181,7 +181,9 @@ fun TurnMessageRow(
                         skipThinkingHeadline = kindLabel != null,
                         cleanedDirectiveText = directiveOutcome.cleanedText,
                         hasDirectiveFindings = directiveOutcome.hasFindings,
-                    ).let { if (message.role == CodexMessageRole.user) com.remodex.mobile.data.ConversationQuestionCodec.displayReply(it) else it }
+                    ).let { raw ->
+                        if (message.role == CodexMessageRole.user) remember(raw) { displayUserMessageBody(raw) } else raw
+                    }
                 val preparedBody = remember(message, bodyMarkdown) { prepareTimelineBody(message, bodyMarkdown) }
                 val proposedPlanExtraction = preparedBody.first
                 val cappedBody = preparedBody.second
@@ -353,7 +355,7 @@ internal fun settledTimelineMarkdown(message: CodexMessage): String? {
     if (message.isStreaming || message.kind != CodexMessageKind.chat || message.role == CodexMessageRole.system) return null
     val raw = TurnDirectiveRenderCache.parseCodeCommentDirectives(message.id, message.visibleAssistantText()).cleanedText.trim()
     if (raw.isEmpty()) return null // Localized empty/streaming placeholders are tiny and stay in the UI.
-    val body = if (message.role == CodexMessageRole.user) com.remodex.mobile.data.ConversationQuestionCodec.displayReply(raw) else raw
+    val body = if (message.role == CodexMessageRole.user) displayUserMessageBody(raw) else raw
     return prepareTimelineBody(message, body).second.text
 }
 

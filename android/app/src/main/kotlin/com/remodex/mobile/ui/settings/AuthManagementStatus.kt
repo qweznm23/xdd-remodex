@@ -5,10 +5,12 @@ import com.remodex.mobile.services.FileTransferFailure
 import java.io.InputStream
 import java.time.Instant
 
-internal data class AuthManagedEntry(val profile: AuthProfile, val active: Boolean, val result: String?, val diagnostic: String?, val reason: String? = null)
+private const val RevokedRefreshCode = "REFRESH_TOKEN_REVOKED"
+
+internal data class AuthManagedEntry(val profile: AuthProfile, val active: Boolean, val result: String?, val diagnostic: String?, val reason: String? = null, val refreshRevoked: Boolean = false)
 internal data class AuthManagementStatus(val current: AuthProfile, val entries: List<AuthManagedEntry>,
     val lastCheck: Instant?, val nextCheck: Instant?, val lastRun: Instant?,
-    val activeState: String?, val activeDiagnostic: String?, val nextProfileId: String? = null, val activeReason: String? = null) {
+    val activeState: String?, val activeDiagnostic: String?, val nextProfileId: String? = null, val activeReason: String? = null, val activeRefreshRevoked: Boolean = false) {
     companion object {
         fun decode(data: Map<String, JSONValue>): AuthManagementStatus {
             require(data["managedBy"]?.stringValue == "remodex") { "stage=auth_status_decode: unknown owner" }
@@ -19,19 +21,22 @@ internal data class AuthManagementStatus(val current: AuthProfile, val entries: 
                 Instant.parse(it.stringValue ?: error("stage=auth_status_decode: invalid date"))
             }
             fun reason(value: JSONValue?) = value?.objectValue?.let(::authReportFacts)?.distinct()?.joinToString(" · ")?.takeIf { it.isNotBlank() }
+            fun revoked(value: JSONValue?) = value?.objectValue?.get("code")?.stringValue == RevokedRefreshCode
             val entries = (data["profiles"]?.arrayValue ?: error("stage=auth_status_decode: missing profiles")).map { row ->
                 val fields = row.objectValue ?: error("stage=auth_status_decode: invalid profile")
                 val result = fields["lastMaintenance"]?.objectValue.orEmpty()
                 AuthManagedEntry(AuthProfile.decode(row), fields["active"]?.boolValue
                     ?: error("stage=auth_status_decode: missing active flag"), result["status"]?.stringValue,
-                    result["diagnostic"]?.takeUnless { it == JSONValue.Null }?.let { JSONValue.toJsonElement(it).toString() }, reason(result["diagnostic"]))
+                    result["diagnostic"]?.takeUnless { it == JSONValue.Null }?.let { JSONValue.toJsonElement(it).toString() },
+                    reason(result["diagnostic"]), revoked(result["diagnostic"]))
             }
             require(entries.map { it.profile.id }.distinct().size == entries.size) { "stage=auth_status_decode: duplicate slot" }
+            val activeDiagnostic = active["diagnostic"] ?: active["lastResult"]?.objectValue?.get("diagnostic")
             return AuthManagementStatus(AuthProfile.decode(data["currentProfile"] ?: error("Missing current profile")), entries,
                 date(scheduler["lastCheckAt"]), date(scheduler["nextCheck"] ?: schedule["nextCheck"]), date(schedule["checkedAt"]),
-                active["status"]?.stringValue, (active["diagnostic"] ?: active["lastResult"]?.objectValue?.get("diagnostic"))
+                active["status"]?.stringValue, activeDiagnostic
                     ?.takeUnless { it == JSONValue.Null }?.let { JSONValue.toJsonElement(it).toString() },
-                data["nextProfileId"]?.stringValue, reason(active["diagnostic"] ?: active["lastResult"]?.objectValue?.get("diagnostic")))
+                data["nextProfileId"]?.stringValue, reason(activeDiagnostic), revoked(activeDiagnostic))
         }
     }
 }

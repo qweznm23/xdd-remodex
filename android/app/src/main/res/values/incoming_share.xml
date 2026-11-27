@@ -1,4 +1,12 @@
 <resources>
+    <string name="share_review">Review share</string>
+    <string name="share_destination">Conversation</string>
+    <string name="share_change_thread_short">Change</string>
+    <string name="share_file_selection">Files · %1$d of %2$d selected</string>
+    <string name="share_caption">Shared text</string>
+    <string name="share_text">Text</string>
+    <string name="share_text_more">Show full text</string>
+    <string name="share_text_less">Show less</string>
     <string name="share_prepare_files">Regular files upload to %1$s when added. You can review the draft before sending.</string>
     <string name="share_connected_computer">the connected computer</string>
     <string name="share_choose_thread">Select a conversation for the shared content</string>

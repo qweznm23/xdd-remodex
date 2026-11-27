@@ -7,9 +7,6 @@ if [[ -f "$project_dir/.local/config/build.env" ]]; then
   source "$project_dir/.local/config/build.env"
   set +a
 fi
-if [[ ${XDD_REMODEX_BUILD_LOCK_HELD:-0} != 1 ]]; then
-  exec flock /var/lock/android-toolchain-validation.lock env XDD_REMODEX_BUILD_LOCK_HELD=1 bash "$0" "$@"
-fi
 : "${JAVA_HOME:?Configure JAVA_HOME in .local/config/build.env}"
 : "${ANDROID_HOME:?Configure ANDROID_HOME in .local/config/build.env}"
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$project_dir/.local/cache/gradle}"

@@ -463,6 +463,10 @@ test("authorization RPCs reach the bundled service through the normal bridge rou
   assert.equal(list.result.managedBy,'remodex');
   const profile=list.result.profiles[0];
   const selected={profile:'1',revision:profile.revision};
+  assert.equal((await rpc('reset-card',{...selected,revision:'0:0',creditId:'fake-card'})).error.data.errorCode,'PROFILE_CHANGED');
+  socket.send(JSON.stringify({id:'raw-consume',method:'account/rateLimitResetCredit/consume',params:{creditId:'fake-card'}}));
+  const guarded = await waitForMessage(replies, reply => reply.id === 'raw-consume');
+  assert.equal(guarded.error.data.errorCode,'reset_confirmation_required');
   assert.equal((await rpc('check',selected)).result.credentialValidity,'not_verified');
   assert.equal((await rpc('status')).result.profiles[0].active,false);
   assert.equal((await rpc('refreshToken',{...selected,revision:'0:0'})).error.data.errorCode,'PROFILE_CHANGED');
@@ -472,4 +476,35 @@ test("authorization RPCs reach the bundled service through the normal bridge rou
   assert.equal(fs.readFileSync(exported.result.path,'utf8'),credential('saved'));
   assert.ok(!JSON.stringify(replies).includes('synthetic-'));
   assert.ok(!JSON.stringify(replies).includes('header.'));
+});
+
+test("paired host metrics come from the bridge before any Codex initialization", async t => {
+  const relay = new WebSocket.Server({port:0});
+  await new Promise(resolve => relay.once("listening", resolve));
+  let socket;
+  const replies = [];
+  relay.on("connection", peer => {
+    socket = peer;
+    peer.on("message", bytes => replies.push(JSON.parse(bytes.toString())));
+  });
+  const codex = createFakeCodexTransport();
+  const {startBridge} = loadBridgeWithTestDoubles({createCodexTransportImpl: () => codex});
+  const bridge = startBridge({printPairingQr:false, config:{
+    relayUrl:`ws://127.0.0.1:${relay.address().port}`, pushServiceUrl:"", keepMacAwakeEnabled:false,
+    refreshEnabled:false, codexEndpoint:"ws://test",
+  }});
+  t.after(() => { bridge.stop(); socket?.close(); relay.close(); });
+  await waitFor(() => socket?.readyState === WebSocket.OPEN);
+  const method = "remodex/host/systemInfo";
+  socket.send(JSON.stringify({id:"host", method, params:{cwd:os.tmpdir()}}));
+  const {result} = await waitForMessage(replies, reply => reply.id === "host");
+  assert.equal(result.hostname, os.hostname());
+  assert.ok(result.cpu.cores.some(core => Number.isInteger(core.percent)));
+  assert.equal(result.disk.directory, os.tmpdir());
+  assert.ok(result.disk.total > 0);
+  socket.send(JSON.stringify({id:"invalid-host", method, params:{cwd:"relative"}}));
+  const {error} = await waitForMessage(replies, reply => reply.id === "invalid-host");
+  assert.equal(error.data.stage, method);
+  assert.equal(error.data.diagnostic.type, "TypeError");
+  assert.equal(codex.sent.some(request => request.method === method), false);
 });

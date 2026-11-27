@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.turn
 
+import com.remodex.mobile.services.resetCard
 import com.remodex.mobile.ui.theme.LocalSheetClose
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -241,8 +242,12 @@ private fun ThreadUsageStatusSheetContent(
                                 stringResource(if (showDetails) R.string.turn_usage_revert_hide_details else R.string.turn_usage_revert_show_details))
                         }
                     }
-                    AccountUsageSummary(accountDetails)
-                    if (showDetails) AccountUsageDetailsContent(accountDetails)
+                    if (!showDetails) AccountUsageSummary(accountDetails)
+                    if (showDetails) androidx.compose.runtime.key(currentTrustedMacDeviceId, connected) {
+                        AccountUsageDetailsContent(accountDetails, ready && connected,
+                            request = { id, ticket -> repository.resetCard("current", null, id, ticket) },
+                            refresh = { refresh(force = true) })
+                    }
                 }
             }
             if (recentChangeSets.isNotEmpty()) {

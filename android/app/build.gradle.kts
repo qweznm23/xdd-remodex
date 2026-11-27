@@ -49,7 +49,7 @@ android {
         minSdk = 26
         targetSdk = 36
 
-        versionCode = 183
+        versionCode = 191
         versionName = "0.1.7"
         buildConfigField("boolean", "BUNDLED_FONT_PAIR", (bundledFontAssets != null).toString())
         buildConfigField("boolean", "BETA_ENABLED", betaEnabled.toString())
@@ -60,7 +60,7 @@ android {
         manifestPlaceholders["PHODEX_DEFAULT_RELAY_URL"] = defaultRelayUrl
     }
 
-    bundledFontAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
+    bundledFontAssets?.let { sourceSets.getByName("main").assets.setSrcDirs(listOf(it)) }
 
     signingConfigs {
         if (hasReleaseSigning) {
@@ -75,10 +75,10 @@ android {
 
     buildTypes {
         debug {
-            versionNameSuffix = "-ws-fix166"
+            versionNameSuffix = "-ws-fix174"
         }
         release {
-            versionNameSuffix = "-ws-fix166"
+            versionNameSuffix = "-ws-fix174"
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
@@ -192,6 +192,7 @@ dependencies {
     implementation("com.composables:icons-lucide-android:2.2.1")
     implementation("com.valentinilk.shimmer:compose-shimmer:1.4.0")
     implementation("io.coil-kt.coil3:coil-compose:3.0.0")
+    implementation("io.coil-kt.coil3:coil-gif:3.0.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
 
     val markdownRenderer = "0.39.2"

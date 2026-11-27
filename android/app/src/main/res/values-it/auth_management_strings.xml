@@ -19,6 +19,8 @@
     <string name="auth_manage_active_unknown">Stato della manutenzione delle credenziali correnti non ancora confermato.</string>
     <string name="auth_manage_current_file">File di autorizzazione corrente</string>
     <string name="auth_manage_auto_failed">Rinnovo automatico non riuscito per %1$s · dettagli</string>
+    <string name="auth_manage_token_revoked">Token di rinnovo revocato. Rinnovo automatico sospeso.</string>
+    <string name="auth_manage_token_revoked_reauth">Accedi di nuovo per ottenere una nuova autorizzazione.</string>
     <string name="auth_manage_checked">Struttura del file verificata. Questo controllo non conferma la validità sul server.</string>
     <string name="auth_manage_imported">Autorizzazione importata. Account corrente invariato.</string>
     <string name="auth_manage_exported">Autorizzazione salvata nella posizione scelta.</string>

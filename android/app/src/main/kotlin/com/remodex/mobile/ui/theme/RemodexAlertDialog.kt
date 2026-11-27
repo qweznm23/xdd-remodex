@@ -14,10 +14,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import com.remodex.mobile.R
 
 /** Use the platform window transition so dismiss actions run immediately and an exiting IME keeps its lifecycle. */
@@ -57,9 +60,29 @@ internal fun RemodexAlertDialog(
 
 
 @Composable
-internal fun RemodexPreviewDialog(onDismissRequest: () -> Unit, properties: DialogProperties, content: @Composable () -> Unit) {
+internal fun RemodexPreviewDialog(
+    onDismissRequest: () -> Unit,
+    properties: DialogProperties,
+    systemBarBackground: Color = MaterialTheme.colorScheme.surface,
+    content: @Composable () -> Unit,
+) {
     Dialog(onDismissRequest = onDismissRequest, properties = properties) {
         WindowMotion(R.style.RemodexPreviewMotion)
+        // A full-screen Compose dialog owns its bars independently of the Activity.
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        if (window != null) {
+            DisposableEffect(window, systemBarBackground) {
+                val darkIcons = contrastRatio(Color.Black, systemBarBackground) >= contrastRatio(Color.White, systemBarBackground)
+                val color = systemBarBackground.toArgb()
+                window.statusBarColor = color
+                window.navigationBarColor = color
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = darkIcons
+                    isAppearanceLightNavigationBars = darkIcons
+                }
+                onDispose {}
+            }
+        }
         content()
     }
 }

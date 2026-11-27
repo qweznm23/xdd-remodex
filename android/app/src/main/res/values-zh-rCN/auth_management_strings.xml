@@ -15,10 +15,12 @@
     <string name="auth_manage_active_refreshed">当前凭据已补刷新，并同步到对应编号库。</string>
     <string name="auth_manage_active_conflict">库内存在较新或无法比较的凭据，已保留两份。</string>
     <string name="auth_manage_active_attempted">今天已尝试补刷新，不再自动重复；需要时可手动刷新。</string>
-    <string name="auth_manage_active_failed">当前凭据维护未完成，可展开查看原因。</string>
+    <string name="auth_manage_active_failed">当前凭据维护失败，可展开查看原因。</string>
     <string name="auth_manage_active_unknown">尚未确认当前凭据的维护状态。</string>
     <string name="auth_manage_current_file">当前授权文件</string>
-    <string name="auth_manage_auto_failed">%1$s 号自动刷新未完成 · 查看原因</string>
+    <string name="auth_manage_auto_failed">%1$s 号自动刷新失败 · 查看原因</string>
+    <string name="auth_manage_token_revoked">刷新令牌已撤销，已暂停自动刷新</string>
+    <string name="auth_manage_token_revoked_reauth">请重新登录以获取新的授权。</string>
     <string name="auth_manage_checked">文件结构检查通过；此检查不代表服务端已接受凭据。</string>
     <string name="auth_manage_imported">授权已导入，当前使用的账号未切换。</string>
     <string name="auth_manage_exported">授权已保存到你选择的位置。</string>

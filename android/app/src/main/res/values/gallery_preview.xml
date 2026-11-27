@@ -1,0 +1,4 @@
+<resources>
+    <string name="gallery_preview_title">Image preview</string>
+    <string name="gallery_preview_position">%1$s, image %2$d of %3$d</string>
+</resources>

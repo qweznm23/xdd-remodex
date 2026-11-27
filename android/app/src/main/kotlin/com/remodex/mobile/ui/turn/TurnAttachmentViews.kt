@@ -253,8 +253,19 @@ private fun PlaceholderAttachmentThumbnail(loading: Boolean) {
     }
 }
 
-internal fun attachmentImageSource(attachment: CodexImageAttachment, preferPayload: Boolean): String =
-    when {
+internal fun String.isGifReference(): Boolean = if (startsWith("data:", ignoreCase = true)) {
+    startsWith("data:image/gif;", ignoreCase = true)
+} else substringBefore('?').substringBefore('#').endsWith(".gif", ignoreCase = true)
+
+internal fun attachmentImageSource(attachment: CodexImageAttachment, preferPayload: Boolean): String {
+    if (preferPayload) {
+        listOfNotNull(attachment.payloadDataURL, attachment.remotePath, attachment.sourceURL)
+            .firstOrNull { it.isGifReference() }?.let { return it }
+        if (attachment.mimeType.equals("image/gif", true)) {
+            (attachment.remotePath ?: attachment.sourceURL)?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+    }
+    return when {
         preferPayload && !attachment.payloadDataURL.isNullOrBlank() -> attachment.payloadDataURL!!
         !preferPayload && attachment.thumbnailBase64JPEG.isNotBlank() -> "data:image/jpeg;base64,${attachment.thumbnailBase64JPEG}"
         !attachment.payloadDataURL.isNullOrBlank() -> attachment.payloadDataURL!!
@@ -262,3 +273,4 @@ internal fun attachmentImageSource(attachment: CodexImageAttachment, preferPaylo
         attachment.thumbnailBase64JPEG.isNotBlank() -> "data:image/jpeg;base64,${attachment.thumbnailBase64JPEG}"
         else -> ""
     }
+}

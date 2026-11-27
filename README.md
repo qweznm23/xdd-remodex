@@ -7,12 +7,12 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 
 ## 首次安装
 
-手机和电脑分别安装一个文件，最新发布包含服务端和 Android 客户端 fix166，两个文件都可从[fix166 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix166)下载。
+手机和电脑分别安装一个文件，最新发布包含服务端和 Android 客户端 fix174，两个文件都可从[fix174 发布页](https://github.com/qweznm23/xdd-remodex/releases/tag/v0.1.7-ws-fix174)下载。
 
 | 在哪里安装 | 下载 | 安装后做什么 |
 | --- | --- | --- |
-| 运行 Codex 的电脑（Linux / macOS） | [下载服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix166/xdd-remodex-server-0.1.7-ws-fix166.tar.gz) | 解压，按[服务端安装指南](docs/server-install.md)启动中继和桥接，显示配对二维码 |
-| Android 手机（8.0 及以上） | [下载 Android APK](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix166/remodex-0.1.7-ws-fix166.apk) | 打开 APK 安装，按系统提示允许安装，再用 Remodex 扫描电脑上的二维码 |
+| 运行 Codex 的电脑（Linux / macOS） | [下载服务端压缩包](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix174/xdd-remodex-server-0.1.7-ws-fix174.tar.gz) | 解压，按[服务端安装指南](docs/server-install.md)启动中继和桥接，显示配对二维码 |
+| Android 手机（8.0 及以上） | [下载 Android APK](https://github.com/qweznm23/xdd-remodex/releases/download/v0.1.7-ws-fix174/remodex-0.1.7-ws-fix174.apk) | 打开 APK 安装，按系统提示允许安装，再用 Remodex 扫描电脑上的二维码 |
 
 两个系统使用同一个服务端包，包内安装说明在 `docs/server-install.md`。从 fix73 升级时请先保存 APK，再切换桥接和中继，最后覆盖安装手机应用。已有设备可以沿用原配对。[V2 升级与回退步骤](docs/v2-upgrade.md)
 
@@ -31,7 +31,7 @@ GitHub：[qweznm23/xdd-remodex](https://github.com/qweznm23/xdd-remodex)，公�
 从 Release 对应标签检出源码，并安装两个服务的 Node 依赖：
 
 ```bash
-git clone --branch v0.1.7-ws-fix166 https://github.com/qweznm23/xdd-remodex.git
+git clone --branch v0.1.7-ws-fix174 https://github.com/qweznm23/xdd-remodex.git
 cd xdd-remodex
 npm --prefix phodex-bridge ci --ignore-scripts
 npm --prefix relay ci --ignore-scripts
@@ -83,7 +83,7 @@ make android-release              # 测试、发布检查、签名和压缩打�
 ```
 
 Android 配置放在 `.local/config/build.env`，参考 `ops/build.env.example`。
-构建沿用项目 Gradle/JDK/JVM/worker 策略，通过共享 Android 验证锁排队。
+构建沿用项目 Gradle/JDK/JVM/worker 策略，不再通过跨项目共享锁排队。
 `android/gradle.properties` 是可提交的构建配置；`android/key.properties` 和签名私钥不得提交。
 签名配置在本机以链接接入 `.local/secrets/`，继续使用现有安装包签名。
 

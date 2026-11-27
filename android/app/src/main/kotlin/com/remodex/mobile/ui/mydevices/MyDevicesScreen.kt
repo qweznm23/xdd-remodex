@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -105,6 +106,8 @@ fun MyDevicesScreen(
     val currentDevice = remember(devices) { devices.firstOrNull { it.isCurrent } }
     val pairedDevices = remember(devices) { devices.filterNot { it.isCurrent } }
     val isSwitching = switchingDeviceId != null
+    var infoOpen by remember(currentDevice?.id) { mutableStateOf(false) }
+    if (infoOpen && currentDevice != null) HostSystemInfoSheet(repository, currentDevice.id, null) { infoOpen = false }
     val requiresSwitchConfirmation =
         remember(runningTurnByThread, protectedRunningFallback) {
             runningTurnByThread.isNotEmpty() || protectedRunningFallback.isNotEmpty()
@@ -151,7 +154,8 @@ fun MyDevicesScreen(
                 currentDevice?.let { device ->
                     MyDevicesSectionHeader(text = stringResource(R.string.my_devices_current_device))
                     MyDevicesGroupedCard {
-                        CurrentDeviceRow(device = device)
+                        CurrentDeviceRow(device = device, modifier = Modifier.clickable(enabled = !isSwitching,
+                            onClickLabel = stringResource(R.string.host_system_info)) { infoOpen = true })
                     }
                 }
 
@@ -308,6 +312,7 @@ private fun CurrentDeviceRow(
         leadingContent = { DeviceAvatar(device = device, diameter = 40.dp) },
         headlineContent = { Text(device.primaryName, style = MaterialTheme.typography.titleMedium) },
         supportingContent = { DeviceStatusSubtitle(device = device) },
+        trailingContent = { Icon(Icons.Outlined.ChevronRight, null) },
     )
 }
 

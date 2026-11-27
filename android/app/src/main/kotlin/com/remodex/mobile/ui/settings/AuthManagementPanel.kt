@@ -217,10 +217,12 @@ internal fun AuthManagementPanel(state: AuthProfilesState, files: AuthFileAction
                             "refreshed" -> R.string.auth_manage_active_refreshed
                             "version_conflict" -> R.string.auth_manage_active_conflict
                             "already_attempted_today" -> R.string.auth_manage_active_attempted
-                            "failed" -> R.string.auth_manage_active_failed
+                            "failed" -> if (status?.activeRefreshRevoked == true) R.string.auth_manage_token_revoked else R.string.auth_manage_active_failed
                             else -> R.string.auth_manage_active_unknown
                         }), style = MaterialTheme.typography.bodySmall)
-                        status?.activeReason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                        val activeReason = if (status?.activeRefreshRevoked == true) stringResource(R.string.auth_manage_token_revoked_reauth)
+                            else status?.activeReason
+                        activeReason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
                         status?.activeDiagnostic?.let { diagnostic ->
                             TextButton(onClick = { showActiveFailure = !showActiveFailure }) { Text(stringResource(R.string.questions_error_details)) }
                             if (showActiveFailure) AuthDiagnosticSheet(stringResource(R.string.questions_error_details), diagnostic) { showActiveFailure = false }
@@ -267,8 +269,11 @@ internal fun AuthMaintenanceFailure(entry: AuthManagedEntry?) {
     if (entry?.result != "failed") return
     var expanded by remember(entry) { mutableStateOf(false) }
     Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        SettingsNavigationRow(stringResource(R.string.auth_manage_auto_failed, entry.profile.id),
-            entry.reason ?: stringResource(R.string.auth_recovery_maintenance), { expanded = true })
+        val title = if (entry.refreshRevoked) stringResource(R.string.auth_manage_token_revoked)
+            else stringResource(R.string.auth_manage_auto_failed, entry.profile.id)
+        val description = if (entry.refreshRevoked) stringResource(R.string.auth_manage_token_revoked_reauth)
+            else entry.reason ?: stringResource(R.string.auth_recovery_maintenance)
+        SettingsNavigationRow(title, description, { expanded = true })
     }
     if (expanded) AuthDiagnosticSheet(stringResource(R.string.questions_error_details), entry.diagnostic ?: entry.result) {
         expanded = false

@@ -38,7 +38,7 @@ internal data class ConversationImageState(
 
 /** Workspace files travel over the paired connection; HTTP images use the phone's image loader. */
 @Composable
-internal fun rememberConversationImage(source: String, dimension: Long = 1600, fallbackDataUrl: String? = null): ConversationImageState {
+internal fun rememberConversationImage(source: String, dimension: Long = 1600, fallbackDataUrl: String? = null, originalGif: Boolean = false): ConversationImageState {
     val repository = LocalCodexRepository.current
     val reconnect = com.remodex.mobile.ui.LocalReconnectForMedia.current
     val service = remember(repository) { WorkspaceFileTransferService(repository) }
@@ -51,7 +51,7 @@ internal fun rememberConversationImage(source: String, dimension: Long = 1600, f
     var error by remember(source, cwd, dimension, device, repository) { mutableStateOf<Throwable?>(null) }
     var loading by remember(source, cwd, dimension, device, repository) { mutableStateOf(true) }
     var waitingForConnection by remember(source, cwd, dimension, device, repository) { mutableStateOf(false) }
-    LaunchedEffect(source, cwd, dimension, attempt, ready, device, repository, fallbackDataUrl) {
+    LaunchedEffect(source, cwd, dimension, attempt, ready, device, repository, fallbackDataUrl, originalGif) {
         error = null
         loading = model == null
         waitingForConnection = false
@@ -60,6 +60,13 @@ internal fun rememberConversationImage(source: String, dimension: Long = 1600, f
                 is ConversationImageSource.Remote -> model = resolved.url
                 is ConversationImageSource.Inline -> model = withContext(Dispatchers.IO) { decodeImageData(resolved.dataUrl) }
                 is ConversationImageSource.Workspace -> {
+                    if (originalGif) {
+                        if (!ready) waitingForConnection = model == null
+                        else if (model !is ByteArray || attempt > 0) {
+                            model = service.gifOriginal(resolved.path, resolved.previewCwd(cwd))
+                        }
+                        return@LaunchedEffect
+                    }
                     val cache = AppContainer.imagePreviews
                     val cacheDevice = device ?: repository.fileTransferBaseUrl.orEmpty()
                     val cacheKey = cache.key(cacheDevice, cwd, resolved.path, dimension)
@@ -101,10 +108,16 @@ internal fun rememberConversationImage(source: String, dimension: Long = 1600, f
     val broken = rememberVectorPainter(Icons.Default.BrokenImage)
     val offline = rememberVectorPainter(Icons.Default.CloudOff)
     // Recreate the painter on explicit retry, including failed network requests.
-    val imageModel = remember(model, device) {
+    val imageModel = remember(model, device, dimension) {
         val cached = model as? CachedConversationImage
-        if (cached == null) model else ImageRequest.Builder(context).data(cached.file)
-            .memoryCacheKey("$device:${cached.file.path}:${cached.modified}").build()
+        ImageRequest.Builder(context).data(cached?.file ?: model).apply {
+            size(dimension.toInt(), dimension.toInt())
+            if (cached != null) memoryCacheKey("$device:${cached.file.path}:${cached.modified}")
+            if (dimension == 512L) {
+                decoderFactory(thumbnailDecoder)
+                memoryCacheKeyExtra("remodex-static-thumbnail", "true")
+            }
+        }.build()
     }
     val painter = key(source, device, attempt) {
         if (model == null) null else rememberAsyncImagePainter(model = imageModel, error = broken, placeholder = broken)
@@ -132,6 +145,8 @@ internal fun rememberConversationImage(source: String, dimension: Long = 1600, f
         hasImage = visiblePainter != null,
     )
 }
+
+private val thumbnailDecoder = coil3.decode.BitmapFactoryDecoder.Factory()
 
 private fun decodeImageData(dataUrl: String): ByteArray =
     TurnAttachmentCodec.decodeDataUriImageData(dataUrl)

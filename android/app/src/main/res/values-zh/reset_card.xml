@@ -1,0 +1,16 @@
+<resources>
+    <string name="reset_use">使用卡片</string>
+    <string name="reset_expired">已过期</string>
+    <string name="reset_confirm_title">使用这张重置卡？</string>
+    <string name="reset_second_title">额度尚未用完，仍要使用？</string>
+    <string name="reset_remaining">本周剩余 %1$s%%</string>
+    <string name="reset_warning">使用后将消耗一张卡，重置此账号的 Codex 限额。</string>
+    <string name="reset_second_warning">本周仍有可用额度。再次确认后会立即使用这张卡。</string>
+    <string name="reset_continue">继续确认</string>
+    <string name="reset_confirm_use">确认使用</string>
+    <string name="reset_blocked">本周剩余 %1$s%%，超过 5%%，不能使用重置卡。</string>
+    <string name="reset_success">重置卡已使用，此账号的额度已重置。</string>
+    <string name="reset_nothing">Codex 返回当前没有需要重置的限额。</string>
+    <string name="reset_none">Codex 返回当前没有可用的重置卡。</string>
+    <string name="reset_error">请核对卡片和额度后再试。%1$s</string>
+</resources>

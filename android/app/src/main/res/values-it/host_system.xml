@@ -1,0 +1,13 @@
+<resources>
+    <string name="host_system_info">Sistema host</string>
+    <string name="host_info_refresh">Aggiorna informazioni di sistema</string>
+    <string name="host_info_offline">Disconnesso · ultimo campione, se disponibile</string>
+    <string name="host_info_update_bridge">Aggiorna il bridge per vedere le informazioni di sistema.</string>
+    <string name="host_info_versions">App %1$s · Bridge %2$s</string>
+    <string name="host_info_cpu">CPU · %1$d processori logici</string>
+    <string name="host_info_memory">Memoria utilizzata</string>
+    <string name="host_info_disk">Disco utilizzato</string>
+    <string name="host_info_disk_estimated">Disco utilizzato (stima)</string>
+    <string name="host_info_capacity">%1$s %2$s · %3$s / %4$s</string>
+    <string name="host_info_sampled">Campione delle %1$s</string>
+</resources>

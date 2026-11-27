@@ -4,7 +4,9 @@
 // Exports: createCodexTransport
 // Depends on: child_process, fs, path, ws
 
-const { spawn } = require("child_process");
+const { execFile, spawn } = require("child_process");
+const { homedir } = require("node:os");
+const { promisify } = require("node:util");
 const { randomUUID } = require("node:crypto");
 const fs = require("fs");
 const path = require("path");
@@ -18,10 +20,17 @@ function createCodexTransport({
   platform = process.platform,
   spawnImpl = spawn,
   WebSocketImpl = WebSocket,
+  runCommand = promisify(execFile),
 } = {}) {
   if (endpoint) {
-    if (platform === "darwin" && endpoint.startsWith("ws+unix:")) {
-      return macUnixTransport(() => createWebSocketTransport({ endpoint, WebSocketImpl }));
+    const home = path.resolve(env.CODEX_HOME || path.join(env.HOME || homedir(), ".codex"));
+    const localDaemon = (platform === "linux" || platform === "darwin")
+      && endpoint === `ws+unix://${path.join(home, "app-server-control/app-server-control.sock")}:/`;
+    if (localDaemon || (platform === "darwin" && endpoint.startsWith("ws+unix:"))) {
+      return unixTransport(
+        () => createWebSocketTransport({ endpoint, WebSocketImpl }),
+        localDaemon ? signal => startLocalDaemon({ env, home, platform, runCommand, signal }) : null
+      );
     }
     return createWebSocketTransport({ endpoint, WebSocketImpl });
   }
@@ -29,43 +38,84 @@ function createCodexTransport({
   return createSpawnTransport({ env, appPath, platform, spawnImpl });
 }
 
-// A confirmed account operation can close the shared socket for a few seconds.
-// Only that operation opens a reconnect window; ordinary failures keep their
-// existing error path. The foreground bridge does not depend on a LaunchAgent.
-function macUnixTransport(connect) {
+async function startLocalDaemon({ env, home, platform, runCommand, signal }) {
+  const installed = path.join(home, "packages/app-server-daemon/current/bin/codex");
+  const command = fs.existsSync(installed) ? installed : "codex";
+  const args = ["app-server", "daemon", "start"];
+  const options = { env, signal, timeout: 30_000, maxBuffer: 16_384 };
+  // A root system service must not leave the shared daemon in its own
+  // KillMode=control-group. A transient scope inherits the launch environment.
+  if (platform === "linux" && process.getuid?.() === 0 && env.INVOCATION_ID
+      && fs.readFileSync("/proc/self/cgroup", "utf8").includes("/system.slice/")) {
+    await runCommand("systemd-run", ["--scope", "--quiet", "--no-ask-password", "--", command, ...args], options);
+  } else {
+    await runCommand(command, args, options);
+  }
+}
+
+function unixTransport(connect, startDaemon) {
   const events = createListenerBag();
+  const controller = new AbortController();
   let active, deadline = 0, retry = null, restoring = false, stopped = false, onRestarting;
+  let wakeAttempted = false;
   function attach() {
     const link = active = connect();
+    let opened = false;
+    let missing = null;
     link.onMessage(message => { if (active === link) events.emitMessage(message); });
     link.onStarted(info => {
       if (active !== link || stopped) return;
       const reconnected = restoring;
-      if (restoring) deadline = 0;
+      opened = true;
+      wakeAttempted = false;
+      deadline = 0;
       restoring = false;
       events.emitStarted({ ...info, reconnected });
     });
     link.onError(error => {
+      if (active !== link || stopped) return;
+      if (startDaemon && !opened && ["ENOENT", "ECONNREFUSED"].includes(error.code)) {
+        missing = error;
+        return;
+      }
       const transient = ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(error.code);
-      if (active === link && (!transient || stopped || Date.now() >= deadline)) events.emitError(error);
+      if (!transient || Date.now() >= deadline) events.emitError(error);
     });
-    link.onClose((code, reason) => {
+    link.onClose(async (code, reason) => {
       if (active !== link) return;
-      if (stopped || Date.now() >= deadline) { events.emitClose(code, reason); return; }
-      if (!restoring) onRestarting?.();
-      restoring = true;
+      if (stopped) { events.emitClose(code, reason); return; }
+      if (missing && !deadline && !wakeAttempted) {
+        wakeAttempted = true;
+        try {
+          await startDaemon(controller.signal);
+        } catch (cause) {
+          if (stopped) return;
+          const error = new Error(`codex app-server daemon start failed after ${missing.code}: ${cause.message}`, { cause });
+          Object.assign(error, { stage: "codex_daemon_start", code: cause.code, socketError: missing });
+          events.emitError(error);
+          events.emitClose(code, reason);
+          return;
+        }
+        if (stopped) return;
+        deadline = Date.now() + 15_000;
+      } else if (!(startDaemon && opened) && Date.now() >= deadline) {
+        if (missing) events.emitError(missing);
+        events.emitClose(code, reason);
+        return;
+      }
+      if (opened && !restoring) { restoring = true; onRestarting?.(); }
       retry = setTimeout(attach, 350);
     });
   }
   attach();
   return {
-    mode: "websocket", describe: () => active.describe(), send: message => active.send(message),
+    mode: "websocket", waitForLocalDaemon: Boolean(startDaemon), describe: () => active.describe(), send: message => active.send(message),
     expectRestart: () => { deadline = Date.now() + 180_000; },
     restartFinished: () => { if (!restoring) deadline = 0; },
     onRestarting: handler => { onRestarting = handler; },
     onStarted: handler => { events.onStarted = handler; }, onClose: handler => { events.onClose = handler; },
     onMessage: handler => { events.onMessage = handler; }, onError: handler => { events.onError = handler; },
-    shutdown() { stopped = true; clearTimeout(retry); active.shutdown(); },
+    shutdown() { stopped = true; controller.abort(); clearTimeout(retry); active.shutdown(); },
   };
 }
 

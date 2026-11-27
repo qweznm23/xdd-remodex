@@ -42,37 +42,61 @@ internal fun appendFileAttachmentsToDraft(
     binarySummary: String,
 ): String {
     if (files.isEmpty()) return baseText.trim()
-    val sb = StringBuilder(baseText.trimEnd())
-    if (sb.isNotEmpty()) {
-        sb.append("\n\n")
-    }
-    sb.append("Attached files:\n")
-    files.forEachIndexed { index, file ->
-        sb
-            .append(index + 1)
-            .append(". ")
-            .append(file.fileName)
-            .append(" (")
-            .append(formatBytes(file.sizeBytes))
-        file.mimeType?.takeIf { it.isNotBlank() }?.let { mime ->
-            sb.append(", ").append(mime)
-        }
-        sb.append(")\n")
-        if (file.remotePath != null) {
-            sb.append("Complete file uploaded to computer: ")
-                .append(kotlinx.serialization.json.JsonPrimitive(file.remotePath).toString()).append('\n')
-            return@forEachIndexed
-        }
-        val content = file.textContent?.trim()
-        if (!content.isNullOrEmpty()) {
-            sb.append("```").append(inferCodeFenceLanguage(file.fileName)).append('\n')
-            sb.append(content).append('\n')
-            sb.append("```\n")
+    val blocks = files.map { file ->
+        val remote = file.remotePath
+        if (!remote.isNullOrBlank()) {
+            uploadedFileLink(file.fileName, remote)
         } else {
-            sb.append(binarySummary).append('\n')
+            val content = file.textContent?.trim()
+            val body = if (content.isNullOrEmpty()) binarySummary else
+                "```${inferCodeFenceLanguage(file.fileName)}\n$content\n```"
+            val metadata = listOfNotNull(formatBytes(file.sizeBytes), file.mimeType?.takeIf(String::isNotBlank))
+            "${file.fileName} (${metadata.joinToString(", ")})\n$body"
         }
     }
-    return sb.toString().trimEnd()
+    return (listOf(baseText.trimEnd()).filter(String::isNotEmpty) + blocks).joinToString("\n\n")
+}
+
+private fun uploadedFileLink(name: String, path: String): String {
+    val label = buildString {
+        for (c in name) {
+            if (c in """\`*_{}[]<>~|&""") append('\\')
+            append(c)
+        }
+    }
+    // Use an absolute path so the model and desktop can open the same original file.
+    val target = java.net.URI(null, null, path, null).rawPath
+        .replace("+", "%2B").replace("(", "%28").replace(")", "%29").replace("&", "%26")
+    return "[$label]($target)"
+}
+
+private const val OLD_FILE_HEADER = "Attached files:\n"
+private const val OLD_FILE_PATH = "Complete file uploaded to computer: "
+internal val uploadSuffix = Regex("""/remodex_uploads/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}/([^/]+)$""")
+
+internal fun displayUserMessageBody(text: String): String =
+    displayUploadedFiles(com.remodex.mobile.data.ConversationQuestionCodec.displayReply(text))
+
+/** Reformat only a complete, recognizable trailer from earlier clients. Keep history intact. */
+internal fun displayUploadedFiles(text: String): String {
+    val start = if (text.startsWith(OLD_FILE_HEADER)) 0 else {
+        val boundary = text.lastIndexOf("\n\n$OLD_FILE_HEADER")
+        if (boundary < 0) return text
+        boundary + 2
+    }
+    val rows = text.substring(start + OLD_FILE_HEADER.length).trimEnd().lines()
+    if (rows.size % 2 != 0) return text
+    val links = rows.chunked(2).mapIndexed { index, (info, location) ->
+        if (!location.startsWith(OLD_FILE_PATH)) return text
+        val path = try {
+            kotlinx.serialization.json.Json.decodeFromString<String>(location.removePrefix(OLD_FILE_PATH))
+        } catch (_: kotlinx.serialization.SerializationException) { return text }
+        if (!path.startsWith('/') || path.startsWith("//") || path.any { it.isISOControl() }) return text
+        val name = uploadSuffix.find(path)?.groupValues?.get(1) ?: return text
+        if (name.any { it.isISOControl() } || !info.startsWith("${index + 1}. $name (") || !info.endsWith(')')) return text
+        uploadedFileLink(name, path)
+    }
+    return text.take(start) + links.joinToString("\n\n")
 }
 
 internal fun inferCodeFenceLanguage(fileName: String): String =

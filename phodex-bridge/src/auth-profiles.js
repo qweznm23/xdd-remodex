@@ -13,10 +13,11 @@ async function manageAuthProfiles(action, params, authFile, {
     throw Object.assign(new Error('The connected Codex does not expose a managed local auth file'), { errorCode: 'AUTH_PROFILES_UNAVAILABLE' });
   }
   const withoutProfile = ['list', 'status', 'maintenance', 'restart', 'restart-progress', 'runtime-quota', 'adopt'].includes(action);
-  if (!withoutProfile && !['check', 'import', 'rename', 'remove', 'export', 'query', 'refreshToken', 'switch'].includes(action)) throw new Error('Invalid auth profile action');
+  if (!withoutProfile && !['check', 'import', 'rename', 'remove', 'export', 'query', 'refreshToken', 'switch', 'reset-card'].includes(action)) throw new Error('Invalid auth profile action');
   // Validate the wire format here; the host manager authoritatively checks registration.
   const validProfile = typeof params.profile === 'string' && /^[1-9][0-9]*$/.test(params.profile) && params.profile.trim() === params.profile;
-  if (!withoutProfile && (!(validProfile || (['refreshToken', 'check', 'export'].includes(action) && params.profile === "current")) || !(action === 'import' && params.revision === 'missing') && !/^\d+:\d+$/.test(params.revision || ''))) {
+  const liveCard = action === 'reset-card' && params.profile === 'current';
+  if (!withoutProfile && !liveCard && (!(validProfile || (['refreshToken', 'check', 'export'].includes(action) && params.profile === "current")) || !(action === 'import' && params.revision === 'missing') && !/^\d+:\d+$/.test(params.revision || ''))) {
     throw Object.assign(new Error('Refresh the authorization list before selecting a profile'), { errorCode: 'INVALID_PROFILE_SELECTION' });
   }
   try { await fs.access(manager); }
@@ -25,7 +26,15 @@ async function manageAuthProfiles(action, params, authFile, {
     throw cause;
   }
   const args = [path.join(__dirname, 'auth-profiles.py'), '--home', path.dirname(authFile.path), action];
-  if (!withoutProfile) args.push('--profile', params.profile, '--revision', params.revision);
+  if (!withoutProfile) args.push('--profile', params.profile, '--revision', liveCard ? 'current' : params.revision);
+  if (action === 'reset-card') {
+    if (typeof params.creditId !== 'string' || !params.creditId.trim() || params.creditId.length > 512 || /[\x00-\x1f]/.test(params.creditId)) throw new Error('Invalid reset card ID');
+    args.push('--credit-id=' + params.creditId);
+    if (params.ticket !== undefined) {
+      if (typeof params.ticket !== 'string' || !/^[a-f0-9-]{36}$/.test(params.ticket)) throw new Error('Invalid reset confirmation');
+      args.push('--confirmation', params.ticket);
+    }
+  }
   if (action === 'import') {
     if (typeof params.sourcePath !== 'string' || !path.isAbsolute(params.sourcePath)) throw new Error('Import requires a completed workspace upload path');
     args.push('--source', params.sourcePath);
@@ -51,7 +60,7 @@ async function manageAuthProfiles(action, params, authFile, {
   if (socket && (withoutProfile || action === 'switch' || action === 'query' || params.profile === 'current')) args.push('--socket', socket);
   let response;
   try {
-    const { stdout } = ownedControl && !endpoint && ['list', 'switch', 'restart', 'runtime-quota'].includes(action)
+    const { stdout } = ownedControl && !endpoint && (liveCard || ['list', 'switch', 'restart', 'runtime-quota'].includes(action))
       ? await require('./auth-owned-child').executeOwnedWorker('/usr/bin/python3', args, ownedControl, action === 'switch' || action === 'restart')
       : await execute('/usr/bin/python3', args, { timeout: action === "maintenance" ? 930_000 : 240_000, maxBuffer: 1024 * 1024 });
     response = JSON.parse(stdout);

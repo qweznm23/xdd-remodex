@@ -1,0 +1,4 @@
+<resources>
+    <string name="gallery_preview_title">图片预览</string>
+    <string name="gallery_preview_position">%1$s，第 %2$d 张，共 %3$d 张</string>
+</resources>

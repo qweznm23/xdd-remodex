@@ -1,13 +1,30 @@
 package com.remodex.mobile.ui.turn
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.ui.theme.RemodexPreviewDialog
 import androidx.compose.ui.window.DialogProperties
@@ -129,11 +146,18 @@ internal fun ConversationImageGalleryDialog(
     val pager = rememberPagerState(initialPage = images.indexOfFirst { attachmentImageSource(it, true) == selectedSource }.coerceAtLeast(0),
         pageCount = { images.size })
     var zoomedPage by remember { mutableStateOf<Int?>(null) }
+    val page = pager.settledPage
+    val current = images[page]
+    val filename = remember(current) {
+        sequenceOf(current.remotePath, current.sourceURL).filterNotNull()
+            .map(ConversationMediaType::filename).firstOrNull(String::isNotBlank)
+    }
     ImagePreviewDialog(
-        title = if (images.size > 1) "${pager.currentPage + 1} / ${images.size}" else "",
+        title = filename ?: stringResource(R.string.gallery_preview_title),
+        pageNumber = page + 1,
+        pageCount = images.size,
         onDismiss = onDismiss,
         actions = {
-            val current = images[pager.currentPage]
             val source = current.remotePath?.takeIf { it.isNotBlank() } ?: attachmentImageSource(current, true)
             MediaFileActions(source, LocalThreadGitProjectRoot.current, current.mimeType,
                 thumbnailOnly = current.remotePath.isNullOrBlank() && current.sourceURL.isNullOrBlank() && current.payloadDataURL.isNullOrBlank())
@@ -151,31 +175,87 @@ internal fun ConversationImageGalleryDialog(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ImagePreviewDialog(
     title: String,
     onDismiss: () -> Unit,
     actions: @Composable () -> Unit,
+    pageNumber: Int = 1,
+    pageCount: Int = 1,
     content: @Composable () -> Unit,
 ) {
-    RemodexPreviewDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    actions()
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.turn_preview_close)) }
-                }
-                Box(Modifier.fillMaxSize().padding(bottom = 16.dp), contentAlignment = Alignment.Center) { content() }
+    val colors = MaterialTheme.colorScheme
+    val type = MaterialTheme.typography
+    val multiple = pageCount > 1
+    val toolbarHeight = with(LocalDensity.current) {
+        maxOf(56.dp, type.titleMedium.lineHeight.toDp() + (if (multiple) type.labelMedium.lineHeight.toDp() else 0.dp) + 12.dp)
+    }
+    val spokenTitle = if (multiple) stringResource(R.string.gallery_preview_position, title, pageNumber, pageCount) else title
+    RemodexPreviewDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        systemBarBackground = colors.surface,
+    ) {
+        Surface(Modifier.fillMaxSize(), color = colors.surface) {
+            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                TopAppBar(
+                    windowInsets = WindowInsets(0),
+                    expandedHeight = toolbarHeight,
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.surface, actionIconContentColor = colors.onSurfaceVariant),
+                    navigationIcon = {
+                        FilledTonalIconButton(onClick = onDismiss) {
+                            Icon(Icons.Outlined.Close, stringResource(R.string.turn_preview_close))
+                        }
+                    },
+                    title = {
+                        Column(Modifier.clearAndSetSemantics { heading(); contentDescription = spokenTitle }) {
+                            RollingPreviewText(title, pageNumber, type.titleMedium, colors.onSurface)
+                            if (multiple) Row(verticalAlignment = Alignment.CenterVertically) {
+                                val numberStyle = type.labelMedium.copy(fontFeatureSettings = "tnum")
+                                RollingPreviewText(pageNumber.toString().padStart(pageCount.toString().length, ' '),
+                                    pageNumber, numberStyle, colors.onSurfaceVariant)
+                                Text(" / $pageCount", style = numberStyle, color = colors.onSurfaceVariant, maxLines = 1)
+                            }
+                        }
+                    },
+                    actions = { actions() },
+                )
+                Box(Modifier.fillMaxSize().background(colors.surfaceContainerLow), contentAlignment = Alignment.Center) { content() }
             }
         }
     }
 }
 
+private data class PreviewLabel(val text: String, val page: Int)
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun RollingPreviewText(text: String, page: Int, style: TextStyle, color: androidx.compose.ui.graphics.Color) {
+    val motion = MaterialTheme.motionScheme
+    AnimatedContent(
+        targetState = PreviewLabel(text, page),
+        contentKey = { it.text },
+        modifier = Modifier.clipToBounds(),
+        transitionSpec = {
+            val direction = if (targetState.page >= initialState.page) 1 else -1
+            val slide = motion.fastSpatialSpec<IntOffset>()
+            val fade = motion.fastEffectsSpec<Float>()
+            ((slideInVertically(slide) { direction * it } + fadeIn(fade)) togetherWith
+                (slideOutVertically(slide) { -direction * it } + fadeOut(fade))).using(null)
+        },
+        label = "Preview text",
+    ) { label ->
+        Text(label.text, maxLines = 1, overflow = TextOverflow.Ellipsis, style = style, color = color)
+    }
+}
+
 @Composable
 private fun GalleryImagePage(attachment: CodexImageAttachment, onDismiss: () -> Unit, pagingEnabled: Boolean, active: Boolean, onZoomChanged: (Boolean) -> Unit) {
-    val image = rememberConversationImage(attachmentImageSource(attachment, true),
+    val source = attachmentImageSource(attachment, true)
+    val gif = attachment.mimeType.equals("image/gif", true) || source.isGifReference()
+    if (gif && !active) return
+    val image = rememberConversationImage(source, originalGif = gif,
         fallbackDataUrl = attachment.thumbnailBase64JPEG.takeIf { it.isNotBlank() }?.let { "data:image/jpeg;base64,$it" })
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (!image.loading && image.error == null && image.hasImage) {

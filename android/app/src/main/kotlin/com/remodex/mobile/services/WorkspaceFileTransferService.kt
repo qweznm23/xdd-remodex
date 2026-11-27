@@ -26,6 +26,9 @@ internal data class WorkspaceFileInfo(
 
 internal class FileTransferFailure(val stage: String, val code: String, message: String, cause: Throwable? = null) : IOException(message, cause)
 
+internal data class ArchiveMember(val index: Long, val name: String, val size: Long, val kind: String, val directory: Boolean)
+internal data class ArchivePage(val members: List<ArchiveMember>, val total: Long, val nextOffset: Long)
+
 internal class WorkspaceFileTransferService(private val repository: CodexRepository) {
     suspend fun info(path: String, cwd: String?): WorkspaceFileInfo {
         val row = request("workspace/fileInfo", params(path, cwd))
@@ -77,7 +80,30 @@ internal class WorkspaceFileTransferService(private val repository: CodexReposit
     }
 
     suspend fun image(info: WorkspaceFileInfo, cwd: String?): ByteArray {
-        val row = request("workspace/readImage", params(info.path, cwd))
+        return readOriginalImage(info.path, cwd)
+    }
+
+    suspend fun gifOriginal(info: WorkspaceFileInfo, cwd: String?): ByteArray {
+        if (info.byteLength > 32L * 1024 * 1024) throw FileTransferFailure("gif_preview", "image_too_large", "GIF preview exceeds 32 MiB")
+        val output = java.io.ByteArrayOutputStream(info.byteLength.toInt())
+        copyTo(info, cwd, output) {}
+        return output.toByteArray()
+    }
+
+    suspend fun gifOriginal(path: String, cwd: String?): ByteArray {
+        val file = try { info(path, cwd) }
+        catch (failure: com.remodex.mobile.core.error.CodexServiceError.RpcFailure) {
+            // Generated images and temporary screenshots have a separate scoped image reader.
+            if (failure.rpcError.data?.objectValue?.get("errorCode")?.stringValue !in setOf("file_not_found", "file_path_not_allowed")) throw failure
+            try { return readOriginalImage(path, cwd) }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (error: Exception) { error.addSuppressed(failure); throw error }
+        }
+        return gifOriginal(file, cwd)
+    }
+
+    private suspend fun readOriginalImage(path: String, cwd: String?): ByteArray {
+        val row = request("workspace/readImage", params(path, cwd))
         val encoded = row["dataBase64"]?.stringValue ?: throw FileTransferFailure("preview", "missing_image", "Image data missing")
         if (encoded.length > 11_184_812) throw FileTransferFailure("preview", "image_too_large", "Image preview exceeds 8 MiB")
         return withContext(Dispatchers.IO) {
@@ -87,6 +113,52 @@ internal class WorkspaceFileTransferService(private val repository: CodexReposit
     }
 
     private fun route() = repository.fileTransferBaseUrl ?: throw FileTransferFailure("stream_route","route_unavailable","File connection is unavailable")
+
+    private fun archiveParams(file: WorkspaceFileInfo, cwd: String?) = params(file.path, cwd) + mapOf(
+        "revision" to JSONValue.Str(file.revision), "inline" to JSONValue.Bool(repository.fileTransferBaseUrl == null),
+    )
+
+    suspend fun archiveList(file: WorkspaceFileInfo, cwd: String?, offset: Long): ArchivePage {
+        val row = request("workspace/archiveList", archiveParams(file, cwd) + ("offset" to JSONValue.NumLong(offset)))
+        fun invalid(): Nothing = throw FileTransferFailure("archive_list", "invalid_directory", "Invalid ZIP directory response")
+        val total = row["total"]?.longValue ?: invalid()
+        val next = row["nextOffset"]?.longValue ?: invalid()
+        val entries = row["entries"]?.arrayValue ?: invalid()
+        if (row["revision"]?.stringValue != file.revision || entries.size > 64 || next != offset + entries.size ||
+            next > total || (entries.isEmpty() && next < total)) invalid()
+        return ArchivePage(entries.mapIndexed { i, value ->
+            val entry = value.objectValue ?: invalid()
+            val index = entry["index"]?.longValue ?: invalid()
+            if (index != offset + i) invalid()
+            ArchiveMember(index, entry["name"]?.stringValue ?: invalid(), entry["size"]?.longValue?.takeIf { it >= 0 } ?: invalid(),
+                entry["kind"]?.stringValue ?: invalid(), entry["directory"]?.boolValue ?: invalid())
+        }, total, next)
+    }
+
+    suspend fun archiveEntry(file: WorkspaceFileInfo, cwd: String?, entry: ArchiveMember): ByteArray {
+        val limit = when (entry.kind) {
+            "image" -> 8 * 1024 * 1024
+            "text" -> 256 * 1024
+            else -> 0
+        }
+        if (limit == 0 || entry.size !in 0L..limit.toLong()) throw FileTransferFailure("archive_entry", "unsupported_entry", "ZIP entry exceeds preview limits")
+        val row = request("workspace/archiveEntry", archiveParams(file, cwd) + ("index" to JSONValue.NumLong(entry.index)))
+        if (row["revision"]?.stringValue != file.revision || row["byteLength"]?.longValue != entry.size)
+            throw FileTransferFailure("archive_entry", "invalid_entry", "ZIP entry metadata changed")
+        val inline = row["dataBase64"]?.stringValue
+        if (inline != null) return withContext(Dispatchers.Default) {
+            if (entry.size > 640 * 1024 || inline.length.toLong() != 4 * ((entry.size + 2) / 3))
+                throw FileTransferFailure("archive_entry", "invalid_length", "Invalid ZIP entry payload size")
+            val bytes = try { Base64.getDecoder().decode(inline) } catch (cause: IllegalArgumentException) {
+                throw FileTransferFailure("archive_entry", "invalid_encoding", "Invalid ZIP entry payload", cause)
+            }
+            if (bytes.size.toLong() != entry.size) throw FileTransferFailure("archive_entry", "invalid_length", "Incomplete ZIP entry")
+            bytes
+        }
+        val output = java.io.ByteArrayOutputStream(entry.size.toInt())
+        EncryptedFileStream().copy(route(), FileStreamTicket.parse(row), output) {}
+        return output.toByteArray()
+    }
 
     private suspend fun prepare(path: String, cwd: String?, mode: String, extra: RPCObject = emptyMap()): RPCObject =
         request("workspace/prepareTransfer", params(path,cwd) + extra + ("mode" to JSONValue.Str(mode)))

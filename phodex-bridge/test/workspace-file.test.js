@@ -164,7 +164,7 @@ test("file metadata distinguishes text, images, archives, and oversized text", a
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   for (const [name, content, kind] of [
     ["readme.md", "你好\n", "text"], ["photo.png", Buffer.from([137, 80, 78, 71, 0]), "image"],
-    ["archive.zip", "PKtest", "none"], ["large.log", "a".repeat(2 * 1024 * 1024 + 1), "none"],
+    ["archive.zip", "PKtest", "archive"], ["large.log", "a".repeat(2 * 1024 * 1024 + 1), "none"],
     ["empty.txt", "", "text"], ["unknown.bin", Buffer.from([0, 255]), "none"],
   ]) {
     fs.writeFileSync(path.join(dir, name), content);

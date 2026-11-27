@@ -133,7 +133,11 @@ internal fun AuthProfilesSection(state: AuthProfilesState, files: AuthFileAction
                     AccountDetailSection(stringResource(R.string.settings_section_usage), quotaDetails, { quotaDetails = !quotaDetails }) {
                         if (it.rows.isEmpty()) Text(stringResource(R.string.usage_rate_limits_empty))
                         it.rows.forEach { row -> UsageRateLimitRowDetail(row, now) }
-                        AccountUsageDetailsContent(it.details)
+                        key(profile.id, profile.revision, connected) {
+                            AccountUsageDetailsContent(it.details, enabled,
+                                request = { id, ticket -> state.resetCard(profile, id, ticket) },
+                                refresh = { state.query(profile) })
+                        }
                     }
                 }
                 AccountDetailSection(stringResource(R.string.auth_profiles_token_details), expanded, { expanded = !expanded }) {

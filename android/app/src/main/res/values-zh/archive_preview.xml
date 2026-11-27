@@ -1,0 +1,7 @@
+<resources>
+    <string name="zip_directory_summary">共 %1$d 项 · %2$s</string>
+    <string name="zip_empty">压缩包为空</string>
+    <string name="zip_folder">文件夹</string>
+    <string name="zip_no_preview">%1$s · 无法预览</string>
+    <string name="zip_bridge_update">更新电脑端桥接后即可浏览压缩包。</string>
+</resources>

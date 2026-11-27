@@ -1,0 +1,14 @@
+<resources>
+    <string name="host_system_info">Host system</string>
+    <string name="host_info_refresh">Refresh system information</string>
+    <string name="host_info_offline">Disconnected · showing the last sample when available</string>
+    <string name="host_info_update_bridge">Update the bridge to view host system information.</string>
+    <string name="host_info_versions">App %1$s · Bridge %2$s</string>
+    <string name="host_info_cpu">CPU · %1$d logical processors</string>
+    <string name="host_info_memory">Memory used</string>
+    <string name="host_info_disk">Disk used</string>
+    <string name="host_info_disk_estimated">Disk used (est.)</string>
+    <string name="host_info_capacity">%1$s %2$s · %3$s / %4$s</string>
+    <string name="host_info_memory_capacity_gib" translatable="false">%1$s %2$s · %3$.1f GiB / %4$.1f GiB</string>
+    <string name="host_info_sampled">Sampled at %1$s</string>
+</resources>

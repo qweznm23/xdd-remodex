@@ -109,6 +109,7 @@ const RELAY_HISTORY_IMAGE_REFERENCE_URL = "remodex://history-image-elided";
 const MAX_ENDPOINT_REPLY_PLAINTEXT_BYTES = 11 * 1024 * 1024;
 const BRIDGE_MANAGED_REQUEST_ID_PREFIX = "bridge-managed-";
 const phoneProfileMethods = new Set([
+  "account/profiles/reset-card",
   "account/profiles/list", "account/profiles/status", "account/profiles/check",
   "account/profiles/import", "account/profiles/export", "account/profiles/query",
   "account/profiles/rename", "account/profiles/remove",
@@ -148,6 +149,7 @@ const RELAY_JSONL_FULL_ARTIFACT_FALLBACK_MAX_BYTES = Math.max(
   bufferConstants.MAX_STRING_LENGTH - (8 * 1024 * 1024)
 );
 const xddUpdate = require("./xdd-bridge-update");
+const { readSystemInfo } = require("./host-system-info");
 const BRIDGE_RESTART_AFTER_UPDATE_DELAY_MS = 750;
 const MODELS_WITHOUT_REASONING_SUMMARY = new Set([
   "gpt-5.3-codex-spark",
@@ -1068,12 +1070,17 @@ function startBridge({
     appPath: config.codexAppPath,
     logPrefix: "[remodex]",
   });
+  const waitBeforePairing = initializeEndpoint || codex.waitForLocalDaemon;
+  if (codex.waitForLocalDaemon) codexLaunchState = "starting";
   const ownedMacChild = process.platform === "darwin" && codex.mode === "spawn";
   let restartingRuntime = false;
+  let codexConnectionGeneration = 0;
   let ownedAuthPath = null;
   let ownedLaunchError = null;
   function disconnectForRuntimeRestart() {
     restartingRuntime = true;
+    codexConnectionGeneration++;
+    codexLaunchState = "starting";
     clearReconnectTimer();
     socket?.terminate();
     const interrupted = new Error("Codex restarted during this request");
@@ -1093,6 +1100,7 @@ function startBridge({
       case "child/identity": return codex.childIdentity();
       case "getAuthStatus": return sendCodexRequest(method, { includeToken: true, refreshToken: false });
       case "account/rateLimits/read": return sendCodexRequest(method, params, { timeoutMs: timeout * 1000 });
+      case "account/rateLimitResetCredit/consume": return sendCodexRequest(method, params, { timeoutMs: timeout * 1000 });
       case "child/restart": {
         if (restartingRuntime || codex.childIdentity() !== params.expected) throw new Error("Codex child changed before restart");
         disconnectForRuntimeRestart();
@@ -1103,6 +1111,7 @@ function startBridge({
           codexHandshakeState = "cold";
           forwardedInitTimedOut = false;
           await initializeForBridge();
+          codexLaunchState = "connected";
           return next;
         } finally {
           restartingRuntime = false;
@@ -1178,23 +1187,29 @@ function startBridge({
   // A stock endpoint initializes once per socket, independently of phone reconnects.
   codex.onStarted(async info => {
     if (isShuttingDown) return;
+    const generation = codexConnectionGeneration;
     signalTransportStarted();
     if (info?.reconnected) {
       codexHandshakeState = "cold";
       forwardedInitTimedOut = false;
       try {
         await initializeForBridge();
+        if (isShuttingDown || generation !== codexConnectionGeneration) return;
+        codexLaunchState = "connected";
         restartingRuntime = false;
-        if (!socket || socket.readyState === WebSocket.CLOSED) scheduleRelayReconnect();
-      } catch (error) { if (!isShuttingDown) handleCodexTransportError(error); }
+        if (!pairingSession) beginPairingAndConnectRelay();
+        else if (!socket || socket.readyState === WebSocket.CLOSED) scheduleRelayReconnect();
+      } catch (error) {
+        if (!isShuttingDown && generation === codexConnectionGeneration) handleCodexTransportError(error);
+      }
       return;
     }
     if (initializeEndpoint) {
       try {
         await initializeForBridge();
-        if (isShuttingDown) return;
+        if (isShuttingDown || generation !== codexConnectionGeneration) return;
       } catch (error) {
-        if (!isShuttingDown) handleCodexTransportError(error);
+        if (!isShuttingDown && generation === codexConnectionGeneration) handleCodexTransportError(error);
         return;
       }
     }
@@ -1202,7 +1217,7 @@ function startBridge({
     codexLaunchState = "connected";
     const lastPublishedBridgeStatus = bridgeStatusPublisher.latest();
     if (lastPublishedBridgeStatus) publishBridgeStatus(lastPublishedBridgeStatus);
-    if (initializeEndpoint) beginPairingAndConnectRelay();
+    if (waitBeforePairing) beginPairingAndConnectRelay();
   });
 
   function clearReconnectTimer() {
@@ -1413,7 +1428,7 @@ function startBridge({
   }
 
   pushServiceClient.logUnavailable();
-  if (!initializeEndpoint) beginPairingAndConnectRelay();
+  if (!waitBeforePairing) beginPairingAndConnectRelay();
 
   codex.onMessage((message) => {
     // Streaming deltas make this the hottest path in the bridge: parse the
@@ -1558,6 +1573,14 @@ function startBridge({
       return;
     }
     if (handleBridgeManagedHandshakeMessage(rawMessage, sendApplicationResponse, parsedMessage)) {
+      return;
+    }
+    if (parsedMessage?.method === "remodex/host/systemInfo" && parsedMessage.id != null) {
+      const {id, method, params} = parsedMessage;
+      readSystemInfo(params?.cwd, xddUpdate.installedVersion(installRoot) || require("../package.json").version, downloadErrorDiagnostic)
+        .then(result => sendApplicationResponse(JSON.stringify({id, result})),
+          error => sendApplicationResponse(JSON.stringify({id, error: {code: -32000, message: error.message,
+            data: {stage: method, diagnostic: downloadErrorDiagnostic(error)}}})));
       return;
     }
     if (handleBridgeManagedAccountRequest(rawMessage, sendApplicationResponse, parsedMessage)) {
@@ -2106,6 +2129,10 @@ function startBridge({
     }
 
     const method = typeof parsed?.method === "string" ? parsed.method.trim() : "";
+    if (method === "account/rateLimitResetCredit/consume") {
+      if (parsed.id != null) sendResponse(createJsonRpcErrorResponse(parsed.id, new Error("Use the checked reset-card confirmation flow"), "reset_confirmation_required"));
+      return true;
+    }
     if (method !== "account/status/read"
       && method !== "composer/prediction/read"
       && !phoneProfileMethods.has(method)

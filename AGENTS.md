@@ -18,7 +18,7 @@ Android Compose 主题、组件和界面验收使用 [remodex-m3e](.agents/skill
 ## 构建、验证与部署
 
 - `make test-server` 验证服务端；`make android-check` 验证客户端；`make android-release` 测试并打包，但不会发布。
-- Android 必须通过 `scripts/build-android.sh` 使用跨项目共享验证锁。不要并行另起一套 Gradle 构建。
+- Android 通过 `scripts/build-android.sh` 加载项目环境，直接执行 Gradle；不增加跨项目共享锁、资源配额或 daemon 自动清理。保留 Gradle 自身缓存和输出目录一致性锁。
 - 保留项目 JDK、Gradle、AGP、Kotlin、JVM 参数、worker 和编译策略，非必要不改；Android 不套前端 build-limited。
 - 编译、发布必要 lint、完整 lint、单元测试、真机检查与发布是不同结果，分别据实报告。已有完整 lint 错误不得说成通过。
 - 发布要使用 `scripts/publish-android.sh` 的显式 `--publish`，校验版本递增、签名和包完整性，不自动覆盖安装设备。

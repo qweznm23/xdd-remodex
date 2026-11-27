@@ -88,6 +88,122 @@ class ProfileTests(unittest.TestCase):
             m.save_json(m.PROFILES/'3/auth.json', other)
             self.assertNotIn('runtimeProfile', self.api.list()['runtimeVerification'])
 
+
+    def reset_fixture(self, number='current'):
+        path = (m.BASE if number == 'current' else m.PROFILES/number)/'auth.json'
+        auth = m.read(path)[1]
+        payload = base64.urlsafe_b64encode(json.dumps({'sub':'sample-user', 'iat':1700000000, 'exp':2000000000}).encode()).decode().rstrip('=')
+        token = auth['tokens']['access_token'] = 'header.' + payload + '.signature'
+        m.save_json(path, auth)
+        quota = {'accountId': auth['tokens']['account_id'], 'rateLimitsByLimitId': {'codex': {
+            'secondary': {'usedPercent': 100, 'windowDurationMins': 10080}}},
+            'rateLimitResetCredits': {'availableCount': 1, 'credits': [
+                {'id':'test-card', 'status':'available', 'resetType':'codexRateLimits', 'expiresAt':None}]}}
+        writes = []
+        def call(method, params, timeout=5):
+            if method == 'getAuthStatus': return {'authToken': token}
+            if method == 'account/rateLimits/read': return quota
+            self.assertEqual(method, 'account/rateLimitResetCredit/consume')
+            writes.append(params)
+            return {'outcome':'reset'}
+        self.api.owned = SimpleNamespace(call=call)
+        return quota, writes, call
+
+    def test_reset_card_zero_and_low_quota_confirmations(self):
+        from auth_reset_cards import ResetCardError
+        quota, writes, _ = self.reset_fixture()
+        def step(ticket=None, card='test-card'):
+            return self.api.reset_card('current',None,card,ticket)
+        window=quota['rateLimitsByLimitId']['codex']['secondary']
+        for remaining in (0, 0.5, 5, 5.1, 100):
+            writes.clear()
+            window['usedPercent'] = 100 - remaining
+            first = step()
+            self.assertFalse(writes)
+            if remaining > 5:
+                self.assertEqual(first['status'],'blocked')
+                self.assertNotIn('ticket',first)
+                continue
+            self.assertEqual(first['status'],'confirm')
+            ticket=first['ticket']
+            if remaining:
+                second=step(ticket)
+                self.assertEqual(second['status'],'confirmAgain')
+                self.assertFalse(writes)
+                with self.assertRaises(ResetCardError): step(ticket)
+                ticket=second['ticket']
+            self.assertEqual(step(ticket)['status'],'reset')
+            self.assertEqual(writes[0]['creditId'],'test-card')
+            self.assertTrue(writes[0]['idempotencyKey'])
+            with self.assertRaises(ResetCardError): step(ticket)
+            self.assertEqual(len(writes),1)
+
+    def test_reset_card_rechecks_current_quota_identity_and_card(self):
+        from auth_reset_cards import ResetCardError
+        quota,writes,_ = self.reset_fixture()
+        def step(ticket=None):
+            return self.api.reset_card('current',None,'test-card',ticket)
+        window=quota['rateLimitsByLimitId']['codex']['secondary']
+        ticket=step()['ticket']
+        window['usedPercent']=98
+        with self.assertRaises(ResetCardError) as changed: step(ticket)
+        self.assertEqual(changed.exception.code,'RESET_RECHECK_REQUIRED')
+        ticket=step()['ticket']
+        window['usedPercent']=94
+        self.assertEqual(step(ticket)['status'],'blocked')
+        window.pop('usedPercent')
+        with self.assertRaises(ResetCardError) as unknown: step()
+        self.assertEqual(unknown.exception.code,'RESET_QUOTA_UNKNOWN')
+        window['usedPercent']=100
+        quota['accountId']='different'
+        with self.assertRaises(ResetCardError) as mismatch: step()
+        self.assertEqual(mismatch.exception.code,'RESET_ACCOUNT_CHANGED')
+        quota['accountId']='active-account'
+        quota['rateLimitResetCredits']['credits'][0]['expiresAt']=1
+        with self.assertRaises(ResetCardError) as expired: step()
+        self.assertEqual(expired.exception.code,'RESET_CARD_UNAVAILABLE')
+        self.assertFalse(writes)
+
+    def test_reset_card_expired_confirmation_and_missing_weekly_block_use(self):
+        from auth_reset_cards import ResetCardError
+        quota, writes, _ = self.reset_fixture()
+        def step(ticket=None):
+            return self.api.reset_card('current', None, 'test-card', ticket)
+        ticket = step()['ticket']
+        path = m.STATE/'reset-card-confirmations.json'
+        entries = json.loads(path.read_text())
+        entries[ticket]['expires'] = 0
+        m.save_json(path, entries)
+        with self.assertRaises(ResetCardError) as expired: step(ticket)
+        self.assertEqual(expired.exception.code, 'RESET_RECHECK_REQUIRED')
+        quota['rateLimitsByLimitId']['codex']['secondary']['windowDurationMins'] = 300
+        with self.assertRaises(ResetCardError) as missing: step()
+        self.assertEqual(missing.exception.code, 'RESET_QUOTA_UNKNOWN')
+        self.assertFalse(writes)
+
+    def test_reset_card_saved_profile_preserves_upstream_error_and_single_attempt(self):
+        quota,writes,call = self.reset_fixture('1')
+        revision=self.api.metadata('1',m.read(m.PROFILES/'1/auth.json')[1])['revision']
+        class RPC:
+            errors=b''
+            truncated=False
+            def __init__(self, work): pass
+            def send(self, message): pass
+            def close(self): pass
+            def call(self,n,method,params):
+                if method=='initialize': return {}
+                result=call(method, params)
+                if method=='account/rateLimitResetCredit/consume':
+                    raise m.RpcError({'code':-32001,'message':'fake upstream rejection'})
+                return result
+        with patch.object(m,'RPC',RPC):
+            first=self.api.reset_card('1',revision,'test-card',None)
+            with self.assertRaises(m.RpcError) as failed:
+                self.api.reset_card('1',revision,'test-card',first['ticket'])
+            self.assertEqual(self.api.stage,'reset_consume')
+            self.assertEqual(failed.exception.response['code'],-32001)
+            self.assertEqual(len(writes),1)
+
     def test_draining_listener_receives_second_shutdown_on_the_original_pidfd(self):
         import auth_listener as direct
         import signal
@@ -506,6 +622,59 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'TOKEN_REFRESH_UNCONFIRMED')
         self.assertEqual(caught.exception.profile_stage, 'refresh_verify')
 
+    def test_confirmed_revocation_from_query_pauses_future_daily_attempts_for_same_token(self):
+        from datetime import datetime
+        at = datetime(2026, 11, 25, 4, 1, tzinfo=m.BEIJING).timestamp()
+        class Revoked(self.rpc()):
+            def call(self, number, method, params):
+                if method == 'account/read':
+                    raise m.RpcError({'code': -32603, 'message':
+                        'Your access token could not be refreshed because your refresh token was revoked.'})
+                return {}
+        with patch.object(m, 'RPC', Revoked), self.assertRaises(api.ProfileError) as caught:
+            self.api.query('1', self.revision)
+        self.assertEqual(caught.exception.code, 'REFRESH_TOKEN_REVOKED')
+        self.assertEqual(self.api.error(caught.exception)['cause']['rpc']['code'], -32603)
+        row = self.api.status()['profiles'][0]
+        self.assertEqual(row['lastMaintenance']['diagnostic']['code'], 'REFRESH_TOKEN_REVOKED')
+        with patch.object(m.time, 'time', return_value=at), patch.object(m, 'RPC') as rpc:
+            self.assertEqual(self.api.maintenance()['results'][0]['status'], 'skipped_revoked')
+            rpc.assert_not_called()
+        # Rewriting identical tokens or renaming the slot cannot clear the pause.
+        m.save_json(m.PROFILES/'1/auth.json', credential('other-account', 'inactive-original'))
+        with patch.object(m.time, 'time', return_value=at + 86400):
+            self.assertEqual(self.api.maintenance(dry=True)['results'][0]['status'], 'skipped_revoked')
+            uploaded = m.BASE/'remodex_uploads/replacement.json'
+            m.save_json(uploaded, credential('other-account', 'new-authorization'))
+            revision = self.api.status()['profiles'][0]['revision']
+            self.api.import_profile('1', revision, str(uploaded))
+            self.assertIsNone(self.api.status()['profiles'][0]['lastMaintenance'])
+            self.assertEqual(self.api.maintenance(dry=True)['results'][0]['status'], 'would_refresh')
+
+    def test_ansi_401_and_revoked_access_alone_do_not_pause_refresh(self):
+        class Unauthorized(self.rpc()):
+            def __init__(self, work):
+                super().__init__(work)
+                self.errors = (b'models error: auth error code: token_revoked\n'
+                               b'Failed to refresh token \x1b[3mstatus\x1b[0m\x1b[2m=\x1b[0m401 Unauthorized')
+        with patch.object(m, 'RPC', Unauthorized), self.assertRaises(api.ProfileError) as caught:
+            self.api.refreshToken('1', self.revision)
+        self.assertEqual(caught.exception.code, 'TOKEN_REFRESH_UNCONFIRMED')
+        self.assertEqual(self.api.error(caught.exception)['runtime']['httpStatuses'], ['401'])
+        self.assertFalse(list((m.STATE/'refresh-revocations').glob('*.json')))
+
+    def test_explicit_refresh_log_persists_revocation_with_original_diagnostic(self):
+        class Invalidated(self.rpc()):
+            def __init__(self, work):
+                super().__init__(work)
+                self.errors = b'Failed to refresh token status=401 code=refresh_token_invalidated'
+        with patch.object(m, 'RPC', Invalidated), self.assertRaises(api.ProfileError) as caught:
+            self.api.refreshToken('1', self.revision)
+        report = self.api.error(caught.exception)
+        self.assertEqual(report['code'], 'REFRESH_TOKEN_REVOKED')
+        self.assertEqual(report['cause']['code'], 'TOKEN_REFRESH_UNCONFIRMED')
+        self.assertEqual(report['cause']['runtime']['httpStatuses'], ['401'])
+
     def test_current_refresh_uses_live_socket_and_syncs_only_matching_slots(self):
         from unittest.mock import MagicMock
         self.api.socket = '/fixture/control.sock'
@@ -591,6 +760,31 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(first['diagnostic']['rpc']['code'], 403)
             self.assertEqual(second['status'], 'already_attempted_today')
             self.assertEqual(second['lastResult']['diagnostic']['rpc']['code'], 403)
+
+    def test_manual_active_revocation_blocks_future_automatic_refresh(self):
+        from unittest.mock import MagicMock
+        now = 1795021200
+        self.api.socket = '/fixture/control.sock'
+        self.expiring_current(now)
+        active = self.api.list()['currentProfile']
+        token = m.read(m.BASE/'auth.json')[1]['tokens']['access_token']
+        connection = MagicMock()
+        ws = connection.__enter__.return_value
+        ws.recv.side_effect = [json.dumps(message) for message in (
+            {'id': 1, 'result': {}}, {'id': 2, 'result': {'authToken': token}},
+            {'id': 3, 'error': {'code': -32603, 'message': 'Your refresh token was revoked.'}},
+        )]
+        with patch.object(m.time, 'time', return_value=now), patch('websockets.sync.client.unix_connect', return_value=connection):
+            with self.assertRaises(api.ProfileError) as caught:
+                self.api.refreshToken('current', active['revision'])
+        report = self.api.error(caught.exception)
+        self.assertEqual(report['code'], 'REFRESH_TOKEN_REVOKED')
+        self.assertEqual(report['stage'], 'refresh_current_request')
+        self.assertEqual(report['cause']['rpc']['code'], -32603)
+        restarted = api.Profiles(m, '/fixture/control.sock')
+        with patch.object(m.time, 'time', return_value=now + 86400), patch.object(restarted, 'refreshToken') as refresh:
+            self.assertEqual(restarted.maintain_current()['diagnostic']['code'], 'REFRESH_TOKEN_REVOKED')
+            refresh.assert_not_called()
 
     def test_active_sync_runs_even_after_daily_job_and_preserves_newer_library(self):
         with patch.object(self.api, 'refreshToken', side_effect=AssertionError('healthy token must not rotate')):

@@ -1,0 +1,7 @@
+<resources>
+    <string name="zip_directory_summary">%1$d elementi · %2$s</string>
+    <string name="zip_empty">Il file ZIP è vuoto</string>
+    <string name="zip_folder">Cartella</string>
+    <string name="zip_no_preview">%1$s · Anteprima non disponibile</string>
+    <string name="zip_bridge_update">Aggiorna il bridge sul computer per esplorare questo ZIP.</string>
+</resources>

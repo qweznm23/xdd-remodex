@@ -3,7 +3,6 @@ package com.remodex.mobile.ui.turn
 import com.remodex.mobile.ui.theme.LocalSheetClose
 import com.remodex.mobile.ui.theme.CodeFontFamily
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -21,9 +20,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,7 +54,7 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
     var textOffset by remember(request) { mutableStateOf(0L) }
     var textPageLoading by remember(request) { mutableStateOf(false) }
     var text by remember(request) { mutableStateOf<String?>(null) }
-    var image by remember(request) { mutableStateOf<ImageBitmap?>(null) }
+    var image by remember(request) { mutableStateOf<ByteArray?>(null) }
     var errorMessage by remember(request) { mutableStateOf<String?>(null) }
     var loading by remember(request) { mutableStateOf(true) }
     var downloading by remember(request) { mutableStateOf(false) }
@@ -68,7 +64,7 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
     var cancelled by remember(request) { mutableStateOf(false) }
     var autoDownload by remember(request) { mutableStateOf(true) }
 
-    fun fail(operation: String, error: Exception) {
+    fun fail(operation: String, error: Throwable) {
         recordFileTransferError(context, operation, request.path, downloadedBytes, error)
         errorMessage = error.message ?: error.javaClass.name
     }
@@ -126,29 +122,23 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
                 return@LaunchedEffect
             }
             when (file.previewKind) {
+                "archive" -> if (request.downloadOnly && autoDownload) { autoDownload = false; download() }
                 "text" -> if (file.binaryStream) {
                     val page = service.transfers.textPage(file,request.cwd,0)
                     text = page.text; textOffset = page.nextOffset; pageStarts = listOf(0L); pageIndex = 0
                 } else { text = service.readPreview(file.path, request.cwd).content; textOffset = file.byteLength }
                 "image" -> {
-                    val bytes = if (file.binaryStream) {
+                    image = if (file.mimeType == "image/gif") {
+                        service.transfers.gifOriginal(file, request.cwd)
+                    } else if (file.binaryStream) {
                         val repository = com.remodex.mobile.AppContainer.codexRepository
                         val cache = com.remodex.mobile.AppContainer.imagePreviews
                         val key = cache.key(repository.relayMacDeviceId.value ?: repository.fileTransferBaseUrl.orEmpty(),request.cwd,file.path,1600)
                         val cached = cache.load(key) { service.transfers.imagePreview(file.path,request.cwd,1600) }
                         withContext(Dispatchers.IO) { cached.readBytes() }
                     } else service.transfers.image(file, request.cwd)
-                    image = withContext(Dispatchers.IO) {
-                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw FileTransferFailure("preview", "invalid_image", "Cannot decode image preview")
-                        val options = BitmapFactory.Options()
-                        while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize.coerceAtLeast(1) > 1600) options.inSampleSize = options.inSampleSize.coerceAtLeast(1) * 2
-                        (BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                            ?: throw FileTransferFailure("preview", "invalid_image", "Cannot decode image preview")).asImageBitmap()
-                    }
                 }
-                else -> if (autoDownload) { autoDownload = false; download() }
+                else -> if (autoDownload && (request.downloadOnly || file.mimeType != "application/zip")) { autoDownload = false; download() }
             }
         } catch (error: CancellationException) { throw error
         } catch (error: Exception) { fail("preview", error)
@@ -185,7 +175,8 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
                 } else openSaved()
             }) { Text(stringResource(R.string.file_download_open)) }
         } else {
-            if (file.previewKind == "none") Text(stringResource(R.string.file_download_no_preview))
+            if (file.previewKind == "none") Text(stringResource(
+                if (!request.downloadOnly && file.mimeType == "application/zip") R.string.zip_bridge_update else R.string.file_download_no_preview))
             if (cancelled) Text(stringResource(R.string.file_download_cancelled))
         }
     }
@@ -208,14 +199,10 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
                 previewError()
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (loading) CircularProgressIndicator()
-                    image?.let { bitmap ->
-                        ZoomablePreviewImage(
-                            painter = remember(bitmap) { BitmapPainter(bitmap) },
-                            sourceKey = "${request.cwd}:${request.path}",
-                            modifier = Modifier.fillMaxSize(),
-                            contentDescription = file?.fileName,
-                            onDismiss = onDismiss,
-                        )
+                    image?.let { bytes ->
+                        EncodedImagePreview(bytes, "${request.cwd}:${request.path}", file?.fileName, onDismiss) {
+                            fail("image_decode", it)
+                        }
                     }
                 }
             }
@@ -230,12 +217,20 @@ fun WorkspaceTextFilePreviewDialog(request: WorkspaceTextFilePreviewRequest, ser
                 TextButton(onClick = LocalSheetClose.current) { Text(stringResource(R.string.turn_preview_close)) }
             }
             info?.let { file ->
-                Text(file.path, style = MaterialTheme.typography.labelSmall.copy(fontFamily = CodeFontFamily))
-                Text(stringResource(R.string.file_download_size, file.byteLength / 1048576.0), style = MaterialTheme.typography.labelSmall)
+                if (file.previewKind != "archive" || request.downloadOnly) {
+                    Text(file.path, style = MaterialTheme.typography.labelSmall.copy(fontFamily = CodeFontFamily))
+                    Text(stringResource(R.string.file_download_size, file.byteLength / 1048576.0), style = MaterialTheme.typography.labelSmall)
+                }
                 transferStatus(file)
             }
             previewError()
             if (loading) Box(Modifier.fillMaxWidth().heightIn(min = 80.dp), Alignment.Center) { CircularProgressIndicator() }
+            if (!request.downloadOnly && !loading && file?.previewKind == "archive") {
+                key(file.path, file.revision) {
+                    ArchivePreview(file, { service.transfers.archiveList(file, request.cwd, it) },
+                        { service.transfers.archiveEntry(file, request.cwd, it) })
+                }
+            }
             text?.let { content ->
                 val file = info
                 if (file != null && file.binaryStream && (pageIndex > 0 || textOffset < file.byteLength)) {

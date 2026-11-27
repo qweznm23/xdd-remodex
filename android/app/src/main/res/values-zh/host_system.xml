@@ -1,0 +1,13 @@
+<resources>
+    <string name="host_system_info">主机系统信息</string>
+    <string name="host_info_refresh">刷新系统信息</string>
+    <string name="host_info_offline">设备已断开 · 如有读数则为上次采样</string>
+    <string name="host_info_update_bridge">更新电脑端桥接后即可查看系统信息。</string>
+    <string name="host_info_versions">App %1$s · 桥接 %2$s</string>
+    <string name="host_info_cpu">CPU · %1$d 个逻辑核心</string>
+    <string name="host_info_memory">内存占用</string>
+    <string name="host_info_disk">磁盘占用</string>
+    <string name="host_info_disk_estimated">磁盘占用（估算）</string>
+    <string name="host_info_capacity">%1$s %2$s · %3$s / %4$s</string>
+    <string name="host_info_sampled">采样于 %1$s</string>
+</resources>

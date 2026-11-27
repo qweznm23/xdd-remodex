@@ -22,6 +22,7 @@ function executeOwnedWorker(command, args, control, mayRestart) {
       let reply;
       try {
         const { method, params, timeout } = JSON.parse(line);
+        if (method === "account/rateLimitResetCredit/consume" && !args.includes("reset-card")) throw new Error("Reset confirmation required");
         if (method === "child/restart" && !mayRestart) throw new Error("This read-only authorization operation cannot restart Codex");
         reply = { result: await control(method, params, timeout) };
       } catch (error) {

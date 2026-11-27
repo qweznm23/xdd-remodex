@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.settings
 
+import com.remodex.mobile.services.resetCard
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -457,6 +458,9 @@ internal class AuthProfilesState(private val repository: CodexRepository) {
         require(info.byteLength == size && info.path == path) { "stage=export_metadata: snapshot mismatch" }
         save(transfer, info, cwd)
     }
+
+    suspend fun resetCard(profile: AuthProfile, creditId: String, ticket: String?) =
+        repository.resetCard(profile.id, profile.revision, creditId, ticket)
 
     suspend fun query(profile: AuthProfile) = operation("query:${profile.id}") {
         check(!switching) { "Account switch is still pending" }

@@ -103,6 +103,7 @@ internal fun WeeklyQuotaMoreMenu(
     val color = MaterialTheme.colorScheme.primary
     val track = MaterialTheme.colorScheme.outlineVariant
     var usageOpen by remember { mutableStateOf(false) }
+    var infoDeviceId by remember { mutableStateOf<String?>(null) }
     val badge: @Composable () -> Unit = {
         Box(Modifier.size(36.dp).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
             if (window == null) {
@@ -121,7 +122,7 @@ internal fun WeeklyQuotaMoreMenu(
         }
     }
     // A detail sheet replaces the popup; ordinary dismissals keep the return-to-anchor transition.
-    val transition = if (usageOpen) null else updateTransition(expanded, label = "Quota menu")
+    val transition = if (usageOpen || infoDeviceId != null) null else updateTransition(expanded, label = "Quota menu")
     val atSource = transition == null || (!expanded && !transition.currentState && !transition.isRunning)
     Box {
         RemodexCircleIconButton(
@@ -146,6 +147,9 @@ internal fun WeeklyQuotaMoreMenu(
                     }
                 })
                 environment?.invoke()
+                val deviceId by repository.relayMacDeviceId.collectAsStateWithLifecycle()
+                DropdownMenuItem(text = { Text(stringResource(R.string.host_system_info)) }, enabled = deviceId != null,
+                    onClick = { infoDeviceId = deviceId; setExpanded(false) })
             } else {
                 DropdownMenuItem(text = {
                     Column {
@@ -161,5 +165,11 @@ internal fun WeeklyQuotaMoreMenu(
     if (usageOpen) {
         val thread by repository.activeThreadId.collectAsStateWithLifecycle()
         ThreadUsageStatusBottomSheet(true, { usageOpen = false }, thread.orEmpty(), repository)
+    }
+    infoDeviceId?.let { device ->
+        val thread by repository.activeThreadId.collectAsStateWithLifecycle()
+        val threads by repository.threads.collectAsStateWithLifecycle()
+        val cwd = threads.firstOrNull { it.id == thread }?.cwd
+        com.remodex.mobile.ui.mydevices.HostSystemInfoSheet(repository, device, cwd) { infoDeviceId = null }
     }
 }

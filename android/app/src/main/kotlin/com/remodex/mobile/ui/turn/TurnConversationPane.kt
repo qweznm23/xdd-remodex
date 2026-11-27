@@ -2148,7 +2148,10 @@ private fun FullTimelineMessageSheet(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             TurnRichMarkdownBody(
-                markdown = message.visibleAssistantText().trim(),
+                markdown = remember(message) {
+                    val text = message.visibleAssistantText().trim()
+                    if (message.role == CodexMessageRole.user) displayUserMessageBody(text) else text
+                },
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.fillMaxWidth(),
                 keyPrefix = "full-${message.id}",

@@ -26,6 +26,11 @@ class ProfileError(RuntimeError):
         self.code = code
 
 
+REFRESH_REVOKED = 'REFRESH_TOKEN_REVOKED'
+REVOCATION_CODES = {'refresh_token_revoked', 'refresh_token_invalidated'}
+REVOKED_MESSAGE = 'your refresh token was revoked'
+
+
 def iso(seconds):
     return dt.datetime.fromtimestamp(seconds, dt.timezone.utc).isoformat()
 
@@ -54,6 +59,47 @@ class Profiles:
 
     def registered(self):
         return self.m.registered_profiles()
+
+    def revocation_path(self, auth):
+        # Fingerprint the refresh credential, not the alias, slot or file mtime.
+        token = auth['tokens']['refresh_token']
+        return self.m.STATE / 'refresh-revocations' / (hashlib.sha256(token.encode()).hexdigest() + '.json')
+
+    def revoked(self, auth):
+        path = self.revocation_path(auth)
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    def record_revocation(self, auth, failure, diagnostic=''):
+        rpc = failure.response if isinstance(failure, self.m.RpcError) else {}
+        data = rpc.get('data')
+        explicit = (REVOKED_MESSAGE in str(rpc.get('message', '')).casefold()
+                    or any(isinstance(value, str) and value in REVOCATION_CODES for value in (
+                        rpc.get('code'), data.get('code') if isinstance(data, dict) else None,
+                        (data.get('error') or {}).get('code')
+                        if isinstance(data, dict) and isinstance(data.get('error'), dict) else None)))
+        # The models endpoint can reject only the access token. Use refresh-specific logs.
+        logged = any('Failed to refresh token' in line and
+                     (REVOKED_MESSAGE in line.casefold() or
+                      any(re.search(r'\b' + code + r'\b', line) for code in REVOCATION_CODES))
+                     for line in diagnostic.splitlines())
+        refresh_unconfirmed = isinstance(failure, ProfileError) and failure.code == 'TOKEN_REFRESH_UNCONFIRMED'
+        if not (explicit or (logged and (rpc or refresh_unconfirmed))):
+            return failure
+        terminal = ProfileError(REFRESH_REVOKED, 'Refresh token revoked. Automatic refresh paused. Sign in again.')
+        terminal.profile_stage = getattr(failure, 'profile_stage', self.stage)
+        terminal.__cause__ = failure
+        try:
+            if not self.revoked(auth):
+                self.m.save_json(self.revocation_path(auth), {'at': iso(time.time()),
+                    'diagnostic': bounded_diagnostic(self.error(terminal))})
+        except Exception as storage_error:
+            unsaved = ProfileError('REFRESH_REVOCATION_SAVE_FAILED',
+                'Refresh token revoked. The automatic refresh pause could not be saved. Sign in again.')
+            unsaved.profile_stage = terminal.profile_stage
+            unsaved.__cause__ = failure
+            unsaved.suppressed = [storage_error]
+            return unsaved
+        return terminal
 
     def next_number(self):
         reserved = {p.name for p in self.m.PROFILES.iterdir()}
@@ -250,7 +296,13 @@ class Profiles:
             auth = self.read(self.m.PROFILES / number / 'auth.json')[1]
             row = self.metadata(number, auth)
             row['active'] = self.m.identity(auth) == self.m.identity(active)
-            row['lastMaintenance'] = state.get('profiles', {}).get(number, {}).get('last_result')
+            last = state.get('profiles', {}).get(number, {}).get('last_result')
+            revoked = self.revoked(auth)
+            if revoked:
+                last = {'profile': number, 'status': 'failed', 'diagnostic': revoked['diagnostic']}
+            elif ((last or {}).get('diagnostic') or {}).get('code') == REFRESH_REVOKED:
+                last = None  # Resolved by a replacement credential.
+            row['lastMaintenance'] = last
             rows.append(row)
         return {'managedBy': 'remodex', 'profiles': rows, 'nextProfileId': self.next_number(),
                 'schedule': state.get('remodexSchedule'),
@@ -373,7 +425,10 @@ class Profiles:
             report['snapshots'] = self.sync_current_snapshots(dry)
             _, active = self.read(self.m.BASE / 'auth.json')
             exp = self.token_claims(active).get('exp')
-            if any(row['snapshot'] in ('kept_newer_saved', 'version_order_unknown') for row in report['snapshots']):
+            revoked = self.revoked(active)
+            if revoked:
+                report.update(status='failed', diagnostic=revoked['diagnostic'])
+            elif any(row['snapshot'] in ('kept_newer_saved', 'version_order_unknown') for row in report['snapshots']):
                 report['status'] = 'version_conflict'
             elif exp is None:
                 report['status'] = 'expiry_unknown'
@@ -390,7 +445,9 @@ class Profiles:
                 if entry.get('attemptDay') == day:
                     report['status'] = 'already_attempted_today'
                     report['lastAttempt'] = entry.get('lastAttempt')
-                    report['lastResult'] = entry.get('lastResult')
+                    previous = entry.get('lastResult') or {}
+                    if (previous.get('diagnostic') or {}).get('code') != REFRESH_REVOKED:
+                        report['lastResult'] = entry.get('lastResult')
                 elif dry:
                     report['status'] = 'would_refresh_current'
                 else:
@@ -447,7 +504,10 @@ class Profiles:
                 # Honor the old per-slot records as well as the account-wide records.
                 merged = {k: max(entry.get(k) or 0, account_entry.get(k) or 0) for k in ('last_attempt', 'last_success')}
                 due, _ = self.m.daily_due(merged, auth, now)
-                if self.m.identity(auth) == self.m.identity(active):
+                revoked = self.revoked(auth)
+                if revoked:
+                    result = {'profile': number, 'status': 'skipped_revoked', 'diagnostic': revoked['diagnostic']}
+                elif self.m.identity(auth) == self.m.identity(active):
                     result = {'profile': number, 'status': 'skipped_active',
                               'snapshot': self.m.sync_active_snapshot(path, active_data, active, dry=dry)}
                 elif not due and not force:
@@ -460,7 +520,8 @@ class Profiles:
                     self.refreshToken(number, self.metadata(number, auth)['revision'])
                     result = {'profile': number, 'status': 'refreshed'}
                     entry['last_success'] = account_entry['last_success'] = time.time()
-                entry['last_result'] = result
+                if not revoked:
+                    entry['last_result'] = result
             except Exception as error:
                 result = {'profile': number, 'status': 'failed', 'diagnostic': bounded_diagnostic(self.error(error))}
                 state['profiles'].setdefault(number, {})['last_result'] = result
@@ -544,7 +605,10 @@ class Profiles:
                 attemptDay=self.m.dt.datetime.fromtimestamp(now, self.m.BEIJING).date().isoformat(), lastAttempt=iso(now))
             self.m.save_json(self.m.STATE / 'state.json', state)
             self.stage = 'refresh_current_request'
-            call(3, 'getAuthStatus', {'refreshToken': True, 'includeToken': False})
+            try:
+                call(3, 'getAuthStatus', {'refreshToken': True, 'includeToken': False})
+            except self.m.RpcError as error:
+                raise self.record_revocation(auth, error)
         self.stage = 'refresh_current_verify'
         updated = self.read(path)[1]
         self.verify_refresh(auth, updated)
@@ -571,8 +635,21 @@ class Profiles:
                 return dict(result, profileInfo=self.metadata(number, auth))
         return self.run_isolated(number, revision, refresh_token=False)
 
-    def run_isolated(self, number, revision, *, refresh_token):
-        action = 'refresh' if refresh_token else 'query'
+    def reset_card(self, number, revision, card_id, ticket):
+        from auth_reset_cards import reset_card
+        if not isinstance(card_id, str) or not card_id.strip() or len(card_id) > 512:
+            raise ProfileError('INVALID_CARD', 'A specific quota reset card is required')
+        if number != 'current':
+            return self.run_isolated(number, revision, refresh_token=False, reset=(card_id, ticket))
+        from auth_runtime import runtime_session
+        if not (self.socket or self.owned):
+            raise ProfileError('RESET_RUNTIME_UNKNOWN', 'Cannot identify the running Codex')
+        auth = self.read(self.m.BASE / 'auth.json')[1]
+        with runtime_session(self, self.socket) as call:
+            return reset_card(self, number, auth, card_id, ticket, call)
+
+    def run_isolated(self, number, revision, *, refresh_token, reset=None):
+        action = 'reset' if reset else 'refresh' if refresh_token else 'query'
         self.stage = action + '_validate'
         path, before, auth = self.target(number, revision)
         if len(list(self.m.STATE.glob('phone-quota-*/auth.json'))) >= 5:
@@ -597,7 +674,15 @@ class Profiles:
                                      'capabilities': {'experimentalApi': True}})
             rpc.send({'method': 'initialized', 'params': {}})
             self.stage = action + '_account'
-            if refresh_token:
+            if reset:
+                from auth_reset_cards import reset_card
+                sequence = 1
+                def call(method, params, timeout=5):
+                    nonlocal sequence
+                    sequence += 1
+                    return rpc.call(sequence, method, params)
+                result = reset_card(self, number, auth, *reset, call)
+            elif refresh_token:
                 # Desktop maintenance uses the same lock; also guard external file edits.
                 self.target(number, revision)
                 if path.read_bytes() != before:
@@ -665,16 +750,18 @@ class Profiles:
                     if failure:
                         failure.runtime_diagnostic = {
                             'stderr': diagnostic, 'truncated': rpc.truncated,
-                            'httpStatuses': re.findall(r'Failed to refresh token status=(\d{3})', diagnostic),
+                            'httpStatuses': re.findall(r'Failed to refresh token status=(\d{3})',
+                                                       re.sub(r'\x1b\[[0-9;]*m', '', diagnostic)),
                         }
                     self.m.atomic(self.m.STATE / f"profile-{number}-phone-{'refresh' if refresh_token else 'quota'}.stderr.log", diagnostic.encode())
                 except Exception as error:
                     secondary(error)
             self.stage = failed_stage if failure else action + '_complete'
         if failure:
-            raise failure
+            raise self.record_revocation(auth, failure,
+                getattr(failure, 'runtime_diagnostic', {}).get('stderr', ''))
         result['profileInfo'] = self.metadata(number, self.read(path)[1])
-        if refresh_token:
+        if refresh_token or reset:
             return result
         self.stage = 'query_record'
         if len(json.dumps(result).encode()) > 512 * 1024:
@@ -692,7 +779,8 @@ def main():
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--home', required=True)
     parser.add_argument('action', choices=('list', 'status', 'check', 'import', 'rename', 'remove', 'export', 'maintenance', 'query', 'refreshToken',
-                                           'runtime-quota', 'switch', 'restart', 'restart-progress', 'adopt', 'restart-history', 'run-restart'))
+                                           'runtime-quota', 'reset-card', 'switch', 'restart', 'restart-progress', 'adopt', 'restart-history', 'run-restart'))
+    parser.add_argument('--credit-id')
     parser.add_argument('--name')
     parser.add_argument('--expected-name')
     parser.add_argument('--socket')
@@ -761,6 +849,8 @@ def main():
                 result = RestartOperations(api).run(args.operation_id)
             elif args.action == 'maintenance':
                 result = api.maintenance(args.dry_run, args.force)
+            elif args.action == 'reset-card':
+                result = api.reset_card(args.profile, args.revision, args.credit_id, args.confirmation)
             elif args.action == 'import':
                 result = api.import_profile(args.profile, args.revision, args.source, args.name)
             elif args.action == 'rename':

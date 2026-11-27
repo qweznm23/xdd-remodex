@@ -1,6 +1,7 @@
 package com.remodex.mobile.data
 
 import android.content.Context
+import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.remodex.mobile.core.model.CodexFileAttachment
@@ -11,6 +12,22 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal object TurnFileAttachmentCodec {
+    data class Metadata(val name: String?, val size: Long?)
+
+    fun readMetadata(resolver: ContentResolver, uri: Uri): Metadata {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val name = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val size = cursor.getColumnIndex(OpenableColumns.SIZE)
+                return Metadata(
+                    if (name >= 0) cursor.getString(name) else null,
+                    if (size >= 0 && !cursor.isNull(size)) cursor.getLong(size).takeIf { it >= 0 } else null,
+                )
+            }
+        }
+        return Metadata(null, null)
+    }
+
     suspend fun uploadAttachment(
         context: Context,
         uri: Uri,
@@ -20,16 +37,9 @@ internal object TurnFileAttachmentCodec {
         onProgress: suspend (Long, Long?) -> Unit,
     ): CodexFileAttachment = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
-        var fileName = uri.lastPathSegment ?: "file"
-        var size: Long? = null
-        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (nameIndex >= 0) fileName = cursor.getString(nameIndex) ?: fileName
-                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) size = cursor.getLong(sizeIndex).takeIf { it >= 0 }
-            }
-        }
+        val metadata = readMetadata(resolver, uri)
+        val fileName = metadata.name ?: uri.lastPathSegment ?: "file"
+        val size = metadata.size
         if ((size ?: 0) > MAX_FILE_UPLOAD_BYTES) throw FileTransferFailure("upload_metadata", "upload_too_large", tooLargeMessage)
         onProgress(0, size)
         val input = resolver.openInputStream(uri)

@@ -47,6 +47,8 @@ const GIT_EXEC_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const repoMutationLocks = new Map();
 const { createWorkspaceUploadHandler, workspaceUploadRoot, isCompletedUploadPath, uploadMethods } = require('./workspace-upload');
 const workspaceUpload = createWorkspaceUploadHandler();
+const { previewArchive } = require('./archive-preview');
+const archiveMethods = new Set(['workspace/archiveList', 'workspace/archiveEntry']);
 const fileStreams = process.env.REMODEX_FILE_STREAM_PORT ? require('./file-stream').createFileStreams() : null;
 if (fileStreams) fileStreams.server.listen(Number(process.env.REMODEX_FILE_STREAM_PORT), '127.0.0.1').unref();
 
@@ -82,7 +84,7 @@ function handleWorkspaceRequest(rawMessage, sendResponse) {
             message,
             data: {
               errorCode,
-              ...(method === "workspace/fileInfo" || method === "workspace/readFileChunk" || method === "workspace/prepareTransfer" || uploadMethods.has(method) ? {
+              ...(method === "workspace/fileInfo" || method === "workspace/readFileChunk" || method === "workspace/prepareTransfer" || uploadMethods.has(method) || archiveMethods.has(method) ? {
                 operation: method,
                 stage: "workspace_file_transfer",
                 diagnostic: downloadErrorDiagnostic(err),
@@ -99,7 +101,7 @@ function handleWorkspaceRequest(rawMessage, sendResponse) {
 async function handleWorkspaceMethod(method, params) {
   if (method === 'workspace/prepareTransfer') return prepareFileTransfer(params);
   if (uploadMethods.has(method)) return workspaceUpload(method, params);
-  if (method === "workspace/fileInfo" || method === "workspace/readFileChunk") {
+  if (method === "workspace/fileInfo" || method === "workspace/readFileChunk" || archiveMethods.has(method)) {
     return workspaceDownloadFile(method, params);
   }
   if (method === "workspace/readImage") {
@@ -177,12 +179,17 @@ async function workspaceDownloadFile(method, params) {
       const binaryTypes = { ".apk": "application/vnd.android.package-archive", ".zip": "application/zip", ".pdf": "application/pdf", ".gz": "application/gzip", ".7z": "application/x-7z-compressed", ".jar": "application/java-archive", ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".3gp": "video/3gpp", ".3g2": "video/3gpp2", ".ogv": "video/ogg", ".mpeg": "video/mpeg", ".mpg": "video/mpeg", ".m2v": "video/mpeg", ".mp3": "audio/mpeg" };
       const imageMime = IMAGE_MIME_TYPES_BY_EXTENSION.get(extension);
       const mimeType = imageMime || binaryTypes[extension] || (isText ? "text/plain" : "application/octet-stream");
-      const previewKind = imageMime && (fileStreams || stat.size <= MAX_IMAGE_READ_BYTES) ? "image"
+      const previewKind = extension === ".zip" ? "archive" : imageMime && (fileStreams || stat.size <= MAX_IMAGE_READ_BYTES) ? "image"
         : !imageMime && !binaryTypes[extension] && isText && (fileStreams || stat.size <= MAX_TEXT_FILE_READ_BYTES) ? "text" : "none";
       if (downloadRevision(await file.stat()) !== revision) throw workspaceError("file_changed", "The file changed while reading its metadata. Try again.");
       return { ...metadata, mimeType, previewKind, binaryStream: !!fileStreams };
     }
     if (typeof params.revision !== "string" || params.revision !== revision) throw workspaceError("file_changed", "The file changed during download. Download it again.");
+    if (archiveMethods.has(method)) {
+      return await previewArchive(file, method, params, params.inline === true ? null : fileStreams, metadata, async () => {
+        if (downloadRevision(await file.stat()) !== revision) throw workspaceError("file_changed", "ZIP changed during preview. Reopen the archive.");
+      });
+    }
     const offset = params.offset;
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > stat.size) throw workspaceError("invalid_offset", "Invalid download offset.");
     const buffer = Buffer.alloc(Math.min(DOWNLOAD_CHUNK_BYTES, stat.size - offset));

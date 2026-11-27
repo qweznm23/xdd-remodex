@@ -195,6 +195,7 @@ private fun TurnMermaidPreviewDialog(
 
     RemodexPreviewDialog(
         onDismissRequest = onDismiss,
+        systemBarBackground = colors.background,
         properties =
             DialogProperties(
                 usePlatformDefaultWidth = false,

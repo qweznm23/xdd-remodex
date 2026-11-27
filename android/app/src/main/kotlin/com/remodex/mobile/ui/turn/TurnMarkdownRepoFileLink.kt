@@ -65,6 +65,10 @@ internal object RepoMarkdownFileLink {
     fun previewPath(raw: String): String? {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith('/') && "/remodex_uploads/" in trimmed) {
+            val path = decodePercentEscapes(trimmed.substringBefore('?').substringBefore('#'))
+            if (uploadSuffix.containsMatchIn(path)) return path
+        }
         val lower = trimmed.lowercase()
         if (lower.startsWith("sandbox:")) {
             val uri = try {

@@ -19,6 +19,8 @@
     <string name="auth_manage_active_unknown">Current credential maintenance status is not yet confirmed.</string>
     <string name="auth_manage_current_file">Current authorization file</string>
     <string name="auth_manage_auto_failed">Automatic refresh failed for %1$s · details</string>
+    <string name="auth_manage_token_revoked">Refresh token revoked. Automatic refresh paused.</string>
+    <string name="auth_manage_token_revoked_reauth">Sign in again to get a new authorization.</string>
     <string name="auth_manage_checked">File structure checked. Server acceptance is not verified by this check.</string>
     <string name="auth_manage_imported">Authorization imported. The current account was not switched.</string>
     <string name="auth_manage_exported">Authorization saved to your selected location.</string>

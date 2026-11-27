@@ -1,0 +1,7 @@
+<resources>
+    <string name="zip_directory_summary">Entries: %1$d · %2$s</string>
+    <string name="zip_empty">This ZIP is empty</string>
+    <string name="zip_folder">Folder</string>
+    <string name="zip_no_preview">%1$s · Preview unavailable</string>
+    <string name="zip_bridge_update">Update the computer bridge to browse this ZIP.</string>
+</resources>

@@ -1,0 +1,16 @@
+<resources>
+    <string name="reset_use">Use card</string>
+    <string name="reset_expired">Expired</string>
+    <string name="reset_confirm_title">Use this reset card?</string>
+    <string name="reset_second_title">Use the card with quota remaining?</string>
+    <string name="reset_remaining">Weekly quota remaining: %1$s%%</string>
+    <string name="reset_warning">Using this card resets Codex limits for this account and consumes one card.</string>
+    <string name="reset_second_warning">This account still has weekly quota. Confirm again to consume this card now.</string>
+    <string name="reset_continue">Continue</string>
+    <string name="reset_confirm_use">Confirm use</string>
+    <string name="reset_blocked">%1$s%% weekly quota remains. Cards can only be used at 5%% or less.</string>
+    <string name="reset_success">Card used. The account limits were reset.</string>
+    <string name="reset_nothing">Codex reported that there were no limits to reset.</string>
+    <string name="reset_none">Codex reported that no card was available.</string>
+    <string name="reset_error">Check the card and quota before trying again. %1$s</string>
+</resources>

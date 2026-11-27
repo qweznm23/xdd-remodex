@@ -106,7 +106,7 @@ internal fun ConversationVideoPlayer(source: String, cwd: String?, onDismiss: ()
             player?.release()
         }
     }
-    RemodexPreviewDialog(onDismissRequest = onDismiss,properties = DialogProperties(usePlatformDefaultWidth = false,decorFitsSystemWindows = false)) {
+    RemodexPreviewDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false), systemBarBackground = Color.Black) {
         Surface(Modifier.fillMaxSize(),color = Color.Black) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),verticalAlignment = Alignment.CenterVertically) {

@@ -156,6 +156,14 @@ refresh also records an attempt, so the daily job does not immediately repeat it
 Successful completion and the next due time survive bridge restart. A crash after
 an attempt does not authorize another automatic attempt that day.
 
+An explicit refresh-token revocation from Codex is reported as
+`REFRESH_TOKEN_REVOKED`. Both automatic refresh paths skip that credential on
+future checks. The private record preserves the original diagnostic and follows
+the refresh credential across file rewrites and alias changes. Importing a
+different refresh token makes the profile eligible again under the normal
+schedule. A bare HTTP 401 or other unconfirmed failure keeps the ordinary retry
+schedule.
+
 `maintenance/remodex-scheduler.json` records the successful scheduler heartbeat,
 process and instance IDs. `state.json` holds attempts and schedule state;
 `last-remodex-run.json` holds per-profile results. A heartbeat is evidence of a
@@ -197,3 +205,9 @@ failed-commit credential recovery:
 /usr/bin/python3 test/auth-profiles-test.py
 node --test test/auth-profiles.test.js test/auth-maintenance-integration.test.js test/bridge-desktop-ipc-integration.test.js test/auth-file-info.test.js
 ```
+
+### Quota reset cards
+
+The paired client calls `account/profiles/reset-card` with a specific credit ID. The host checks the running identity for the current account, or opens an isolated Codex with the selected saved profile and revision. Each step runs under the authorization manager lock and reads the ordinary Codex weekly quota and current card details. Missing or ambiguous quota, unavailable cards and unverifiable identities block redemption.
+
+An initial request only returns a result or a short-lived confirmation. At zero remaining, one confirmation is required. Above zero through 5% inclusive the host issues a second confirmation. Above 5% no confirmation is issued. Single-use confirmations bind the account, subject, profile, card and remaining percentage, expire after two minutes and are saved atomically on the host. The native consume call always identifies the card and uses an account/card-specific idempotency key. The paired router rejects direct native consume requests. After an uncertain result, read quota and card status before starting another attempt.
